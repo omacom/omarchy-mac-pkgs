@@ -29,7 +29,6 @@ for entry in "$ROOT"/bin/* "$ROOT"/lib/*; do
   chmod +x "$work/entry/$name"
   args=()
   case $name in
-    omarchy-mac-setup-keyboard) args=(2) ;;
     omarchy-mac-setup-*) args=("$work/root") ;;
   esac
   : >"$CALLS"
