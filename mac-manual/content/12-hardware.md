@@ -51,6 +51,12 @@ This is what the first release is qualified against on both reference Macs. <spa
 | Fourth external display after HDMI unplug | <span class="status wip">known issue</span> | A stale DisplayPort link on the M2 Max after unplugging HDMI; replug or reboot |
 | Text console between Plymouth and the greeter | <span class="status wip">known issue</span> | Cosmetic, a few seconds |
 
+## Bluetooth after suspend
+
+On BCM4378 and BCM4387 Macs, a controller that stops answering after suspend can be recovered by the package's `omarchy-bluetooth-resume-fix.service`. It resets only the Bluetooth driver after the kernel reports HCI command timeouts, leaving a healthy controller and a radio you turned off alone. Read the result with `journalctl -u omarchy-bluetooth-resume-fix`.
+
+To disable automatic recovery, run `sudo systemctl disable omarchy-bluetooth-resume-fix.service`; later hardware setup preserves that choice. A masked or custom unit is also preserved. This recovery does not make Bluetooth devices wake the Mac and does not cover a wedge while the Mac stays awake. BCM4388 support is not claimed by this port.
+
 ## What Asahi supports on your chip
 
 Everything below the desktop is the Asahi Linux project's work, and the authoritative, current list of what each Apple chip supports is theirs:

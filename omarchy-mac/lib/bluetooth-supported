@@ -1,0 +1,6 @@
+#!/bin/bash
+# BCM4378 and BCM4387 Bluetooth on Apple Silicon, as qualified by the source PR.
+platform=$(omarchy-hw-platform) || exit 2
+[[ $platform == "apple-silicon" ]] || exit 1
+devices=$(lspci -nn) || exit 2
+grep -E '14e4:(5f69|5f71)' <<<"$devices" >/dev/null

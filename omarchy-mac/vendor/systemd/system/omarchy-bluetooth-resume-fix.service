@@ -1,0 +1,13 @@
+[Unit]
+Description=Rebind hci_bcm4377 if Bluetooth wedges across resume
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/lib/omarchy-mac/bluetooth-supported
+ExecStart=/usr/bin/omarchy-bluetooth-resume-fix
+TimeoutStartSec=120
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

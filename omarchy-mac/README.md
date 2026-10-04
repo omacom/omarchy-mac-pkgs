@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.1.0` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.1.1` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
@@ -37,6 +37,12 @@ The same directory holds the app hooks a runtime with the step 6 seam calls as t
 The logind drop-in `/usr/lib/systemd/logind.conf.d/20-omarchy-mac-sleep-key.conf` keeps logind from suspending on the top row's moon key, which the kernel reports as `KEY_SLEEP` but is Do Not Disturb on a Mac; it applies from the next boot or logind reload.
 
 Vendor defaults use NetworkManager's `/usr/lib/NetworkManager/conf.d`, systemd's `/usr/lib/systemd` and `/usr/lib/tmpfiles.d`, modprobe's `/usr/lib/modprobe.d`, and WirePlumber's `/usr/share/wireplumber/wireplumber.conf.d`. Same-name `/etc` or user fragments retain precedence. iwd has no vendor directory, so an `iwd.service` drop-in lists `/usr/lib/omarchy-mac/iwd` after `/etc/iwd`; iwd loads the first `main.conf` it can read, so an `/etc/iwd/main.conf` replaces the Apple one whole. The Apple default keeps iwd off 6 GHz: on the BCM4388 a join the firmware makes to a 6 GHz access point reports connected and authorized, yet the access point drops everything the Mac sends and DHCP never completes, so a network that also offers 5 GHz joins there instead. The firmware's own roaming can still move a weak connection onto 6 GHz, and `omarchy network band 6` cannot reach 6 GHz. Like the backend, it applies when iwd next starts: setup restarts nothing, so an upgraded Mac keeps 6 GHz until it reboots. Setup reports effective live NetworkManager/module configuration and systemd fragments. Review those reports and any drop-ins when diagnosing overrides; custom policy is never normalized to the package default.
+
+## Bluetooth resume recovery
+
+The vendor `omarchy-bluetooth-resume-fix.service` recovers BCM4378 and BCM4387 Bluetooth on Apple Silicon when `hci_bcm4377` stops answering after suspend. System setup enables it once; administrator unit overrides, masks and later explicit disables are preserved. It watches for kernel HCI command-timeout messages after the latest suspend-entry journal cursor, including failures logged before the service starts. With no cursor it watches a bounded time window instead. Only a confirmed wedge rebinds the Bluetooth PCI function; healthy controllers and disabled radios are left alone.
+
+Inspect a recovery with `journalctl -u omarchy-bluetooth-resume-fix`. Disable it with `sudo systemctl disable omarchy-bluetooth-resume-fix.service`, or mask it to prevent all starts. BCM4388 is outside this port's qualified allowlist. Wedges while awake and waking the Mac with a Bluetooth keyboard are separate problems.
 
 ## Video decode in mpv
 
