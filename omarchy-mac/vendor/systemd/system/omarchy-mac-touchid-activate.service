@@ -8,7 +8,9 @@ ConditionPathExists=/dev/sep-bio
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
-# One read-only open is enough: the open itself activates Touch ID, and it
-# stays active for the rest of the boot after the close. The node takes one
-# opener at a time, so a busy node that already reads "ready" is success.
-ExecStart=/usr/bin/sh -c 'true </dev/sep-bio || grep -qx ready /sys/bus/platform/drivers/apple_sep/*/diag/touchid'
+# One read-only open activates Touch ID for the rest of the boot; the node takes
+# one opener at a time, so it may be busy with fprintd, and the kernel logs a
+# failed activation. Success is diag/touchid reading "ready" within five seconds.
+ExecStart=/usr/bin/sh -c 'true 2>/dev/null </dev/sep-bio; for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -qsx ready /sys/bus/platform/drivers/apple_sep/*/diag/touchid && exit 0; sleep 0.5; done; echo "Touch ID did not read ready" >&2; exit 1'
+# Bounds a blocked open, which would otherwise hold up the pacman hook.
+TimeoutStartSec=15s
