@@ -8,6 +8,6 @@ ConditionPathExists=/dev/sep-bio
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
-StandardInput=file:/dev/sep-bio
-StandardOutput=journal
-ExecStart=/usr/bin/true
+# One read-only open is enough: the open itself activates Touch ID, and it
+# stays active for the rest of the boot after the close.
+ExecStart=/usr/bin/sh -c ': </dev/sep-bio'

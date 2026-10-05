@@ -13,11 +13,25 @@ unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-activate.service
 grep -Fxq 'ACTION=="add", SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omarchy-mac-touchid-activate.service"' "$rule" ||
   fail 'the rule starts the unit when the Secure Enclave publishes sep-bio, and only then'
 [[ $(grep -v '^#' "$rule") != *RUN* ]] || fail 'the rule runs nothing itself'
-grep -Fxq 'StandardInput=file:/dev/sep-bio' "$unit" && grep -Fxq 'Type=oneshot' "$unit" &&
+grep -Fxq "ExecStart=/usr/bin/sh -c ': </dev/sep-bio'" "$unit" && grep -Fxq 'Type=oneshot' "$unit" &&
   grep -Fxq 'ConditionPathExists=/dev/sep-bio' "$unit" ||
   fail 'the unit opens /dev/sep-bio once, and only where it exists'
+! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'
 ! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the rule pulls it in'
 pass 'the Touch ID rule and unit are staged, and the rule alone starts the unit'
+
+# The update that installs the rule finds /dev/sep-bio already there, so a
+# pacman hook starts the unit itself rather than waiting for a reboot.
+hook=$work/root/usr/share/libalpm/hooks/90-omarchy-mac-touchid.hook
+[[ -f $hook ]] || fail 'the Touch ID pacman hook is staged'
+grep -Fxq 'Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules' "$hook" &&
+  grep -Fxq 'Operation = Install' "$hook" && grep -Fxq 'Operation = Upgrade' "$hook" &&
+  grep -Fxq 'When = PostTransaction' "$hook" &&
+  grep -Fxq 'Exec = /usr/bin/systemctl --quiet start omarchy-mac-touchid-activate.service' "$hook" ||
+  fail 'the hook starts the unit after the transaction that installs or updates the rule'
+target=$(sed -n 's/^Target = //p' "$hook")
+[[ -f $work/root/$target ]] || fail "the hook's target is the staged rule" "$target"
+pass 'an install or update activates Touch ID in the same session'
 
 if command -v udevadm >/dev/null && udevadm verify --help >/dev/null 2>&1; then
   udevadm verify --no-style "$rule" >/dev/null || fail 'udevadm accepts the rule'
@@ -27,7 +41,7 @@ fi
 # runtime's platform check, so the result never depends on the host.
 if command -v systemd-analyze >/dev/null; then
   mkdir -p "$work/root/usr/bin"
-  for command in omarchy-hw-apple-silicon true; do
+  for command in omarchy-hw-apple-silicon sh; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"
     chmod +x "$work/root/usr/bin/$command"
   done
