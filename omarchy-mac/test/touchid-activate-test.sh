@@ -13,7 +13,7 @@ unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-activate.service
 grep -Fxq 'ACTION=="add", SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omarchy-mac-touchid-activate.service"' "$rule" ||
   fail 'the rule starts the unit when the Secure Enclave publishes sep-bio, and only then'
 [[ $(grep -v '^#' "$rule") != *RUN* ]] || fail 'the rule runs nothing itself'
-grep -Fxq "ExecStart=/usr/bin/sh -c ': </dev/sep-bio'" "$unit" && grep -Fxq 'Type=oneshot' "$unit" &&
+grep -Fxq "ExecStart=/usr/bin/sh -c 'true </dev/sep-bio || grep -qx ready /sys/bus/platform/drivers/apple_sep/*/diag/touchid'" "$unit" && grep -Fxq 'Type=oneshot' "$unit" &&
   grep -Fxq 'ConditionPathExists=/dev/sep-bio' "$unit" ||
   fail 'the unit opens /dev/sep-bio once, and only where it exists'
 ! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'

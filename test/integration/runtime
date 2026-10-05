@@ -1,4 +1,5 @@
 # The Omarchy runtime CI tests the packages against: a repository and a full commit.
-# Move it deliberately, like a recipe pin. While #12 is a draft: the head of
-# omacom/omarchy-mac#694, #13362 plus fingerprint-readers; the merged commit before it lands.
+# Move it deliberately, like a recipe pin. While #12 is a draft,
+# a commit of omacom/omarchy-mac#694 with the detector (#13362 plus fingerprint-readers);
+# the merged commit before it lands.
 omacom/omarchy-mac 58fe858b058e3d2248e5ebc7962bb275237ea1e4
