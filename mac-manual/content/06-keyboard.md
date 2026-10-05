@@ -1,6 +1,6 @@
 ---
 title: Keyboard and trackpad
-description: Command as Super, the top row, screenshots without a Print Screen key, the trackpad and the keyboard backlight.
+description: Command as Super, the top row, screenshots without a Print Screen key, the keyboard backlight, Touch ID and the trackpad.
 section: Using it
 ---
 
@@ -17,6 +17,10 @@ Apple keyboards have no Print Screen key, so Omarchy's `Print` bindings have no 
 ## Keyboard backlight
 
 On Macs with an ambient light sensor, the keyboard backlight follows the room: lit in the dark, off in bright light. Apple Silicon keyboards have no backlight keys, so Omarchy's keyboard backlight bindings have no key on the built-in keyboard yet; [omacom/omarchy-mac#683](https://github.com/omacom/omarchy-mac/issues/683) tracks giving it some.
+
+## Touch ID
+
+On a MacBook whose kernel enables its Touch ID sensor, Omarchy notices the sensor after an update and offers once to set it up. Choose the notification, or run _Setup > Security > Fingerprint_ in the Omarchy menu (`Super + Space`) at any time, then touch the sensor until your finger is enrolled. From then on the lock screen, `sudo` and system prompts take your fingerprint, and your password still works. With the lid closed they go straight to the password. The fingerprint never leaves the Mac's Secure Enclave. Tested on the 14" MacBook Pro with M2 Max.
 
 ## Trackpad
 

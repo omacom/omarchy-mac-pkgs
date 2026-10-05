@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.1.0` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.2.0` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
