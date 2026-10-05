@@ -10,10 +10,6 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-if ! grep -q fingerprint-readers "$ROOT/bin/omarchy-hw-fingerprint"; then
-  printf 'skip - %s: the runtime does not read fingerprint-readers yet\n' "$(basename -- "$0")"
-  exit 0
-fi
 "$MAC/install" "$tmp/pkg" >/dev/null
 mkdir -p "$tmp/platform" "$tmp/bin" "$tmp/usb"
 sed "s|^/sys/|$tmp/sys/|" "$tmp/pkg/usr/share/omarchy-platform/fingerprint-readers" >"$tmp/platform/fingerprint-readers"
