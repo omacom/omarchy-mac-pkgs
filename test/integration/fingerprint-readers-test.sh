@@ -25,8 +25,17 @@ detects() {
 }
 
 detects && fail "a Mac whose kernel has no Secure Enclave driver has no reader"
-touch_id absent
+touch_id unknown
 detects && fail "a Mac whose sensor is not bound has no reader"
 touch_id ready
 detects || fail "a Mac whose Secure Enclave reports Touch ID ready has a reader"
 pass "the runtime finds Touch ID where omarchy-mac names it, only once it is ready"
+
+# A Touch ID that isn't ready never hides a USB reader beside it.
+touch_id not-ready
+detects && fail "a Touch ID that is not ready is no reader"
+mkdir -p "$tmp/usb/1-0"
+printf '27c6\n' >"$tmp/usb/1-0/idVendor"
+printf '1234\n' >"$tmp/usb/1-0/idProduct"
+detects || fail "a USB reader is found beside a Touch ID that is not ready"
+pass "a Touch ID that is not ready leaves a USB reader to be found"
