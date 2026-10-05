@@ -10,4 +10,6 @@ Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules
 [Action]
 Description = Activating Touch ID...
 When = PostTransaction
-Exec = /usr/bin/systemctl --quiet start omarchy-mac-touchid-activate.service
+# Skipped in a chroot or an unbooted root (offline provisioning, image
+# builds), as systemd's own hooks are; the first boot's add event starts it.
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || systemctl --quiet start omarchy-mac-touchid-activate.service'
