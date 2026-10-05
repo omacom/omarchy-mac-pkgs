@@ -50,8 +50,8 @@ hook=$work/root/usr/share/libalpm/hooks/90-omarchy-mac-touchid.hook
 grep -Fxq 'Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules' "$hook" &&
   grep -Fxq 'Operation = Install' "$hook" && grep -Fxq 'Operation = Upgrade' "$hook" &&
   grep -Fxq 'When = PostTransaction' "$hook" &&
-  grep -Fxq "Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || systemctl --quiet start omarchy-mac-touchid-activate.service'" "$hook" ||
-  fail 'the hook starts the unit after the transaction that installs or updates the rule'
+  grep -Fxq "Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || systemctl --quiet start omarchy-mac-touchid-activate.service || true'" "$hook" ||
+  fail 'the hook starts the unit after the transaction that installs or updates the rule, and never fails it'
 target=$(sed -n 's/^Target = //p' "$hook")
 [[ -f $work/root/$target ]] || fail "the hook's target is the staged rule" "$target"
 pass 'an install or update activates Touch ID in the same session'
