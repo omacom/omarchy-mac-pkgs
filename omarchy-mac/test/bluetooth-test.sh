@@ -124,7 +124,7 @@ grep -Fq 'Failed to bind' "$work/output" || fail 'a bind failure is diagnosed'
 if MISSING_CONTROLLER=1 WEDGE=1 run_recovery; then fail 'a missing controller after rebind exits nonzero'; fi
 grep -Fq 'Controller still missing' "$work/output" || fail 'a controller-return failure is diagnosed'
 pass 'unbind, bind and controller-return failures are observable'
-for spec in 'generic 5f69' 'generic-aarch64 5f71' 'qualcomm 5f69' 'apple-silicon 5f72' 'apple-silicon 0000'; do
+for spec in 'generic 5f69' 'generic-aarch64 5f71' 'qualcomm 5f69' 'apple-silicon 0000'; do
   read -r PLATFORM BLUETOOTH_ID <<<"$spec"
   WEDGE=1 run_recovery
   [[ ! -s $driver/unbind && ! -s $JOURNAL_CALLS ]] || fail 'excluded hardware stops before recovery'
@@ -157,19 +157,19 @@ for override in mask custom; do
   [[ ! -e $root/var/lib/omarchy-mac/bluetooth-configured ]] || fail 'an override is not recorded as vendor setup'
 done
 pass 'masks and custom units survive package setup'
-for spec in 'apple-silicon 5f71 1' 'apple-silicon 5f72 0' 'generic 5f69 0'; do
+for spec in 'apple-silicon 5f71 1' 'apple-silicon 5f72 1' 'apple-silicon 0000 0' 'generic 5f69 0'; do
   read -r PLATFORM BLUETOOTH_ID enabled <<<"$spec"
   root=$work/setup-$PLATFORM-$BLUETOOTH_ID
   "$ROOT/install" "$root"
   setup
   if (( enabled )); then
-    [[ -f $root/var/lib/omarchy-mac/bluetooth-configured ]] || fail 'BCM4387 is enabled on Apple Silicon'
+    [[ -f $root/var/lib/omarchy-mac/bluetooth-configured ]] || fail 'BCM4387 and BCM4388 are enabled on Apple Silicon'
   else
     [[ ! -e $root/etc/systemd/system/suspend.target.wants/$unit ]] || fail 'excluded setup stays disabled'
   fi
 done
 unset PLATFORM BLUETOOTH_ID
-pass 'setup follows the source PR chipset scope'
+pass 'setup follows the qualified chipset scope'
 
 root=$work/retry
 "$ROOT/install" "$root"

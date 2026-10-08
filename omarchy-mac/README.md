@@ -40,9 +40,9 @@ Vendor defaults use NetworkManager's `/usr/lib/NetworkManager/conf.d`, systemd's
 
 ## Bluetooth resume recovery
 
-The vendor `omarchy-bluetooth-resume-fix.service` recovers BCM4378 and BCM4387 Bluetooth on Apple Silicon when `hci_bcm4377` stops answering after suspend. System setup enables it once; administrator unit overrides, masks and later explicit disables are preserved. It watches for kernel HCI command-timeout messages after the latest suspend-entry journal cursor, including failures logged before the service starts. With no cursor it watches a bounded time window instead. Only a confirmed wedge rebinds the Bluetooth PCI function; healthy controllers and disabled radios are left alone.
+The vendor `omarchy-bluetooth-resume-fix.service` recovers BCM4378, BCM4387 and BCM4388 Bluetooth on Apple Silicon when `hci_bcm4377` stops answering after suspend. System setup enables it once; administrator unit overrides, masks and later explicit disables are preserved. It watches for kernel HCI command-timeout messages after the latest suspend-entry journal cursor, including failures logged before the service starts. With no cursor it watches a bounded time window instead. Only a confirmed wedge rebinds the Bluetooth PCI function; healthy controllers and disabled radios are left alone.
 
-Inspect a recovery with `journalctl -u omarchy-bluetooth-resume-fix`. Disable it with `sudo systemctl disable omarchy-bluetooth-resume-fix.service`, or mask it to prevent all starts. BCM4388 is outside this port's qualified allowlist. Wedges while awake and waking the Mac with a Bluetooth keyboard are separate problems.
+Inspect a recovery with `journalctl -u omarchy-bluetooth-resume-fix`. Disable it with `sudo systemctl disable omarchy-bluetooth-resume-fix.service`, or mask it to prevent all starts. Wedges while awake and waking the Mac with a Bluetooth keyboard are separate problems.
 
 ## Video decode in mpv
 
