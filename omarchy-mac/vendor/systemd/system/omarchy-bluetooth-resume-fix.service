@@ -1,6 +1,6 @@
 [Unit]
-Description=Rebind hci_bcm4377 if Bluetooth wedges across resume
-After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+Description=Rebind hci_bcm4377 when Bluetooth times out after resume
+After=suspend.target
 After=bluetooth.service
 
 [Service]
@@ -10,4 +10,4 @@ ExecStart=/usr/bin/omarchy-bluetooth-resume-fix
 TimeoutStartSec=120
 
 [Install]
-WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+WantedBy=suspend.target

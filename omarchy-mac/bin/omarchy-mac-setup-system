@@ -62,25 +62,6 @@ if "$root/usr/lib/omarchy-mac/wifi-supported" && [[ ! -f $marker ]]; then
   fi
 fi
 
-# Record enablement once so a later disable remains the administrator's choice.
-bluetooth_unit=omarchy-bluetooth-resume-fix.service
-bluetooth_marker="$root/var/lib/omarchy-mac/bluetooth-configured"
-if [[ ! -f $bluetooth_marker ]]; then
-  bluetooth_status=0
-  "$root/usr/lib/omarchy-mac/bluetooth-supported" || bluetooth_status=$?
-  if (( bluetooth_status == 0 )); then
-    if [[ -e $root/etc/systemd/system/$bluetooth_unit || -L $root/etc/systemd/system/$bluetooth_unit || -e $root/run/systemd/system/$bluetooth_unit || -L $root/run/systemd/system/$bluetooth_unit ]]; then
-      echo "Preserving Bluetooth unit override: $root/etc/systemd/system/$bluetooth_unit"
-    else
-      systemctl --root="${root:-/}" enable "$bluetooth_unit"
-      install -Dm644 /dev/null "$bluetooth_marker"
-    fi
-  elif (( bluetooth_status != 1 )); then
-    echo "Cannot determine Bluetooth recovery support; setup remains pending" >&2
-    exit "$bluetooth_status"
-  fi
-fi
-
 # The kernel keeps the speakers muted until speakersafetyd runs. This package is
 # its only enabler: apply the vendor preset once, so earlier-sorting or
 # same-name /etc presets, masks and later explicit disables stay the

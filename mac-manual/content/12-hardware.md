@@ -53,9 +53,9 @@ This is what the first release is qualified against on both reference Macs. <spa
 
 ## Bluetooth after suspend
 
-On BCM4378, BCM4387 and BCM4388 Macs, a controller that stops answering after suspend can be recovered by the package's `omarchy-bluetooth-resume-fix.service`. It resets only the Bluetooth driver after the kernel reports HCI command timeouts, leaving a healthy controller and a radio you turned off alone. Read the result with `journalctl -u omarchy-bluetooth-resume-fix`.
+On BCM4378, BCM4387 and BCM4388 Macs, the Bluetooth controller can stop answering after suspend until its driver is reset. The package's `omarchy-bluetooth-resume-fix.service` runs after every suspend and resets only the Bluetooth driver when the kernel reports HCI command timeouts from the controller after that resume. A timeout means a command failed, not always that the controller is still stuck, so it may reset a controller that would have recovered by itself. With no timeout, or with the radio turned off, it does nothing. Read the result with `journalctl -u omarchy-bluetooth-resume-fix`.
 
-To disable automatic recovery, run `sudo systemctl disable omarchy-bluetooth-resume-fix.service`; later hardware setup preserves that choice. A masked or custom unit is also preserved. This recovery does not make Bluetooth devices wake the Mac and does not cover a wedge while the Mac stays awake.
+To turn automatic recovery off, run `sudo systemctl mask omarchy-bluetooth-resume-fix.service`; updates keep that choice. This recovery does not make Bluetooth devices wake the Mac and does not cover a wedge while the Mac stays awake.
 
 ## What Asahi supports on your chip
 

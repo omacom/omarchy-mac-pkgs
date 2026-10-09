@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Rebind hci_bcm4377 if Bluetooth wedges across resume
+# omarchy:summary=Rebind hci_bcm4377 when Bluetooth times out after resume
 # omarchy:group=system
 # omarchy:hidden=true
 # omarchy:requires-sudo=true
@@ -17,8 +17,10 @@ fi
 
 driver=${OMARCHY_BLUETOOTH_DRIVER_DIR:-/sys/bus/pci/drivers/hci_bcm4377}
 controllers=${OMARCHY_BLUETOOTH_CLASS_DIR:-/sys/class/bluetooth}
+stats=${OMARCHY_SUSPEND_STATS_DIR:-/sys/power/suspend_stats}
 wait_before=20
 wait_after=15
+wait_journal=10
 started=$(date '+%Y-%m-%d %H:%M:%S')
 radio_enabled() {
   local state name blocked
@@ -80,39 +82,83 @@ elif (( radio_status != 0 )); then
   exit "$radio_status"
 fi
 
-# Device-resume timeouts precede suspend exit and may precede this service.
-# A suspend-entry cursor also survives the clock changing during sleep.
-cursor=$(journalctl -kq -n 1 -g 'PM: suspend entry' --show-cursor 2>/dev/null |
-  sed -n 's/^-- cursor: //p') || cursor=
-if [[ -z $cursor ]]; then
-  echo "No suspend marker in the journal; watching from now instead"
-fi
+# The kernel counts suspend attempts this boot, and logs one entry line for each.
+suspend_attempts() {
+  local success fail
+  success=$(<"$stats/success") && fail=$(<"$stats/fail") || return 1
+  echo $((success + fail))
+}
 
-wedged() {
+# Watch from this cycle's suspend entry: device-resume timeouts precede this
+# service. Wait until journald holds the entry the kernel counted, or its latest
+# entry is an earlier cycle's, with that cycle's timeouts.
+anchor() {
+  local kernel seen waited=0
+  attempts=$(suspend_attempts) || attempts=
+  while true; do
+    kernel=$(journalctl -kqb --no-pager -o cat 2>/dev/null) || return 2
+    seen=$(grep -c 'PM: suspend entry' <<<"$kernel" || true)
+    if [[ -z $attempts ]] || (( seen >= attempts )); then
+      break
+    fi
+    if (( waited >= wait_journal )); then
+      echo "The journal has no entry for this suspend after ${wait_journal}s; watching from now instead"
+      cursor=
+      started=$(date '+%Y-%m-%d %H:%M:%S')
+      return 0
+    fi
+    waited=$((waited + 1))
+    sleep 1
+  done
+  cursor=$(journalctl -kqb -n 1 -g 'PM: suspend entry' --show-cursor 2>/dev/null |
+    sed -n 's/^-- cursor: //p') || cursor=
+  if [[ -z $cursor ]]; then
+    echo "No suspend marker in the journal; watching from now instead"
+  fi
+}
+
+timed_out() {
   local journal
   if [[ -n $cursor ]]; then
-    journal=$(journalctl -kq --after-cursor "$cursor" --no-pager 2>/dev/null) || return 2
+    journal=$(journalctl -kqb --after-cursor "$cursor" --no-pager 2>/dev/null) || return 2
   else
-    journal=$(journalctl -kq --since "$started" --no-pager 2>/dev/null) || return 2
+    journal=$(journalctl -kqb --since "$started" --no-pager 2>/dev/null) || return 2
   fi
   [[ $journal =~ $signature ]]
 }
 
+observe_status=0
+anchor || observe_status=$?
+if (( observe_status != 0 )); then
+  echo "Cannot read the kernel journal for Bluetooth recovery" >&2
+  exit "$observe_status"
+fi
 elapsed=0
 while (( elapsed < wait_before )); do
-  observation_status=0
-  wedged || observation_status=$?
-  if (( observation_status == 0 )); then
-    break
-  elif (( observation_status != 1 )); then
-    echo "Cannot read the kernel journal for Bluetooth recovery" >&2
-    exit "$observation_status"
+  # A suspend during the watch starts a new cycle; this run follows it, since
+  # systemd won't start the unit again while it is still running.
+  if [[ -n $attempts ]] && now=$(suspend_attempts) && (( now > attempts )); then
+    echo "Suspended again while watching; following the latest resume"
+    anchor || observe_status=$?
+    if (( observe_status != 0 )); then
+      echo "Cannot read the kernel journal for Bluetooth recovery" >&2
+      exit "$observe_status"
+    fi
+    elapsed=0
   fi
+  timed_out || observe_status=$?
+  if (( observe_status == 0 )); then
+    break
+  elif (( observe_status != 1 )); then
+    echo "Cannot read the kernel journal for Bluetooth recovery" >&2
+    exit "$observe_status"
+  fi
+  observe_status=0
   elapsed=$((elapsed + 1))
   sleep 1
 done
 if (( elapsed >= wait_before )); then
-  echo "No wedge signature ${wait_before}s after resume; Bluetooth came back on its own"
+  echo "No HCI command timeout from $controller in the ${wait_before}s after resume; leaving it alone"
   exit 0
 fi
 
@@ -126,7 +172,7 @@ elif (( radio_status != 0 )); then
   echo "Cannot read Bluetooth radio state before the rebind" >&2
   exit "$radio_status"
 fi
-echo "Wedged controller confirmed ${elapsed}s after resume ($device); rebinding hci_bcm4377"
+echo "HCI command timeout from $controller ${elapsed}s after resume ($device); rebinding hci_bcm4377"
 if ! { printf '%s\n' "$device" >"$driver/unbind"; } 2>/dev/null; then
   echo "Failed to unbind $device; a reboot is needed" >&2
   exit 1

@@ -25,9 +25,9 @@ install -m755 "$work/entrypoint" "$entrypoint"
 chmod +x "$work/bin/omarchy-lifecycle-dispatch"
 OMARCHY_LIFECYCLE_ROOT=$stage "$work/bin/omarchy-lifecycle-dispatch" setup-system image-first-boot
 unit=omarchy-bluetooth-resume-fix.service
-link=$stage/etc/systemd/system/suspend.target.wants/$unit
-[[ $(readlink "$link") == /usr/lib/systemd/system/$unit ]] || fail 'runtime setup reaches the vendor Bluetooth recovery unit'
-systemctl --root="$stage" disable "$unit" >/dev/null 2>&1
+[[ -f $stage/usr/lib/systemd/system/suspend.target.wants/$unit ]] || fail 'the package wants Bluetooth recovery after suspend'
+[[ ! -e $stage/etc/systemd/system/suspend.target.wants/$unit ]] || fail 'runtime setup adds no Bluetooth enablement of its own'
+systemctl --root="$stage" mask "$unit" >/dev/null 2>&1
 OMARCHY_LIFECYCLE_ROOT=$stage "$work/bin/omarchy-lifecycle-dispatch" setup-system
-[[ ! -e $link ]] || fail 'a runtime setup rerun preserves disabled Bluetooth recovery'
-pass 'runtime lifecycle dispatch enables Bluetooth recovery once and preserves a later disable'
+[[ $(readlink "$stage/etc/systemd/system/$unit") == /dev/null ]] || fail 'a runtime setup rerun keeps a masked Bluetooth recovery masked'
+pass 'Bluetooth recovery comes from the package wants link, and a mask survives runtime setup'
