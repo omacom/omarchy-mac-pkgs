@@ -22,7 +22,7 @@ CI rejects files outside these, the root documents and `.github/`.
 
 ## Tests
 
-- A test passes or fails the same on every machine. It never reads the host's `/usr/share/omarchy-platform`, installed `omarchy-*` commands, `/sys` or running services: stage into a temporary root, point copies at fixtures, and stub the runtime's commands. Run `systemd-analyze verify` with `--root` at the staged package. A pass on a Mac with Omarchy installed says nothing about CI.
+- A test passes or fails the same on every machine. It never reads the host's `/usr/share/omarchy-platform`, installed `omarchy-*` commands, `/sys` or running services: stage into a temporary root, point copies at fixtures, and stub external dependencies, keeping the real commands under test. Run `systemd-analyze verify` with `--root` at the staged package. A pass on a Mac with Omarchy installed says nothing about CI.
 - When a change adds a detection path or a fallback, test the inverse too: the new path never hides what the old one found.
 - A test that needs something the runtime gained at a later commit moves `test/integration/runtime` to that commit; it does not skip because that pin lacks it.
 - Before calling a change tested, check that CI ran it: a skipped test, or a job that failed before reaching the tests, is not a pass.
