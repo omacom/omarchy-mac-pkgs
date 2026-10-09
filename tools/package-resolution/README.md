@@ -13,7 +13,7 @@ Platforms name the runtime's own package lists (`install/omarchy-*.packages`), r
 ## Checks per platform
 
 - **Repositories:** none of the platform's `forbidden_repos` is configured.
-- **Closure:** every list entry and extra package resolves, and the whole set resolves in one transaction. Entries in `unpublished` are skipped with their reason and reported once they resolve.
+- **Closure:** every list entry and extra package resolves, and the whole set resolves in one transaction. Entries in `unpublished` are skipped with their reason and reported once they resolve. Names in the runtime's `install/omarchy-x86_64-only.packages` (base packages only x86_64 builds, which `omarchy-pkg-defaults` leaves out on aarch64) are not wanted at all; `transitions` and `kernel` are still checked as written.
 - **Conflicts:** no closure package declares a conflict with another one. `pacman -Sp` skips this check, so it is computed from the databases, with versioned conflicts compared by `vercmp`.
 - **Forbidden packages:** no closure package matches `forbidden_packages`.
 - **linux provider:** reports what `pacman -S linux` selects and every package offering `linux`; fails when a forbidden package is selected. With `kernel` set, also reports the selection with that kernel installed.

@@ -23,7 +23,7 @@ Identifiers owned here are named `mac`: `omarchy-mac`, `omarchy-mac-boot`. Names
 ## Contributing
 
 - **Bugs**: open an issue on [omacom/omarchy-mac-pkgs](https://github.com/omacom/omarchy-mac-pkgs/issues) with the details listed under [Hardware support]({{page:hardware}}#reporting-a-problem). Installer bugs go to [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer/issues).
-- **Changes**: package changes are pull requests against `main` on omacom/omarchy-mac-pkgs. Desktop changes go to omacom/omarchy, through [#13362](https://github.com/omacom/omarchy/pull/13362) while it is open. Anything Apple-specific runs behind the platform detector.
+- **Changes**: package changes are pull requests against `main` on omacom/omarchy-mac-pkgs. Desktop changes go to omacom/omarchy, through [#14431](https://github.com/omacom/omarchy/pull/14431) while it is open. Anything Apple-specific runs behind the platform detector.
 - **Packages**: pull requests against `master` on omacom/omarchy-pkgs. A new Mac recipe is aarch64-only and edge-only in its first merge.
 - **This manual**: the pages live in `mac-manual/content/` on omarchy-mac-pkgs. Change a page in the same pull request as the behaviour it describes.
 - **Reviews**: designs and code are reviewed before merge, and boot-critical changes need cold-boot evidence from a test Mac.

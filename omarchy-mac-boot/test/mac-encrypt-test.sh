@@ -136,6 +136,12 @@ grep -Fxq 'After=omarchy-mac-encrypt.service' "$KEYDEV_DROPIN" &&
   grep -Fq 'run-systemd-cryptsetup-keydev\x2droot.mount.d/' "$INSTALL" &&
   grep -Fq 'omarchy-mac-encrypt-keydev.conf' "$INSTALL" ||
   fail "the sd-encrypt key-device mount of the Boot partition is ordered after the unit"
+KEYDEV_UMOUNT_DROPIN=$FILES/usr/lib/omarchy/initcpio/omarchy-mac-encrypt-keydev-umount.conf
+grep -Fxq 'Before=initrd-switch-root.service' "$KEYDEV_UMOUNT_DROPIN" &&
+  grep -Fxq 'Type=oneshot' "$KEYDEV_UMOUNT_DROPIN" &&
+  grep -Fq 'omarchy-mac-encrypt-keydev-umount.conf \' "$INSTALL" &&
+  grep -Fxq '        /usr/lib/systemd/system/keydev-root-umount.service.d/omarchy-mac-encrypt.conf 644' "$INSTALL" ||
+  fail "the key-device unmount finishes before switch-root, or a remount of the Boot partition reaches the real /boot read-only"
 grep -Fq 'dir=$mnt/var/lib/omarchy/mac-first-boot' "$SCRIPT" &&
   grep -Fq '[[ -f $dir/pending && -f $dir/deferred-steps ]] || fresh=0' "$SCRIPT" &&
   [[ $(grep -v '^[[:space:]]*#' "$SCRIPT") != *omarchy/image* ]] ||
@@ -151,9 +157,16 @@ if command -v systemd-analyze >/dev/null; then
   install -D -m 644 "$UNIT" "$verify_units/omarchy-mac-encrypt.service"
   printf '[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/usr/lib/omarchy/initcpio/omarchy-mac-encrypt\n' \
     >"$verify_units/probe.service"
+  # The unmount unit as systemd-cryptsetup-generator writes it, with our drop-in.
+  printf '[Unit]\nDefaultDependencies=no\nAfter=run-systemd-cryptsetup-keydev\\x2droot.mount\n\n[Service]\nExecStart=-/usr/bin/umount /run/systemd/cryptsetup/keydev-root\n' \
+    >"$verify_units/keydev-root-umount.service"
+  install -D -m 644 "$KEYDEV_UMOUNT_DROPIN" "$verify_units/keydev-root-umount.service.d/omarchy-mac-encrypt.conf"
+  install -D -m 755 /dev/null "$verify_root/usr/bin/umount"
   verify_out=""
   if probe_out=$(systemd-analyze verify --man=no --root="$verify_root" "$verify_units/probe.service" 2>&1) && [[ -z $probe_out ]]; then
     verify_out=$(systemd-analyze verify --man=no --root="$verify_root" "$verify_units/omarchy-mac-encrypt.service" 2>&1) ||
+      verify_out+=$'\n'"exit $?"
+    verify_out+=$(systemd-analyze verify --man=no --root="$verify_root" "$verify_units/keydev-root-umount.service" 2>&1) ||
       verify_out+=$'\n'"exit $?"
     verified=true
   else
@@ -161,8 +174,8 @@ if command -v systemd-analyze >/dev/null; then
   fi
   rm -rf "$verify_root"
   if [[ $verified == "true" ]]; then
-    [[ -z $verify_out ]] || fail "systemd-analyze verify accepts the initrd unit: $verify_out"
-    echo 'ok - systemd-analyze verify accepts the initrd unit'
+    [[ -z $verify_out ]] || fail "systemd-analyze verify accepts the initrd unit and the key-device unmount drop-in: $verify_out"
+    echo 'ok - systemd-analyze verify accepts the initrd unit and the key-device unmount drop-in'
   else
     echo 'ok - systemd-analyze cannot verify units here; unit verification not run'
   fi

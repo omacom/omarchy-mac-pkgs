@@ -20,7 +20,7 @@ The next boot unlocks the disk with your password. At the prompt the built-in ke
 
 ## Changing passwords
 
-Change passwords under _Update > Password_ in the Omarchy menu, as on x86. On a Mac your disk password and your login password start out the same. Changing the disk password changes the LUKS key first and your login password second, and records each step, so an interruption resumes rather than leaving the two out of step. It applies only to the root volume: changing the password of another encrypted drive never changes your login. If you no longer know your password, see the next section.
+Change passwords under _Update > Password_ in the Omarchy menu, as on x86. On a Mac your disk password and your login password start out the same, but each changes on its own: _Drive Encryption_ changes only the disk password, and _User_ only the login password. A disk password change is recorded step by step, so an interruption resumes rather than leaving the disk half changed. If you no longer know your password, see the next section.
 
 ## If you forget your password
 

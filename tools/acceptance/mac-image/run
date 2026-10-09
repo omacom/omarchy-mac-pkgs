@@ -60,7 +60,7 @@ declare -A about=(
   [first-boot]="plain install (encrypt=0): first boot runs every deferred hardware step, owner setup, console login; Plymouth theme, /.snapshots, default sink"
   [conversion]="encrypted install: LUKS2 conversion in the initrd, first boot, owner setup re-keys to the owner password alone"
   [second-boot]="the re-keyed disk boots Limine's command line: a wrong password is refused, the owner's unlocks"
-  [password-change]="omarchy-drive-password moves the disk, login and root to a new password; the next boot unlocks with it"
+  [password-change]="omarchy-drive-password moves the disk to a new password; the next boot unlocks with it and the login password stays"
   [update]="omarchy update -y on the re-keyed disk: packages upgrade, boot files verify, the updated disk boots (needs update-verify, omacom/omarchy-mac#543)"
   [snapshot-restore]="omarchy-snapshot create adds a Limine entry that boots the snapshot; omarchy-snapshot restore puts it back (needs the snapshot boot check, ticket 36)"
   [factory-reset]="omarchy-system-factory-reset wipes the owner, /etc drift and the old keys; owner setup runs again (needs reset-prepare, ticket 34)"
@@ -420,6 +420,8 @@ build_generic_kernel() {
   ((hook_files >= 3)) || fail "the generic initramfs carries no omarchy-mac-encrypt unit"
   lsinitcpio "$work/generic/initramfs-generic.img" | grep -q 'keydev\\x2droot.mount.d' ||
     fail "the generic initramfs lacks the sd-encrypt key-mount ordering drop-in"
+  lsinitcpio "$work/generic/initramfs-generic.img" | grep -F 'keydev-root-umount.service.d/omarchy-mac-encrypt.conf' >/dev/null ||
+    fail "the generic initramfs lacks the drop-in that unmounts the key device before switch-root"
   cp "$work/generic/mkinitcpio.log" "$evidence_dir/"
   while ((${#mounts[@]})); do umount_last; done
   detach_last
@@ -591,6 +593,7 @@ stop_guest() {
 owner_setup() {
   local what=$1 setup_timeout=$((boot_timeout * 2))
   serial_expect 'Press Return to Start Setup' "$what: owner setup greeter"
+  boot_writable "$what"
   serial_send $'\r'
   serial_expect 'Select keyboard layout' "$what: keyboard step" 120
   serial_send $'\r'
@@ -676,6 +679,14 @@ unlock_prompt() {
 no_emergency() {
   ! grep -aq "Emergency Mode\|Failed to start .*Encrypt the Omarchy Mac root\|Failed to mount /run/systemd/cryptsetup/keydev-root" "$serial_log" ||
     fail "$1: emergency mode or a failed unlock (see ${serial_log##*/})"
+  boot_writable "$1"
+}
+
+# A Boot partition still mounted read-only from the initrd (the sd-encrypt key
+# device) brings /boot up read-only, and owner setup cannot rebuild the initramfs.
+boot_writable() {
+  ! grep -aq "/boot: WARNING: source write-protected" "$serial_log" ||
+    fail "$1: /boot came up read-only (see ${serial_log##*/})"
 }
 
 # ── checks on a stopped guest's disk ─────────────────────────────────────────
@@ -940,15 +951,12 @@ scenario_password_change() {
   boot_guest "$disk" "$log" "$DISK_CMDLINE"
   unlock_prompt password-change
   serial_type "$new_password"
-  if console_login password-change "$new_password"; then
-    guest_run "password-change: su to root" "su -c 'echo __root_\$((6*7))__' root" "Password: ?=$new_password"
-    if grep -aq '__root_42__' "$log"; then
-      ok "password-change: the next boot unlocks with the new password, and it logs in $owner_user and root"
-    else
-      not_ok "password-change: the next boot unlocks with the new password and it logs in $owner_user, but root does not take it"
-    fi
-  elif console_login password-change "$owner_password"; then
-    not_ok "password-change: the next boot unlocks with the new password, but $owner_user still logs in with the old one: the login password did not follow the disk's"
+  # The disk password is its own: changing it leaves the login password as setup
+  # gave it (omacom/omarchy#14431).
+  if console_login password-change "$owner_password"; then
+    ok "password-change: the next boot unlocks with the new password, and $owner_user still logs in with the login password setup gave"
+  elif console_login password-change "$new_password"; then
+    not_ok "password-change: the next boot unlocks with the new password, but $owner_user now logs in with it: the login password followed the disk's"
   else
     not_ok "password-change: the next boot unlocks with the new password, but neither password logs in $owner_user"
   fi

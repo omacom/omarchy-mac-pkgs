@@ -23,7 +23,7 @@ Package lists are composed from a base, an architecture and a platform. Only the
 
 ## Mac code stays on Macs
 
-One detector, `omarchy-hw-platform`, answers `apple-silicon`, `qualcomm`, `generic-aarch64` or `generic`. It reads the device-tree identity, falls back to what the kernel reports, and fails rather than guess when the evidence contradicts itself. Every Mac-only step asks it, and Mac services check again when they start, so nothing Apple-specific runs on x86 or on another ARM machine such as a Snapdragon laptop.
+One detector, `omarchy-hw-platform`, answers `apple-silicon`, `generic-aarch64` or `generic`; a Snapdragon laptop is `generic-aarch64`. It reads the device-tree identity, falls back to what the kernel reports, and fails rather than guess when the evidence contradicts itself. Every Mac-only step asks it, and Mac services check again when they start, so nothing Apple-specific runs on x86 or on another ARM machine such as a Snapdragon laptop.
 
 A pacman hook in `omarchy-settings` refuses a transaction that would install a package tagged for another platform. Image builds declare their target platform in a manifest rather than reading the build machine, and live system changes ignore environment overrides.
 

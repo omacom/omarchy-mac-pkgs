@@ -225,6 +225,12 @@ check_platform() {
   done
   wanted+=("${packages[@]}")
   mapfile -t wanted < <(printf '%s\n' "${wanted[@]}" | awk 'NF && !seen[$0]++')
+  # The runtime leaves the base packages only x86_64 builds out of every
+  # aarch64 set (omarchy-pkg-defaults), so they are not wanted here either.
+  if [[ -n $runtime && -f $runtime/install/omarchy-x86_64-only.packages ]]; then
+    mapfile -t wanted < <(printf '%s\n' "${wanted[@]}" |
+      grep -vxF -f <(sed -e 's/[[:space:]]*#.*//' -e '/^[[:space:]]*$/d' "$runtime/install/omarchy-x86_64-only.packages"))
+  fi
 
   local missing=() targets=() out
   local -A is_wanted=() is_missing=()

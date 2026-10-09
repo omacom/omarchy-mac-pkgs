@@ -173,6 +173,13 @@ expect_fail repos "an Asahi repository on a generic platform fails" 'repos: forb
 platform missing "core" "tool ghost" 'unpublished=([ghost]="not published yet")' 'transitions=(ghost)'
 expect_pass missing "an unpublished package with a reason is skipped" 'skip  missing: ghost transitions \(not published yet\)'
 
+mkdir -p "$scratch/runtime/install"
+printf '# x86_64 only\nghost\n' >"$scratch/runtime/install/omarchy-x86_64-only.packages"
+platform x86only "core" "tool ghost"
+output=$("$CHECK" --platforms "$scratch/platforms" --work "$scratch/work" --runtime "$scratch/runtime" x86only 2>&1) && status=0 || status=$?
+(( status == 0 )) && ! grep -q ghost <<<"$output" || fail "a runtime's x86_64-only package is not wanted on aarch64" "$output"
+pass "a runtime's x86_64-only package is not wanted on aarch64"
+
 platform unknown "core" "tool ghost" 'transitions=(ghost)'
 expect_fail unknown "an unknown package fails" 'unknown: ghost is in no configured repository'
 grep -Fq 'FAIL  unknown: ghost does not resolve for transitions' <<<"$output" || fail "an unknown transition package fails" "$output"

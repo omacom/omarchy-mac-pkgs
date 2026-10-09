@@ -4,7 +4,7 @@ description: Where the Apple Silicon stack stands, and what is deliberately left
 section: Reference
 ---
 
-This manual describes the stack the first release installs. The packages are built here, in omacom/omarchy-mac-pkgs, against the Omarchy of [omacom/omarchy#13362](https://github.com/omacom/omarchy/pull/13362), following [the convergence spec](https://github.com/omacom/omarchy-mac/blob/quattro-upstream/docs/apple-silicon-convergence.md). Until that release, read every page as the target, not as something you can install today.
+This manual describes the stack the first release installs. The packages are built here, in omacom/omarchy-mac-pkgs, against the Omarchy of [omacom/omarchy#14431](https://github.com/omacom/omarchy/pull/14431), following [the convergence spec](https://github.com/omacom/omarchy-mac/blob/quattro-upstream/docs/apple-silicon-convergence.md). Until that release, read every page as the target, not as something you can install today.
 
 ## Order of work
 

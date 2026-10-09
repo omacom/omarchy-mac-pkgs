@@ -17,7 +17,7 @@ Omarchy on a Mac is official Omarchy plus a small set of Mac packages, all publi
 | [omacom/omarchy-pkgs](https://github.com/omacom/omarchy-pkgs) | The recipes that build every package, the Mac ones included, and the signed `[omarchy]` repository with its `edge`, `rc` and `stable` channels |
 | [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer) | The macOS installer app, its pinned Asahi installer engine and the Mac image builder |
 
-Until the generic Mac changes are merged into omacom/omarchy, [#13362](https://github.com/omacom/omarchy/pull/13362) carries them. omarchy-mac's `quattro-upstream` branch, where they were integrated, is frozen.
+Until the generic Mac changes are merged into omacom/omarchy, [#14431](https://github.com/omacom/omarchy/pull/14431) carries them; it superseded #13362. omarchy-mac's `quattro-upstream` branch, where they were integrated, is frozen.
 
 ## Two Mac packages
 

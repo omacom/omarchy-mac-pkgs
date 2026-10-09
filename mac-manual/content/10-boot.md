@@ -43,7 +43,7 @@ The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcp
 
 ## Encryption
 
-The conversion runs in the initramfs before `sysroot.mount`. It shrinks the file system, re-encrypts it in place, then regenerates the boot entries and the initramfs with `sd-encrypt`. The next boot unlocks the volume with the owner's password. The unit requires a pending marker written by the installer and refuses to run without it, so a Mac installed without encryption is never touched. [Encryption and passwords]({{page:security}}) covers what the owner sees.
+The conversion runs in the initramfs before `sysroot.mount`. It shrinks the file system, re-encrypts it in place, then regenerates the boot entries and the initramfs with `sd-encrypt`. The splash shows its progress on the Omarchy theme's bar with one status line under it, and first-boot setup carries the same bar on to the end. The Mac's initramfs copy of the theme carries an addendum for this, which the installed theme leaves alone; on every Mac boot it also centres Plymouth's status messages under the bar instead of the top-left corner. The next boot unlocks the volume with the owner's password. The unit requires a pending marker written by the installer and refuses to run without it, so a Mac installed without encryption is never touched. [Encryption and passwords]({{page:security}}) covers what the owner sees.
 
 ## Boot verification
 

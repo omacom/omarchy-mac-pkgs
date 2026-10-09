@@ -1,0 +1,54 @@
+
+#----------------------------------------- Omarchy Mac first boot --------------------------------
+# Appended to the Omarchy theme in the Mac initramfs. In-place encryption and
+# first-boot setup report through `plymouth system-update` and display-message.
+
+global.mac_update_active = 0;
+
+fun mac_system_update_callback(progress) {
+  if (global.mac_update_active == 0) {
+    global.mac_update_active = 1;
+    stop_fake_progress();
+    hide_password_dialog();
+    show_progress_bar();
+    # Boot progress may already have moved the hidden bar; start it empty.
+    global.max_progress = 0;
+    progress_bar.image = progress_bar.original_image.Scale(1, progress_bar.original_image.GetHeight());
+    progress_bar.sprite.SetImage(progress_bar.image);
+  }
+  update_progress_bar(progress / 100);
+}
+
+# While first boot reports its own progress, boot progress must not move the bar.
+fun mac_boot_progress_callback(duration, progress) {
+  if (global.mac_update_active == 0) {
+    progress_callback(duration, progress);
+  }
+}
+
+# Messages sit centred under the bar instead of in the top-left corner, and
+# follow it when the theme re-centres for a display that comes up late.
+global.mac_message_width = 0;
+
+fun mac_place_message() {
+  message_sprite.SetPosition(Window.GetWidth() / 2 - global.mac_message_width / 2,
+                             progress_box.y + progress_box.image.GetHeight() + 24, 10000);
+}
+
+fun mac_display_message_callback(text) {
+  message = Image.Text(text, 0.753, 0.792, 0.961);
+  global.mac_message_width = message.GetWidth();
+  message_sprite.SetImage(message);
+  mac_place_message();
+  message_sprite.SetOpacity(1);
+}
+
+fun mac_refresh_callback() {
+  refresh_callback();
+  mac_place_message();
+}
+
+Plymouth.SetSystemUpdateFunction(mac_system_update_callback);
+Plymouth.SetBootProgressFunction(mac_boot_progress_callback);
+Plymouth.SetDisplayMessageFunction(mac_display_message_callback);
+Plymouth.SetRefreshFunction(mac_refresh_callback);

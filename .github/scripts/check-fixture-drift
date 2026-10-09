@@ -12,7 +12,7 @@ git init -q --bare "$upstream"
 
 # Upstream quattro once the Apple Silicon submission has merged, its pull request until then.
 source_ref=""
-for ref in quattro refs/pull/13362/head; do
+for ref in quattro refs/pull/14431/head; do
   if git -C "$upstream" fetch -q --depth 1 https://github.com/omacom/omarchy.git "$ref" 2>/dev/null &&
     git -C "$upstream" cat-file -e "FETCH_HEAD:$fixtures" 2>/dev/null; then
     source_ref=$ref
