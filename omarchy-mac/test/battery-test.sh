@@ -33,12 +33,13 @@ fixture "$stage/usr/lib/omarchy-mac/battery-charge-limit-restore" "$restore"
 
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
-if [[ ${PLATFORM:-apple-silicon} == "contradiction" ]]; then
+if [[ ${PLATFORM:-aarch64-apple} == "contradiction" ]]; then
   echo "Error: contradictory platform identity" >&2
   exit 1
 fi
-echo "${PLATFORM:-apple-silicon}"
+echo "${PLATFORM:-aarch64-apple}"
 STUB
+stub_apple_predicate "$work/bin"
 # The SMC derives the start threshold from the end threshold.
 cat >"$work/bin/sudo" <<'STUB'
 #!/bin/bash
@@ -113,7 +114,7 @@ done
 reads 100 100 && [[ ! -s $SUDO_LOG ]] || fail 'invalid input leaves the limit unchanged'
 pass 'rejects unsupported limits without changing the device'
 
-for platform in qualcomm generic-aarch64 generic contradiction; do
+for platform in qualcomm aarch64 x86 contradiction; do
   for args in '' 80 100; do
     # shellcheck disable=SC2086
     if PLATFORM=$platform "$command" $args >/dev/null 2>&1; then fail "$platform refuses ${args:-status}"; fi
@@ -153,7 +154,7 @@ for content in 'CHARGE_CONTROL_END_THRESHOLD=85' 'CHARGE_CONTROL_END_THRESHOLD=6
   untouched "$restore" || fail "ignores saved content: $content"
 done
 printf 'CHARGE_CONTROL_END_THRESHOLD=80\n' >"$saved"
-for platform in qualcomm generic-aarch64 generic contradiction; do
+for platform in qualcomm aarch64 x86 contradiction; do
   PLATFORM=$platform untouched "$restore" || fail "$platform leaves the battery alone"
 done
 rm "$battery/charge_control_end_threshold"

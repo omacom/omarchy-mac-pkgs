@@ -6,7 +6,7 @@
 # a wrapper that is not ready yet (exit 3 or 4 from --check) is skipped, and
 # so is a runtime without the helpers.
 set -euo pipefail
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+omarchy-hw-apple-silicon || exit 0
 for helper in omarchy-cmd-electron-gl-wrap omarchy-cmd-desktop-exec-repair; do
   if ! command -v "$helper" >/dev/null; then
     echo "Skipping Electron desktop repair: the runtime has no $helper" >&2
