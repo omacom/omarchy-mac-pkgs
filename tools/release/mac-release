@@ -12,7 +12,8 @@
 #
 #   1. pin: with a commit of omacom/omarchy-mac-pkgs main, open a pull
 #      request moving _commit of the recipes built from it (omarchy-mac,
-#      omarchy-mac-boot). Merging it is the owner's; CI's publish.yml then
+#      omarchy-mac-boot), with their pkgver, pkgrel and git source
+#      checksum. Merging it is the owner's; CI's publish.yml then
 #      signs and publishes the build to edge with bin/publish-artifact
 #   2. wait until the source channel (edge for --to rc, rc for --to stable)
 #      serves master's version of every package in the set
@@ -111,12 +112,56 @@ read_recipes() {
   done
 }
 
+# The pkgver PACKAGE takes at $commit, as CONTRIBUTING.md "Releases" sets
+# it and each recipe's prepare() checks: omarchy-mac/version for
+# omarchy-mac, the UTC date of the commit for omarchy-mac-boot. Sets
+# pin_pkgver, or adds a pin gap and fails.
+source_pkgver() {
+  local package=$1 value
+  pin_pkgver=""
+  case $package in
+    omarchy-mac)
+      value=$(git -C "$source_dir" show "$commit:omarchy-mac/version" 2>"$work/git.err") ||
+        { pin_gaps+=("$package: cannot read omarchy-mac/version of $source_repo at ${commit:0:12}: $(tail -n 1 "$work/git.err")"); return 1; }
+      ;;
+    omarchy-mac-boot)
+      value=$(TZ=UTC0 git -C "$source_dir" show -s --format=%cd --date=format-local:%Y%m%d "$commit")
+      ;;
+    *)
+      pin_gaps+=("$package: no rule for the pkgver it takes from $source_repo")
+      return 1
+      ;;
+  esac
+  [[ $value =~ ^[0-9][A-Za-z0-9._+]*$ ]] ||
+    { pin_gaps+=("$package: '$value' at ${commit:0:12} is not a pkgver"); return 1; }
+  pin_pkgver=$value
+}
+
+# A recipe that already pins $commit must carry what that commit gives it,
+# or its build fails: the pkgver, and makepkg's checksum of a git source.
+# Adds a pin gap otherwise.
+check_pinned() {
+  local package=$1 dir=$2 have source0 sum0 want
+  source_pkgver "$package" || return 0
+  have=$(pkgbuild_var "$dir" pkgver)
+  [[ $have == "$pin_pkgver" ]] ||
+    pin_gaps+=("$package: pkgbuilds/$package pins ${commit:0:12} with pkgver=$have, where the commit gives $pin_pkgver; fix the recipe by hand")
+  source0=$(pkgbuild_first "$dir" source)
+  sum0=$(pkgbuild_first "$dir" sha256sums)
+  [[ $sum0 =~ ^[0-9a-f]{64}$ && $source0 == *git+*"#commit=$commit" ]] || return 0
+  # die in the substitution has printed why; set -e is off in this || list.
+  want=$(git_source_sha256 "$source_dir" "$commit") || exit 1
+  [[ $sum0 == "$want" ]] ||
+    pin_gaps+=("$package: pkgbuilds/$package pins ${commit:0:12} with sha256sums[0]=$sum0, where makepkg records $want; fix the recipe by hand")
+}
+
 # The pins a release of $commit moves, into pin_moves ("package old new"),
 # with each recipe edited in $work/pinned/<package>.
 plan_pins() {
   local package dir old
   pin_moves=()
   pin_gaps=()
+  declare -gA pin_sums=()
   [[ -n $commit ]] || return 0
   for package in "${source_packages[@]}"; do
     [[ " ${packages[*]} " == *" $package "* ]] || continue
@@ -131,13 +176,15 @@ plan_pins() {
     [[ $(grep -cE '^_commit=[0-9a-f]{40}$' "$dir/PKGBUILD") == 1 ]] ||
       { pin_gaps+=("$package: pkgbuilds/$package has no single _commit=<sha> pin line"); continue; }
     old=$(pkgbuild_var "$dir" _commit)
-    [[ $old != "$commit" ]] || continue
+    [[ $old != "$commit" ]] || { check_pinned "$package" "$dir"; continue; }
     git -C "$source_dir" cat-file -e "$old^{commit}" 2>/dev/null || git -C "$source_dir" fetch --quiet origin "$old" 2>/dev/null ||
       die "cannot read $source_repo $old, which pkgbuilds/$package pins"
     git -C "$source_dir" merge-base --is-ancestor "$old" "$commit" ||
       die "pkgbuilds/$package pins $old, which $commit does not descend from; this would move Macs backwards"
-    pin_recipe "$dir" "$commit"
+    source_pkgver "$package" || continue
+    pin_git_dir=$source_dir pin_recipe "$dir" "$commit" "" pkgver "$pin_pkgver"
     pin_moves+=("$package $pin_old_version $pin_new_version")
+    pin_sums[$package]=$pin_sha256
   done
 }
 
@@ -277,7 +324,7 @@ print_plan() {
     (( ${#pin_moves[@]} + ${#pin_gaps[@]} )) || say "pin:             nothing to move"
     for line in "${pin_moves[@]}"; do
       read -r package old new <<<"$line"
-      say "pin:             $package $old -> $new (_commit -> ${commit:0:12}; a pull request on $omacom_repo, merged by the owner; CI publishes it to edge)"
+      say "pin:             $package $old -> $new (_commit -> ${commit:0:12}${pin_sums[$package]:+, sha256sums[0] -> ${pin_sums[$package]}}; a pull request on $omacom_repo, merged by the owner; CI publishes it to edge)"
     done
     for line in "${pin_gaps[@]}"; do say "pin:             blocked: $line"; done
   fi
