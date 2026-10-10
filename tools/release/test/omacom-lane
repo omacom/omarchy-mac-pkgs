@@ -47,6 +47,17 @@ side=$(git -C "$tmp/mac-work" rev-parse HEAD)
 git clone --quiet --bare "$tmp/mac-work" "$tmp/omarchy-mac.git"
 git -C "$tmp/omarchy-mac.git" branch --quiet -m master main
 
+# What makepkg -g records for the git source of the fake omarchy-mac-pkgs at
+# a commit (calc_checksum_git; the tree has no .gitattributes).
+gsum() {
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.abbrev=no -C "$tmp/mac-work" archive --format tar "$1" |
+    { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1
+}
+# A field of a recipe on a branch of the fake omarchy-pkgs.
+recipe_field() {
+  git -C "$tmp/pkgs.git" show "$1:pkgbuilds/$2/PKGBUILD" | sed -n "s/^$3=//p"
+}
+
 # ── omacom/omarchy-pkgs master ──────────────────────────────────────────────
 k1=$(hex a)
 k2=$(hex b)
@@ -60,8 +71,8 @@ pkgver=${version%-*}
 pkgrel=${version##*-}
 arch=('aarch64')
 _commit=$commit
-source=("git+https://example.invalid/omarchy-mac.git#commit=\${_commit}")
-sha256sums=('SKIP')
+source=("omarchy-mac-pkgs::git+https://example.invalid/omarchy-mac.git#commit=\${_commit}")
+sha256sums=('$(gsum "$commit")')
 EOF
   printf '{"source": "local", "channels": %s%s}\n' "$channels" "$extra" >"$tmp/pkgs-work/pkgbuilds/$name/.omarchy/package.json"
 }
@@ -245,7 +256,7 @@ echo "ok - with edge and rc serving one set there is nothing to promote"
 
 # ── the pin ─────────────────────────────────────────────────────────────────
 run "$release" --dry-run "$mac2" || fail "the dry run of a release failed"
-has "pin:             omarchy-mac 1.0-1 -> 1.0-2 (_commit -> ${mac2:0:12}" "the runtime pin"
+has "pin:             omarchy-mac 1.0-1 -> 1.0-2 (_commit -> ${mac2:0:12}, sha256sums[0] -> $(gsum "$mac2");" "the runtime pin"
 has "pin:             omarchy-mac-boot 1.0-1 -> 1.0-2" "the boot pin"
 has "waits for:       omarchy-mac 1.0-2 (after the pin merges) on edge" "the pending publication"
 run "$release" --dry-run "$side" && fail "a commit off main was accepted"
@@ -258,6 +269,10 @@ git -C "$tmp/pkgs.git" show "$pin_branch:pkgbuilds/omarchy-mac/PKGBUILD" | grep 
   fail "the pin branch does not pin omarchy-mac"
 git -C "$tmp/pkgs.git" show "$pin_branch:pkgbuilds/omarchy-mac-boot/PKGBUILD" | grep -Fxq 'pkgrel=2' ||
   fail "the pin branch does not bump omarchy-mac-boot"
+for package in omarchy-mac omarchy-mac-boot; do
+  [[ $(recipe_field "$pin_branch" "$package" sha256sums) == "('$(gsum "$mac2")')" ]] ||
+    fail "$package on the pin branch keeps a checksum other than makepkg's for ${mac2:0:12}: $(recipe_field "$pin_branch" "$package" sha256sums)"
+done
 [[ $(git -C "$tmp/pkgs.git" diff --name-only master "$pin_branch" | tr '\n' ' ') == "pkgbuilds/omarchy-mac-boot/PKGBUILD pkgbuilds/omarchy-mac/PKGBUILD " ]] ||
   fail "the pin branch changes more than the two recipes: $(git -C "$tmp/pkgs.git" diff --name-status master "$pin_branch" | head -n 5 | tr '\n' ' ')"
 git -C "$tmp/pkgs.git" log -1 --format='%an <%ae>' "$pin_branch" | grep -Fxq 'Release Tester <release@example.invalid>' ||
@@ -474,6 +489,113 @@ echo "ok - mac-aurora-pin pins omacom's linux-aurora forward only and promotes t
 
 MAC_RELEASE_DB_BASE="file://localhost$tmp/world/db" run "$release" --dry-run && fail "a file URL with a host was read as empty channels"
 has "must be file:///<absolute path>" "an unsupported file URL"
+
+# ── git source checksums ────────────────────────────────────────────────────
+# lib CMD...: CMD with tools/release/lib/omacom.sh loaded; after pin_recipe,
+# prints what it moved.
+lib() {
+  "$BASH" -c 'set -euo pipefail
+    work=$(mktemp -d "$1/lib.XXXXXX"); say() { :; }; die() { echo "die: $*" >&2; exit 1; }
+    source "$2"; shift 2; "$@"
+    [[ $1 != pin_recipe ]] || echo "pinned $pin_old_version -> $pin_new_version ${pin_sha256:-}"' _ "$tmp" "$TOOLS/lib/omacom.sh" "$@"
+}
+# A tree that .gitattributes would alter on export, at a fixed commit, and
+# the checksum makepkg -g (pacman 7.1, git 2.55, Arch Linux ARM) records for
+# it: makepkg ignores export-ignore and export-subst.
+(
+  export GIT_AUTHOR_DATE=2026-10-10T11:58:50+10:00 GIT_COMMITTER_DATE=2026-10-10T11:58:50+10:00
+  d=$tmp/sum-work
+  git init --quiet "$d"
+  mkdir -p "$d/omarchy-mac/bin"
+  printf '1.0\n' >"$d/omarchy-mac/version"
+  printf '#!/bin/sh\necho run\n' >"$d/omarchy-mac/bin/run"
+  chmod 755 "$d/omarchy-mac/bin/run"
+  printf 'one\ntwo\n' >"$d/omarchy-mac/notes.txt"
+  ln -s version "$d/omarchy-mac/current"
+  printf 'left out\n' >"$d/omarchy-mac/private"
+  printf '$Format:%%H$\n' >"$d/omarchy-mac/stamp"
+  printf '*.txt text\nomarchy-mac/private export-ignore\nomarchy-mac/stamp export-subst\n' >"$d/.gitattributes"
+  git -C "$d" add -A
+  git -C "$d" commit --quiet -m fixture
+)
+sum_commit=c23767f9cf57639c673edd034368a6db87185449
+sum_makepkg=c472510a12d35e7b548bc674ddc3b763552060c1d60e0e88ac5af86254f2344e
+[[ $(git -C "$tmp/sum-work" rev-parse HEAD) == "$sum_commit" ]] || fail "the checksum fixture is not commit $sum_commit"
+git clone --quiet --bare --filter=blob:none "file://$tmp/sum-work" "$tmp/sum.git"
+# Settings that change git archive's output must not reach the checksum.
+printf '[tar]\n\tumask = 0077\n[core]\n\tautocrlf = true\n' >"$tmp/hostile.gitconfig"
+cat "$tmp/gitconfig" >>"$tmp/hostile.gitconfig"
+GIT_CONFIG_GLOBAL=$tmp/hostile.gitconfig lib git_source_sha256 "$tmp/sum.git" "$sum_commit" >"$tmp/out" 2>&1 ||
+  fail "hashing a git source failed"
+[[ $(tail -n 1 "$tmp/out") == "$sum_makepkg" ]] || fail "the git source checksum is not makepkg's"
+echo "ok - a git source hashes to what makepkg -g records, whatever the operator's git settings"
+
+# omarchy-mac-pkgs commits and the checksums makepkg recorded for them in
+# omacom/omarchy-pkgs, when this checkout has their history (a shallow CI
+# checkout does not).
+known=(
+  5b2c815f007dd01a8ad9bb26f8af977c19e6a130 d44aadb3e396092d91e86cd5df24905bbcf7407ed7b33e7d6e47dd0671ba0bf3
+  162f3599ee1144d7cf44b1ae12a7eb14ba758b8a 31be04e5cd902403997756660bb50494c7f7978f1de1192edad426b543c15e01
+  b2c3985ae0dbbd9e2bda7828bfaf3c45fa459bcf 40bf12c3c456121ad60af7f4c9a9200ac50dd92e97b8c025482f3512831d1c8a
+  2a3ed89eb20c5695f6291698b6646a49f8f6489d ab951984268adadff8352009f63f1b001c3b09d14d47454b9efe06a54b3019ab
+)
+self=$(git -C "$TOOLS" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+have_known=1
+for (( i = 0; i < ${#known[@]}; i += 2 )); do
+  [[ -n $self ]] && git -C "$self" cat-file -e "${known[i]}^{commit}" 2>/dev/null || have_known=0
+done
+if (( have_known )); then
+  # A clone sharing the objects, so hashing writes nothing into this checkout.
+  git clone --quiet --bare --shared "$self" "$tmp/self.git"
+  for (( i = 0; i < ${#known[@]}; i += 2 )); do
+    [[ $(lib git_source_sha256 "$tmp/self.git" "${known[i]}" 2>&1 | tail -n 1) == "${known[i + 1]}" ]] ||
+      fail "the checksum of omarchy-mac-pkgs ${known[i]:0:12} is not the ${known[i + 1]:0:12} makepkg recorded"
+  done
+  echo "ok - omarchy-mac-pkgs commits hash to the checksums makepkg recorded in omarchy-pkgs"
+else
+  echo "ok - # skip: this checkout lacks the omarchy-mac-pkgs history the recorded checksums name"
+fi
+
+# pin_recipe on a git source, in a recipe directory.
+git -C "$tmp/sum-work" commit --quiet --allow-empty -m next
+sum_next=$(git -C "$tmp/sum-work" rev-parse HEAD)
+git -C "$tmp/sum.git" fetch --quiet origin "+refs/heads/*:refs/heads/*"
+mkdir -p "$tmp/git-recipe"
+cat >"$tmp/git-recipe/PKGBUILD" <<EOF
+pkgname=fixture
+pkgver=1.0
+pkgrel=4
+arch=('aarch64')
+_commit=$sum_commit
+source=("fixture::git+https://example.invalid/fixture.git#commit=\${_commit}"
+        extra.conf)
+sha256sums=('$sum_makepkg'
+            'SKIP')
+EOF
+sum_new=$(lib git_source_sha256 "$tmp/sum.git" "$sum_next" 2>/dev/null)
+cp -R "$tmp/git-recipe" "$tmp/git-recipe-1"
+pin_git_dir=$tmp/sum.git lib pin_recipe "$tmp/git-recipe-1" "$sum_next" "" pkgver 1.0 >"$tmp/out" 2>&1 || fail "a same-version git pin failed"
+has "pinned 1.0-4 -> 1.0-5 $sum_new" "a same-version git pin"
+grep -Fxq "sha256sums=('$sum_new'" "$tmp/git-recipe-1/PKGBUILD" || fail "a git pin kept the old commit's checksum"
+grep -Fxq "            'SKIP')" "$tmp/git-recipe-1/PKGBUILD" || fail "a git pin changed the other checksums"
+cp -R "$tmp/git-recipe" "$tmp/git-recipe-2"
+pin_git_dir=$tmp/sum.git lib pin_recipe "$tmp/git-recipe-2" "$sum_next" "" pkgver 1.1 >"$tmp/out" 2>&1 || fail "a version bump failed"
+has "pinned 1.0-4 -> 1.1-1 $sum_new" "a version bump"
+cp -R "$tmp/git-recipe" "$tmp/git-recipe-3"
+lib pin_recipe "$tmp/git-recipe-3" "$sum_next" >"$tmp/out" 2>&1 && fail "a git pin without a clone to hash went ahead"
+has "no clone was given to hash it" "a git pin without a clone"
+cp -R "$tmp/git-recipe" "$tmp/git-recipe-4"
+sed -e 's|^        extra.conf)|        "https://example.invalid/${_commit}.patch")|' \
+  -e "s|^            'SKIP')|            '$(printf 'd%.0s' {1..64})')|" "$tmp/git-recipe/PKGBUILD" >"$tmp/git-recipe-4/PKGBUILD"
+pin_git_dir=$tmp/sum.git lib pin_recipe "$tmp/git-recipe-4" "$sum_next" "" pkgver 1.0 >"$tmp/out" 2>&1 &&
+  fail "a second source of the commit kept its old checksum"
+has "sources $sum_next as source[1] too" "a second source of the commit"
+cp -R "$tmp/git-recipe" "$tmp/git-recipe-5"
+sed 's|git+https://example.invalid/fixture.git#commit=|https://example.invalid/fixture.zip?commit=|' "$tmp/git-recipe/PKGBUILD" >"$tmp/git-recipe-5/PKGBUILD"
+pin_git_dir=$tmp/sum.git lib pin_recipe "$tmp/git-recipe-5" "$sum_next" "" pkgver 1.0 >"$tmp/out" 2>&1 &&
+  fail "a source whose checksum cannot be computed kept its old checksum"
+has "whose checksum this cannot compute" "an unknown source type"
+echo "ok - pinning a git source writes makepkg's checksum of the new commit, and refuses to leave one stale"
 
 # ── lanes ───────────────────────────────────────────────────────────────────
 run "$release" --lane fork --help || fail "the fork lane's help failed"

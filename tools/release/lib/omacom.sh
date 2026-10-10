@@ -110,6 +110,15 @@ pkgbuild_var() {
   ' _ "$2")
 }
 
+# Every element of a PKGBUILD array, one per line.
+pkgbuild_lines() {
+  (cd "$1" && env -u OMARCHY_SRC CARCH="$mac_arch" "$BASH" -c '
+    source ./PKGBUILD >/dev/null 2>&1
+    declare -n value=$1
+    (( ${#value[@]} == 0 )) || printf "%s\n" "${value[@]}"
+  ' _ "$2")
+}
+
 # The first element of a PKGBUILD array.
 pkgbuild_first() {
   (cd "$1" && env -u OMARCHY_SRC CARCH="$mac_arch" "$BASH" -c '
@@ -244,6 +253,28 @@ archive_sha256() {
   die "could not download $url after retries (HTTP 429)"
 }
 
+# The sha256 makepkg records for a git source pinned to COMMIT, hashed from
+# GIT_DIR, a clone this run owns. makepkg (source/git.sh) runs git with no
+# global or system configuration, writes "* -export-subst -export-ignore" to
+# its clone's info/attributes so the tree's .gitattributes cannot alter the
+# export, and hashes `git -c core.abbrev=no archive --format tar <commit>`;
+# this does the same. A partial clone fetches its blobs in a first archive
+# under the operator's configuration, which reaches its remote.
+git_source_sha256() {
+  local dir=$1 commit=$2 gitdir sum
+  gitdir=$(git -C "$dir" rev-parse --absolute-git-dir) || die "$dir is not a git repository"
+  mkdir -p "$gitdir/info"
+  echo "* -export-subst -export-ignore" >"$gitdir/info/attributes"
+  git -C "$dir" archive --format tar "$commit" >/dev/null 2>"$work/git.err" ||
+    die "could not read the tree of $commit: $(tail -n 3 "$work/git.err")"
+  sum=$(set -o pipefail
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.abbrev=no -C "$dir" archive --format tar "$commit" 2>"$work/git.err" |
+      { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1) ||
+    die "could not archive $commit: $(tail -n 3 "$work/git.err")"
+  [[ $sum =~ ^[0-9a-f]{64}$ ]] || die "could not hash the archive of $commit"
+  printf '%s\n' "$sum"
+}
+
 # Whether version B sorts after A the way pacman orders them: vercmp when it
 # is installed, else sort -V, which agrees on the versions these recipes use.
 version_newer() {
@@ -263,12 +294,15 @@ replace_line() {
 
 # Move the recipe in DIR to COMMIT: _commit, the first sha256sums entry when
 # source[0] is that commit's archive (hashed here unless ARCHIVE_SHA256 is
-# given), and a new package version: pkgrel + 1, or pkgrel=1 when
-# VERSION_VAR is given and moves to VERSION. Refuses a version that is not
-# newer. Sets pin_old_version, pin_new_version and pin_archive.
+# given) or a git source pinned to it (hashed from the clone in
+# $pin_git_dir, as makepkg would), and a new package version: pkgrel + 1, or
+# pkgrel=1 when VERSION_VAR is given and moves to VERSION. Refuses a version
+# that is not newer, and any other source of the commit whose checksum is not
+# SKIP, rather than leave a stale checksum. Sets pin_old_version,
+# pin_new_version, pin_archive and pin_sha256 (the new checksum, if any).
 pin_recipe() {
   local dir=$1 commit=$2 archive=${3:-} version_var=${4:-} version=${5:-}
-  local file=$dir/PKGBUILD pattern old_rel new_rel source0 sum0
+  local file=$dir/PKGBUILD pattern old_rel new_rel source0 sum0 sources sums i
   for pattern in '^_commit=[0-9a-f]{40}$' '^pkgrel='; do
     [[ $(grep -cE "$pattern" "$file") == 1 ]] || die "$file does not have exactly one line matching $pattern"
   done
@@ -282,21 +316,38 @@ pin_recipe() {
       replace_line "$file" "^$version_var=" "$version_var=$version"
       new_rel=1
     fi
+    [[ $(pkgbuild_var "$dir" "$version_var") == "$version" ]] || die "$file did not take $version_var=$version"
   fi
   replace_line "$file" '^_commit=' "_commit=$commit"
   replace_line "$file" '^pkgrel=' "pkgrel=$new_rel"
   source0=$(pkgbuild_first "$dir" source)
   sum0=$(pkgbuild_first "$dir" sha256sums)
   pin_archive=""
-  if [[ $source0 == *"$commit"*.tar.gz && $sum0 =~ ^[0-9a-f]{64}$ ]]; then
+  pin_sha256=""
+  if [[ $sum0 =~ ^[0-9a-f]{64}$ ]] && [[ $source0 == *"$commit"*.tar.gz || $source0 == *git+*"#commit=$commit" ]]; then
     [[ $(grep -cE "^sha256sums=\('[0-9a-f]{64}'" "$file") == 1 ]] ||
-      die "$file does not start sha256sums=('<archive sha256>' on one line"
-    pin_archive=${source0##*::}
-    [[ -n $archive ]] || archive=$(archive_sha256 "$pin_archive")
+      die "$file does not start sha256sums=('<sha256>' on one line"
+    if [[ $source0 == *.tar.gz ]]; then
+      pin_archive=${source0##*::}
+      [[ -n $archive ]] || archive=$(archive_sha256 "$pin_archive")
+    else
+      [[ -n ${pin_git_dir:-} ]] || die "$file sources git at $commit, and no clone was given to hash it"
+      archive=$(git_source_sha256 "$pin_git_dir" "$commit")
+    fi
     [[ $archive =~ ^[0-9a-f]{64}$ ]] || die "invalid archive sha256: $archive"
     sed -E "s/^sha256sums=\('[0-9a-f]{64}'/sha256sums=('$archive'/" "$file" >"$file.new" && cat "$file.new" >"$file" && rm -f "$file.new"
     [[ $(pkgbuild_first "$dir" sha256sums) == "$archive" ]] || die "$file did not take the archive sha256"
+    pin_sha256=$archive
+  elif [[ $source0 == *"$commit"* && $sum0 != SKIP ]]; then
+    die "$file sources $commit as $source0, whose checksum this cannot compute"
   fi
+  # No other source may carry the commit under a checksum left behind.
+  mapfile -t sources < <(pkgbuild_lines "$dir" source)
+  mapfile -t sums < <(pkgbuild_lines "$dir" sha256sums)
+  for (( i = 1; i < ${#sources[@]}; i++ )); do
+    [[ ${sources[i]} != *"$commit"* || ${sums[i]:-} == SKIP ]] ||
+      die "$file sources $commit as source[$i] too, whose checksum this does not update"
+  done
   [[ $(pkgbuild_var "$dir" _commit) == "$commit" ]] || die "$file did not take the pin $commit"
   pin_new_version=$(pkgbuild_var "$dir" version)
   version_newer "$pin_old_version" "$pin_new_version" ||
