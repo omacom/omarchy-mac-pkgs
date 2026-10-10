@@ -20,7 +20,9 @@ loader = importlib.machinery.SourceFileLoader('mic', str(root / 'bin/omarchy-aud
 spec = importlib.util.spec_from_loader(loader.name, loader)
 m = importlib.util.module_from_spec(spec); loader.exec_module(m)
 DSP = 'effect_output.j414-mic'
-VIRTUAL = 'module-null-sink', 'media.class=Audio/Source/Virtual sink_name=omarchy_asahi_mic channels=2 sink_properties=' + m.OWNER + '=existing'
+EXISTING = 'module-remap-source', 'source_name=omarchy_asahi_mic master=' + DSP + ' channels=2 source_properties=' + m.OWNER + '=existing'
+# The virtual source 0.1.2 mapped into, under the same name.
+VIRTUAL_MODULE = dict(index='39', name='module-null-sink', argument='media.class=Audio/Source/Virtual sink_name=omarchy_asahi_mic channels=2 sink_properties=' + m.OWNER + '=virtual')
 LEGACY_MODULE = dict(index='41', name='module-null-sink', argument='sink_name=omarchy_asahi_mic channels=2 sink_properties=device.description=AsahiMicrophone ' + m.OWNER + '=old')
 def obj(name, value=27525, mute=True):
     return dict(name=name, volume={'front-left': {'value': value}, 'front-right': {'value': value}}, mute=mute)
@@ -28,7 +30,7 @@ class Audio:
     def __init__(self, existing=False, default=DSP):
         self.calls = []; self.default = default; self.existing = existing
         self.mapping = obj(m.MAPPING)
-        self.module = dict(index='40', name=VIRTUAL[0], argument=VIRTUAL[1]) if existing else None
+        self.module = dict(index='40', name=EXISTING[0], argument=EXISTING[1]) if existing else None
         self.legacy = None
         self.linked = {}; self.missing = None; self.fail_link = None; self.fail_module = False
         self.fail_query = False; self.fail_graph = False; self.concurrent = False
@@ -37,6 +39,9 @@ class Audio:
         self.notices = []; self.feeds = {m.MAPPING}; self.routes = 0; self.route_choice = None
         self.stamp = None; self.restarts = 0; self.link_error = 'link rejected after partial creation'
         self.cards = [dict(name='alsa_card.platform-sound', active_profile='HiFi')]
+        # WirePlumber links the DSP's mono port to the remap source's left side
+        # this many graph queries after the module loads (None: never).
+        self.wireplumber_links = None; self.loaded_at = None; self.queries = 0
     def restart_session_manager(self, reason): self.restarts += 1; return 0
     def objects(self, kind):
         if self.fail_query: raise RuntimeError('live Pulse query failed')
@@ -50,15 +55,20 @@ class Audio:
         return [module for module in (self.module, LEGACY_MODULE if self.legacy else None) if module]
     def graph(self):
         if self.fail_graph: raise RuntimeError('live graph query failed')
+        self.queries += 1
+        if (self.existing and self.wireplumber_links is not None and self.loaded_at is not None
+                and self.queries - self.loaded_at >= self.wireplumber_links and not any(input_ == 21 for input_, _ in self.linked.values())):
+            self.next_id += 1; self.linked[self.next_id] = (21, None)
         nodes = [dict(id=1, type='PipeWire:Interface:Node', info={'props': {'node.name': DSP}})]
         ports = [(11, 1, 'capture_AUX0')]
         if self.existing:
             nodes.append(dict(id=2, type='PipeWire:Interface:Node', info={'props': {'node.name': m.MAPPING}}))
-            ports += [(21, 2, 'input_FL'), (22, 2, 'input_FR')]
+            nodes.append(dict(id=3, type='PipeWire:Interface:Node', info={'props': {'node.name': m.CAPTURE}}))
+            ports += [(21, 3, 'input_FL'), (22, 3, 'input_FR'), (23, 2, 'capture_FL'), (24, 2, 'capture_FR')]
         for id_, node, name in ports:
             if name != self.missing: nodes.append(dict(id=id_, type='PipeWire:Interface:Port', info={'props': {'node.id': node, 'port.name': name}}))
         for id_, (input_, owner) in self.linked.items():
-            nodes.append(dict(id=id_, type='PipeWire:Interface:Link', info={'output-port-id': 11, 'input-port-id': input_, 'state': 'paused', 'props': {m.OWNER: owner}}))
+            nodes.append(dict(id=id_, type='PipeWire:Interface:Link', info={'output-port-id': 11, 'input-port-id': input_, 'state': 'paused', 'props': {m.OWNER: owner} if owner else {}}))
         if self.concurrent and len(self.linked) == 2: self.default = 'usb-mic'
         return nodes
     def pause(self): pass
@@ -75,7 +85,10 @@ class Audio:
         self.calls.append(args)
         if args[0] == 'pw-link':
             if args[1] == '-d': self.linked.pop(int(args[2])); return ''
-            input_ = int(args[-1]); self.next_id += 1
+            input_ = int(args[-1])
+            if any(other == input_ for other, _ in self.linked.values()):
+                raise RuntimeError('pw-link -L: failed to link ports: File exists')
+            self.next_id += 1
             self.linked[self.next_id] = (input_, json.loads(args[4])[m.OWNER])
             if self.fail_link == input_: raise RuntimeError(self.link_error)
             return ''
@@ -84,9 +97,9 @@ class Audio:
         if command == 'get-default-source': return self.default
         if command == 'load-module':
             if self.fail_module: raise RuntimeError('module failed')
-            self.module = dict(index='42', name='module-null-sink', argument=' '.join(args[3:]))
-            assert args[2] == 'module-null-sink' and 'media.class=Audio/Source/Virtual' in args[3:], args
-            self.existing = True
+            self.module = dict(index='42', name='module-remap-source', argument=' '.join(args[3:]))
+            assert args[2] == 'module-remap-source' and 'master=' + DSP in args[3:] and 'channel_map=front-left,front-right' in args[3:], args
+            self.existing = True; self.loaded_at = self.queries
             if self.auto_input: self.default = m.MAPPING
             self.mapping = obj(m.MAPPING, 65536, False)
             return '42'
@@ -296,11 +309,49 @@ with tempfile.TemporaryDirectory() as temporary:
     except RuntimeError as error: assert 'does not own' in str(error), error
     else: raise AssertionError('a foreign sink must not be replaced')
     assert not any(call[1] == 'unload-module' for call in audio.calls if call[0] == 'pactl')
-    audio = Audio(True); audio.module = dict(index='40', name='module-null-sink', argument='sink_name=omarchy_asahi_mic media.class=Audio/Source/Virtual')
+    for foreign in (dict(index='40', name='module-remap-source', argument='source_name=omarchy_asahi_mic master=' + DSP),
+                    dict(index='40', name='module-null-sink', argument='sink_name=omarchy_asahi_mic media.class=Audio/Source/Virtual')):
+        audio = Audio(True); audio.module = foreign
+        try: m.reconcile(audio, state())
+        except RuntimeError as error: assert 'does not own' in str(error), error
+        else: raise AssertionError('a foreign source must not be mapped into or replaced')
+        assert not audio.linked and not any(call[1] == 'unload-module' for call in audio.calls if call[0] == 'pactl')
+    # 0.1.2 mapped into a virtual source of the same name, which the shell
+    # gives no level meter. On upgrade it is replaced by the typed source,
+    # keeping its selection and its gain.
+    for selected, expected in ((m.MAPPING, m.MAPPING), (DSP, m.MAPPING), ('usb-mic', 'usb-mic')):
+        audio = Audio(True, selected); audio.module = dict(VIRTUAL_MODULE)
+        audio.linked = {90: (21, 'virtual'), 91: (22, 'virtual')}
+        audio.mapping = obj(m.MAPPING, 52429, False)
+        saved = state(); saved.write_text(json.dumps({'source': {'volume': [65536, 65536], 'mute': False}}))
+        m.reconcile(audio, saved)
+        assert ('pactl', 'unload-module', '39') in audio.calls, audio.calls
+        assert audio.module['name'] == 'module-remap-source' and m.owned(audio.module)
+        assert audio.default == expected, (selected, audio.default)
+        assert m.gain(audio.mapping) == {'volume': [52429, 52429], 'mute': False}, 'the 0.1.2 gain carries over'
+        assert json.loads(saved.read_text()) == {'source': {'volume': [52429, 52429], 'mute': False}}
+        assert sum(1 for call in audio.calls if call[:2] == ('pactl', 'load-module')) == 1, 'one MacBook Microphone'
+    # With the array missing the 0.1.2 source stays until it returns.
+    audio = Audio(True, m.MAPPING); audio.module = dict(VIRTUAL_MODULE); audio.no_dsp = True
     try: m.reconcile(audio, state())
-    except RuntimeError as error: assert 'does not own' in str(error), error
-    else: raise AssertionError('a foreign source must not be mapped into')
-    assert not audio.linked
+    except m.Deferred: pass
+    assert audio.module == VIRTUAL_MODULE and audio.default == m.MAPPING
+    # WirePlumber links the mono port to the left side (the remap source's
+    # target): the mapper waits for that link, links only the right side, and
+    # takes WirePlumber's link made at the same moment as its own.
+    for delay in (0, 3):
+        audio = Audio(); audio.wireplumber_links = delay
+        m.reconcile(audio, state())
+        assert [call[-1] for call in audio.calls if call[0] == 'pw-link'] == ['22'], audio.calls
+        assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING
+    class Racing(Audio):
+        def run(self, *args):
+            if args[0] == 'pw-link' and args[-1] == '21' and not any(input_ == 21 for input_, _ in self.linked.values()):
+                self.next_id += 1; self.linked[self.next_id] = (21, None)
+            return super().run(*args)
+    audio = Racing()
+    m.reconcile(audio, state())
+    assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING, 'a link WirePlumber made first is no failure'
     legacy_state = state(); legacy_state.write_text(json.dumps({'sink': {'volume': [65536, 65536], 'mute': False}, 'monitor': {'volume': [32768, 32768], 'mute': False}}))
     audio = Audio(); m.reconcile(audio, legacy_state)
     assert m.gain(audio.mapping) == {'volume': [32768, 32768], 'mute': False}, 'legacy saved gain carries over'
@@ -609,10 +660,10 @@ with tempfile.TemporaryDirectory() as temporary:
             audio = Audio()
             m.reconcile(audio, Path(temporary) / 'state.json')
         load = next(call for call in audio.calls if call[:2] == ('pactl', 'load-module'))
-        properties = next(arg for arg in load if arg.startswith('sink_properties='))
-        assert properties.startswith("sink_properties='device.description=\"" + name + "\" ") and properties.endswith("'"), properties
-        assert 'AsahiMicrophone' not in properties and m.OWNER + '=' in properties
-        assert m.owned(audio.module, 'Audio/Source/Virtual'), 'the quoted name must not hide the mapping from its owner'
+        properties = next(arg for arg in load if arg.startswith('source_properties='))
+        assert properties.startswith("source_properties='device.description=\"" + name + "\" ") and properties.endswith("'"), properties
+        assert 'AsahiMicrophone' not in properties and m.OWNER + '=' in properties and 'media.class' not in properties
+        assert m.owned(audio.module), 'the quoted name must not hide the mapping from its owner'
 # WirePlumber's stale hidden ids (#1028, seen after a re-login) make pw-link
 # fail with EPERM: the mapper restarts WirePlumber so the next event relinks,
 # at most once per interval however often the links keep failing. Other link
@@ -692,4 +743,5 @@ unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit
 print('ok - transactional Asahi mapping preserves choices/gain, rolls back failures and recovers lifecycle loss')
+print('ok - the mapping is a typed stereo remap source that replaces the 0.1.2 virtual source on upgrade')
 PY

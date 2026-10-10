@@ -2,6 +2,7 @@
   "hidden": [
     "effect_output\\.(j[0-9]+|mini|studio)-convolver",
     "audio_effect\\.j[0-9]+-mic",
+    "input\\.omarchy_asahi_mic",
     "alsa_output\\.platform-sound\\.RawSpeakers",
     "alsa_input\\.platform-sound\\.RawMics"
   ],
