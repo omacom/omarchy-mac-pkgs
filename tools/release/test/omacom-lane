@@ -465,6 +465,26 @@ run "$release" --package omarchy-mac "$mac4" && fail "a pin to a version that is
 has "cannot pin: omarchy-mac: '1.2-rc1'" "an unusable version on the real path"
 echo "ok - a version file that cannot be a pkgver blocks the pin"
 
+# A recipe that already pins the commit but not what it gives.
+recipe omarchy-mac 1.0-9 "$mac3" '["edge"]'
+git -C "$tmp/pkgs-work" commit --quiet -am "omarchy-mac pinned with a stale pkgver"
+git -C "$tmp/pkgs-work" push --quiet origin master
+run "$release" --dry-run --package omarchy-mac "$mac3" || fail "the dry run of a stale pinned recipe failed"
+has "pin:             blocked: omarchy-mac: pkgbuilds/omarchy-mac pins ${mac3:0:12} with pkgver=1.0, where the commit gives 1.1" "a stale pkgver at the pinned commit"
+recipe omarchy-mac 1.1-1 "$mac3" '["edge"]'
+sed -i.bak "s/^sha256sums=.*/sha256sums=('$(gsum "$mac2")')/" "$tmp/pkgs-work/pkgbuilds/omarchy-mac/PKGBUILD"
+rm -f "$tmp/pkgs-work/pkgbuilds/omarchy-mac/PKGBUILD.bak"
+git -C "$tmp/pkgs-work" commit --quiet -am "omarchy-mac pinned with a stale checksum"
+git -C "$tmp/pkgs-work" push --quiet origin master
+run "$release" --dry-run --package omarchy-mac "$mac3" || fail "the dry run of a stale pinned checksum failed"
+has "pin:             blocked: omarchy-mac: pkgbuilds/omarchy-mac pins ${mac3:0:12} with sha256sums[0]=$(gsum "$mac2"), where makepkg records $(gsum "$mac3")" "a stale checksum at the pinned commit"
+recipe omarchy-mac 1.1-1 "$mac3" '["edge"]'
+git -C "$tmp/pkgs-work" commit --quiet -am "omarchy-mac pinned as the commit gives it"
+git -C "$tmp/pkgs-work" push --quiet origin master
+run "$release" --dry-run --package omarchy-mac "$mac3" || fail "the dry run of a correct pinned recipe failed"
+has "pin:             nothing to move" "a recipe pinned as its commit gives it"
+echo "ok - a recipe that already pins the commit with a stale pkgver or checksum blocks the pin"
+
 # ── mac-aurora-pin on omacom ────────────────────────────────────────────────
 run "$pin" pin --dry-run --archive-sha256 "$(printf 'a%.0s' {1..64})" && fail "a pin to the pinned head was accepted"
 has "nothing changed:" "an unchanged pin"
