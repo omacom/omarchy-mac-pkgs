@@ -91,6 +91,9 @@ expect 'PMP: apple_pmp bound to 28e3c0000.pmp.' 'reports a bound PMP'
 expect 'Battery draw now: 0.00 W; a charger powering the Mac hides its draw, so unplug it to measure.' 'says the charger hides the draw'
 expect 'macsmc-ac (Mains power): connected' 'reports a connected adapter'
 expect 'Last suspend: No suspend recorded yet.' 'reports no sleep yet'
+put "$supply/macsmc-ac/online" 0
+report=$("$stage/usr/bin/omarchy-power-report" --sample 0.1 2>/dev/null)
+grep -Fxq '    Battery draw now: 0.00 W' <<<"$report" || fail 'a full battery with no charger shows its plain draw' "$report"
 pass 'the report says when the charger hides the draw and when PMP is bound'
 
 python3 - "$stage/usr/bin/omarchy-power-report" "$proc" <<'PY'
@@ -117,7 +120,9 @@ def busy(seconds):
     stat('77', 'hypr land', 10 + int(0.1 * ticks * seconds))
     (proc / '99').mkdir()
     stat('99', 'newcomer', 500)
-    (proc / 'stat').write_text('cpu  %d 0 100 %d 0 0 0 0 0 0\n' % (100 + int(0.6 * ticks * seconds), 800 + int(5.4 * ticks * seconds)))
+    # A VM's guest time is already inside user time and must not count twice.
+    user = 100 + int(0.6 * ticks * seconds)
+    (proc / 'stat').write_text('cpu  %d 0 100 %d 0 0 0 0 %d 0\n' % (user, 800 + int(5.4 * ticks * seconds), user))
 
 
 lines = r.activity_section(10, sleep=busy)

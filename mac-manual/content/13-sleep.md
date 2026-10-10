@@ -28,6 +28,8 @@ After a counted sleep of half an hour or more, the first unlock shows what it us
 
 > Suspend used 14.8 Wh over 7.5 h. Overnight suspend can substantially drain this Mac.
 
+Sleeps since the last unlock add up, so a quick look at the lock screen in the morning does not hide the night. To stop the notice, run `systemctl --user mask omarchy-sleep-cost.service`. To stop the recording as well, add `NoExtract = usr/lib/systemd/system-sleep/omarchy-mac-sleep-cost` to `/etc/pacman.conf`, delete that file, and the next updates leave it out.
+
 ## The power report
 
 `omarchy power report` shows, in one place:

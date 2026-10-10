@@ -46,6 +46,8 @@ def megahertz(text):
 
 def battery_section():
     lines, sources = [], []
+    charger = any(read(supply / 'type') in ('Mains', 'USB') and read(supply / 'online') == '1'
+                  for supply in children(POWER_SUPPLY))
     for supply in children(POWER_SUPPLY):
         kind = read(supply / 'type')
         if kind == 'Battery' and read(supply / 'present') != '0':
@@ -61,10 +63,10 @@ def battery_section():
                 lines.append('  Battery draw now: unknown')
             elif status == 'Charging':
                 lines.append('  Charging at %.2f W' % (abs(power) / 1e6))
-            elif status == 'Discharging':
-                lines.append('  Battery draw now: %.2f W' % (abs(power) / 1e6))
-            else:
+            elif charger:
                 lines.append('  Battery draw now: %.2f W; a charger powering the Mac hides its draw, so unplug it to measure.' % (abs(power) / 1e6))
+            else:
+                lines.append('  Battery draw now: %.2f W' % (abs(power) / 1e6))
         elif kind in ('Mains', 'USB'):
             state = {'1': 'connected', '0': 'not connected'}.get(read(supply / 'online'), 'unknown')
             sources.append('%s (%s power): %s' % (supply.name, kind, state))
@@ -99,7 +101,8 @@ def cpu_totals():
     # (busy, all) ticks across every CPU from /proc/stat.
     for line in (read(PROC / 'stat') or '').splitlines():
         if line.startswith('cpu '):
-            values = [int(value) for value in line.split()[1:]]
+            # guest and guest_nice are already counted in user and nice.
+            values = [int(value) for value in line.split()[1:9]]
             idle = values[3] + (values[4] if len(values) > 4 else 0)
             return sum(values) - idle, sum(values)
     return None

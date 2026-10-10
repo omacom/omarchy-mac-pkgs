@@ -63,12 +63,21 @@ def battery(energy, status='Discharging', ac='0', usb='0'):
 class Fake(s.System):
     def __init__(self):
         self.real, self.boot, self.boot_identity = 1791500000.0, 1000.0, 'boot-a'
-        self.locks = []; self.notices = []; self.waited = 0.0
+        self.locks = []; self.notices = []; self.sends = []; self.waited = 0.0
     def clocks(self): return self.real, self.boot
     def boot_id(self): return self.boot_identity
     def sleep(self, seconds): self.waited += seconds
-    def locked(self): return self.locks.pop(0) if self.locks else False
-    def notify(self, headline, body): self.notices.append((headline, body))
+    def lock_state(self): return self.locks.pop(0) if self.locks else 'unlocked'
+    def notify(self, headline, body):
+        delivered = self.sends.pop(0) if self.sends else True
+        self.notices.append((headline, body, delivered))
+        return delivered
+
+
+def announced(fake):
+    fake.notices = []
+    s.after_resume(fake, set())
+    return fake.notices[0][0] if fake.notices else None
 
 
 def suspend(fake, hours, before, after, real_hours=None, **states):
@@ -87,7 +96,7 @@ if s.describe(s.last_record()) != 'No suspend recorded yet.':
     fail('reports that no suspend is recorded yet')
 
 record = suspend(fake, 8, 50000000, 34000000)
-if record['verdict'] != 'valid' or s.notice(record, fake) != 'Suspend used 16.0 Wh over 8.0 h.':
+if record['verdict'] != 'valid' or announced(fake) != 'Suspend used 16.0 Wh over 8.0 h.':
     fail('a discharging sleep counts', str(record))
 if s.describe(record) != '2026-10-08 22:54 to 2026-10-09 06:54: used 16.0 Wh over 8.0 h (2.00 W average), 27% of a full battery.':
     fail('the report line gives the energy, time and average draw: ' + s.describe(record))
@@ -105,7 +114,7 @@ cases = [
 ]
 for verdict, states, before, after in cases:
     record = suspend(fake, 8, before, after, **states)
-    if record['verdict'] != verdict or s.notice(record, fake) is not None:
+    if record['verdict'] != verdict or announced(fake) is not None:
         fail('%s is rejected and not announced: %s' % (verdict, record))
     if 'not counted, because' not in s.describe(record):
         fail('the report says why %s was not counted' % verdict)
@@ -136,23 +145,24 @@ if s.last_record()['verdict'] != 'missing-reading':
 print('ok - a resume without its own pre-sleep reading is rejected')
 
 record = suspend(fake, 0.25, 50000000, 49500000)
-if record['verdict'] != 'valid' or s.notice(record, fake) is not None:
+if record['verdict'] != 'valid' or announced(fake) is not None:
     fail('a short sleep is recorded but not announced')
 record = suspend(fake, 8, 50000000, 34000000)
 fake.boot += s.RECENT + 1
-if s.notice(record, fake) is not None:
+if announced(fake) is not None:
     fail('a record older than this resume is not announced')
 fake.boot_identity = 'boot-c'
-if s.notice(record, fake) is not None:
+if announced(fake) is not None:
     fail('a record from another boot is not announced')
 print('ok - short sleeps and stale records are not announced')
 
+BODY = 'Overnight suspend can substantially drain this Mac.'
 fake = Fake(); fake.boot_identity = 'boot-d'
 record = suspend(fake, 8, 50000000, 34000000)
-fake.locks = [True, True, True]
+fake.locks = ['locked', 'locked', 'locked']
 shown = set()
 s.after_resume(fake, shown)
-if fake.notices != [('Suspend used 16.0 Wh over 8.0 h.', 'Overnight suspend can substantially drain this Mac.')] or fake.locks:
+if fake.notices != [('Suspend used 16.0 Wh over 8.0 h.', BODY, True)] or fake.locks:
     fail('the notice waits for the unlock: %s' % fake.notices)
 s.after_resume(fake, shown)
 if len(fake.notices) != 1:
@@ -160,21 +170,40 @@ if len(fake.notices) != 1:
 
 
 class Sleeps(Fake):
-    def locked(self):
+    # A short sleep starts and ends while the overnight one waits for the unlock.
+    def lock_state(self):
         if self.locks:
             self.locks.pop(0)
-            suspend(self, 1, 30000000, 29000000)
-            return True
-        return False
+            suspend(self, 0.5, 34000000, 33000000)
+            return 'locked'
+        return 'unlocked'
 
 
 fake = Sleeps(); fake.boot_identity = 'boot-e'
 suspend(fake, 8, 50000000, 34000000)
-fake.locks = [True]
+fake.locks = ['locked']
+shown = set()
+s.after_resume(fake, shown)
+if [notice[0] for notice in fake.notices] != ['Suspend used 17.0 Wh over 8.5 h.']:
+    fail('a sleep before the unlock adds to the night instead of hiding it: %s' % fake.notices)
+s.after_resume(fake, shown)
+if len(fake.notices) != 1:
+    fail('the later resume does not announce the short sleep again')
+print('ok - the notice appears once, after the unlock, for every sleep since the last one')
+
+fake = Fake(); fake.boot_identity = 'boot-f'
+suspend(fake, 8, 50000000, 34000000)
+fake.locks = ['unknown'] * 3 + ['locked'] + ['unknown'] * 100
 s.after_resume(fake, set())
-if fake.notices:
-    fail('a sleep superseded while locked is left to its own resume')
-print('ok - the notice appears once, after the unlock, for the newest sleep only')
+if len(fake.notices) != 1 or len(fake.locks) != 100 - int(s.UNKNOWN_LIMIT / 5) - 1:
+    fail('an unreadable lock state holds the notice back for a while: %d left' % len(fake.locks))
+fake = Fake(); fake.boot_identity = 'boot-g'
+suspend(fake, 8, 50000000, 34000000)
+fake.sends = [False, False, True]
+s.after_resume(fake, set())
+if [notice[2] for notice in fake.notices] != [False, False, True]:
+    fail('a failed send is retried: %s' % fake.notices)
+print('ok - an unknown lock state waits, then shows; a failed send is retried')
 
 fake = Fake()
 for _ in range(s.KEEP + 5):

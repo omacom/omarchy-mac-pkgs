@@ -22,6 +22,9 @@ CLOCK_TOLERANCE = (60.0, 0.01)
 NOTICE_MINIMUM = 1800.0
 # A resume whose record is older than this wrote none of its own.
 RECENT = 600.0
+# How long a lock state nobody can read holds the notice back.
+UNKNOWN_LIMIT = 120.0
+BODY = 'Overnight suspend can substantially drain this Mac.'
 SLEEP_EVENTS = ('dbus-monitor', '--system',
                 "type='signal',sender='org.freedesktop.login1',"
                 "interface='org.freedesktop.login1.Manager',member='PrepareForSleep'")
@@ -86,21 +89,22 @@ class System:
     def sleep(self, seconds):
         time.sleep(seconds)
 
-    def locked(self):
-        # omarchy-hyprland-session-locked: 0 locked, 1 unlocked, 2 unknown,
-        # which the runtime's callers treat as unlocked.
+    def lock_state(self):
+        # omarchy-hyprland-session-locked: 0 locked, 1 unlocked, 2 unknown.
         try:
-            return subprocess.run(['omarchy-hyprland-session-locked'], stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+            code = subprocess.run(['omarchy-hyprland-session-locked'], stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode
         except (OSError, subprocess.SubprocessError):
-            return False
+            code = 2
+        return {0: 'locked', 1: 'unlocked'}.get(code, 'unknown')
 
     def notify(self, headline, body):
         try:
-            subprocess.run(['omarchy-notification-send', '-g', '\U000f0083', '-u', 'normal', headline, body],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            return subprocess.run(['omarchy-notification-send', '-g', '\U000f0083', '-u', 'normal', headline, body],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=10).returncode == 0
         except (OSError, subprocess.SubprocessError):
-            pass
+            return False
 
     def sleep_events(self):
         # True as logind starts a sleep, False once the machine has resumed.
@@ -167,7 +171,6 @@ def record_pre(system, action):
 
 def record_post(system, action):
     record = parse(read(PENDING) or '')
-    PENDING.unlink(missing_ok=True)
     record.update(boot_id=system.boot_id(), action=record.get('action', action), **snapshot(system, 'end'))
     record['verdict'] = judge(record)
     lines = (read(LOG) or '').splitlines()[-(KEEP - 1):]
@@ -177,11 +180,16 @@ def record_post(system, action):
     temporary.write_text('\n'.join(lines) + '\n')
     temporary.chmod(0o644)
     temporary.replace(LOG)
+    PENDING.unlink(missing_ok=True)
+
+
+def records():
+    return [parse(line) for line in (read(LOG) or '').splitlines()]
 
 
 def last_record():
-    lines = (read(LOG) or '').splitlines()
-    return parse(lines[-1]) if lines else None
+    found = records()
+    return found[-1] if found else None
 
 
 def used(record):
@@ -206,13 +214,18 @@ def describe(record):
     return text + '.'
 
 
-def notice(record, system):
-    # The text to show for this resume's record, or None.
-    if not record or record.get('verdict') != 'valid' or record.get('boot_id') != system.boot_id():
-        return None
-    if system.clocks()[1] - float(record['end_boot']) > RECENT:
-        return None
-    energy, hours = used(record)
+def unannounced(system, since, shown):
+    # Counted sleeps of this boot that ended after `since` on the boot clock.
+    return [record for record in records()
+            if record.get('verdict') == 'valid' and record.get('boot_id') == system.boot_id()
+            and float(record['end_boot']) >= since and record['end_real'] not in shown]
+
+
+def notice(found):
+    # Every sleep since the last unlock counts, so a short one before the
+    # unlock cannot hide the night before it.
+    energy = sum(used(record)[0] for record in found)
+    hours = sum(used(record)[1] for record in found)
     if hours * 3600 < NOTICE_MINIMUM:
         return None
     return 'Suspend used %.1f Wh over %.1f h.' % (energy, hours)
@@ -220,17 +233,26 @@ def notice(record, system):
 
 def after_resume(system, shown):
     # logind reports the resume once systemd-sleep, and so the record, is done.
-    record = last_record()
-    headline = notice(record, system)
-    if headline is None or record.get('end_real') in shown:
+    since = system.clocks()[1] - RECENT
+    if not unannounced(system, since, shown):
         return
-    while system.locked():
+    unknown = 0.0
+    while True:
+        state = system.lock_state()
+        if state == 'unlocked' or (state == 'unknown' and unknown >= UNKNOWN_LIMIT):
+            break
+        unknown = unknown + 5 if state == 'unknown' else 0.0
         system.sleep(5)
-    if last_record() != record:
+    found = unannounced(system, since, shown)
+    shown.update(record['end_real'] for record in found)
+    headline = notice(found)
+    if headline is None:
         return
-    shown.add(record['end_real'])
     system.sleep(2)
-    system.notify(headline, 'Overnight suspend can substantially drain this Mac.')
+    for _ in range(3):
+        if system.notify(headline, BODY):
+            return
+        system.sleep(10)
 
 
 def watch(system):
@@ -242,8 +264,8 @@ def watch(system):
 
 def apple_silicon():
     try:
-        return subprocess.run(['omarchy-hw-apple-silicon'], stdin=subprocess.DEVNULL).returncode == 0
-    except OSError:
+        return subprocess.run(['omarchy-hw-apple-silicon'], stdin=subprocess.DEVNULL, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -254,7 +276,11 @@ def main(arguments, system=None):
         system = System()
     command = arguments[0] if arguments else ''
     if command in ('pre', 'post') and len(arguments) == 2:
-        (record_pre if command == 'pre' else record_post)(system, arguments[1])
+        # Never hold up or fail a sleep over a reading.
+        try:
+            (record_pre if command == 'pre' else record_post)(system, arguments[1])
+        except Exception as error:
+            print('sleep-cost %s: %s' % (command, error), file=sys.stderr)
     elif command == 'last' and len(arguments) == 1:
         print(describe(last_record()))
     elif command == 'watch' and len(arguments) == 1:
