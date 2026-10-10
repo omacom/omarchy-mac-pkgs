@@ -94,6 +94,11 @@ expect 'Last suspend: No suspend recorded yet.' 'reports no sleep yet'
 put "$supply/macsmc-ac/online" 0
 report=$("$stage/usr/bin/omarchy-power-report" --sample 0.1 2>/dev/null)
 grep -Fxq '    Battery draw now: 0.00 W' <<<"$report" || fail 'a full battery with no charger shows its plain draw' "$report"
+put "$supply/macsmc-battery/status" Discharging
+put "$supply/macsmc-battery/power_now" -3000000
+put "$supply/tps6598x-source-psy-0-0038/online" 1
+report=$("$stage/usr/bin/omarchy-power-report" --sample 0.1 2>/dev/null)
+grep -Fxq '    Battery draw now: 3.00 W' <<<"$report" || fail 'a battery discharging beside a weak source shows its draw' "$report"
 pass 'the report says when the charger hides the draw and when PMP is bound'
 
 python3 - "$stage/usr/bin/omarchy-power-report" "$proc" <<'PY'

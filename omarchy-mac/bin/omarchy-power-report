@@ -63,7 +63,7 @@ def battery_section():
                 lines.append('  Battery draw now: unknown')
             elif status == 'Charging':
                 lines.append('  Charging at %.2f W' % (abs(power) / 1e6))
-            elif charger:
+            elif charger and status != 'Discharging':
                 lines.append('  Battery draw now: %.2f W; a charger powering the Mac hides its draw, so unplug it to measure.' % (abs(power) / 1e6))
             else:
                 lines.append('  Battery draw now: %.2f W' % (abs(power) / 1e6))

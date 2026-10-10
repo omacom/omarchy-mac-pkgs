@@ -203,6 +203,15 @@ fake.sends = [False, False, True]
 s.after_resume(fake, set())
 if [notice[2] for notice in fake.notices] != [False, False, True]:
     fail('a failed send is retried: %s' % fake.notices)
+fake.notices = []; fake.sends = [False, False, False]
+fake.real += 60; fake.boot += 60
+suspend(fake, 1, 34000000, 33000000)
+shown = set()
+s.after_resume(fake, shown)
+fake.boot += 60
+s.after_resume(fake, shown)
+if [notice[0] for notice in fake.notices] != ['Suspend used 1.0 Wh over 1.0 h.'] * 4:
+    fail('an undelivered notice is tried again at the next resume: %s' % fake.notices)
 print('ok - an unknown lock state waits, then shows; a failed send is retried')
 
 fake = Fake()

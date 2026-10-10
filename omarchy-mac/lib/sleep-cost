@@ -244,15 +244,17 @@ def after_resume(system, shown):
         unknown = unknown + 5 if state == 'unknown' else 0.0
         system.sleep(5)
     found = unannounced(system, since, shown)
-    shown.update(record['end_real'] for record in found)
     headline = notice(found)
-    if headline is None:
-        return
-    system.sleep(2)
-    for _ in range(3):
-        if system.notify(headline, BODY):
-            return
-        system.sleep(10)
+    if headline is not None:
+        system.sleep(2)
+        for attempt in range(3):
+            if system.notify(headline, BODY):
+                break
+            if attempt == 2:
+                # Undelivered: the next resume tries these sleeps again.
+                return
+            system.sleep(10)
+    shown.update(record['end_real'] for record in found)
 
 
 def watch(system):
