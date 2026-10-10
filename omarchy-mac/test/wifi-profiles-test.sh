@@ -13,7 +13,7 @@ state="$work/iwd"
 mkdir -p "$work/bin" "$work/nm"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
-echo apple-silicon
+echo aarch64-apple
 STUB
 cat >"$work/bin/NetworkManager" <<'STUB'
 #!/bin/bash

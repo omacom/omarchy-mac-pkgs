@@ -8,7 +8,7 @@ root=${root%/}
 [[ -z $root || $root == /* ]] || exit 2
 # A detector failure stops setup rather than reading as another platform.
 platform=$(omarchy-hw-platform)
-[[ $platform == "apple-silicon" ]] || exit 0
+[[ $platform == @(aarch64-apple|apple-silicon) ]] || exit 0
 
 # The Intel Mac Broadcom quirk breaks Apple Silicon Wi-Fi, but a runtime without
 # its Apple guard (migration 1786391100) appended it here. Only its exact line

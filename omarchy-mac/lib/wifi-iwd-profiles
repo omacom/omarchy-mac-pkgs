@@ -17,7 +17,7 @@ export LC_ALL=C
 
 dir=${OMARCHY_MAC_IWD_STATE:-/var/lib/iwd}
 
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+[[ $(omarchy-hw-platform) == @(aarch64-apple|apple-silicon) ]] || exit 0
 NetworkManager --print-config 2>/dev/null | grep -x 'wifi.backend=iwd' >/dev/null || exit 0
 
 # iwd reads the file like a GKeyFile: a backslash and a leading space escape.

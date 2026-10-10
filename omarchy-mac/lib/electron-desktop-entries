@@ -5,7 +5,7 @@
 # wrapper once that is in place. omarchy-mac-setup-user runs this as the user;
 # a wrapper that is not ready yet (exit 3 or 4 from --check) is skipped.
 set -euo pipefail
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+[[ $(omarchy-hw-platform) == @(aarch64-apple|apple-silicon) ]] || exit 0
 bind_dir=${OMARCHY_ELECTRON_GL_BIND_DIR:-/usr/local/bin}
 applications=$HOME/.local/share/applications
 for app in chromium 1password cursor; do

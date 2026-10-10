@@ -34,7 +34,7 @@ refuse() {
 }
 
 require_apple_silicon() {
-  [[ $(omarchy-hw-platform 2>/dev/null) == apple-silicon ]] ||
+  [[ $(omarchy-hw-platform 2>/dev/null) == @(aarch64-apple|apple-silicon) ]] ||
     refuse "This omarchy-mac-boot entrypoint runs only on Apple Silicon Macs."
 }
 

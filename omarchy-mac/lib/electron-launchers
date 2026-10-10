@@ -7,7 +7,7 @@
 # no render node exists. omarchy-mac-setup-system runs this as root; a
 # launcher an administrator owns (exit 3) is kept.
 set -euo pipefail
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+[[ $(omarchy-hw-platform) == @(aarch64-apple|apple-silicon) ]] || exit 0
 for app in chromium 1password cursor; do
   case $app in
     chromium) real=${OMARCHY_CHROMIUM_BIN:-/usr/bin/chromium} ;;

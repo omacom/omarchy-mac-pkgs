@@ -33,7 +33,7 @@ case "$limit" in
   *) usage ;;
 esac
 
-if ! platform=$(omarchy-hw-platform) || [[ $platform != "apple-silicon" ]]; then
+if ! platform=$(omarchy-hw-platform) || [[ $platform != @(aarch64-apple|apple-silicon) ]]; then
   echo "The battery charge limit is only available on Apple Silicon Macs." >&2
   exit 1
 fi

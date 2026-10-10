@@ -9,7 +9,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
-echo "${PLATFORM:-apple-silicon}"
+echo "${PLATFORM:-aarch64-apple}"
 STUB
 cat >"$work/bin/lspci" <<'STUB'
 #!/bin/bash

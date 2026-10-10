@@ -33,8 +33,8 @@ SH
 # platform it runs on rather than inherit the machine running the suite.
 cat >"$stub_bin/omarchy-hw-platform" <<'SH'
 #!/bin/bash
-[[ ${PLATFORM:-generic} != "error" ]] || { echo "Error: contradictory platform identity" >&2; exit 1; }
-echo "${PLATFORM:-generic}"
+[[ ${PLATFORM:-x86} != "error" ]] || { echo "Error: contradictory platform identity" >&2; exit 1; }
+echo "${PLATFORM:-x86}"
 SH
 
 cat >"$stub_bin/systemctl" <<'SH'
@@ -156,7 +156,7 @@ chmod +x "$stub_bin"/*
 sed "s|/usr/lib/omarchy-mac/wifi-supported|$ROOT/lib/wifi-supported|" "$fix" >"$test_tmp/fix"
 chmod +x "$test_tmp/fix"
 fix="$test_tmp/fix"
-export PLATFORM=apple-silicon WIFI_ID=4433
+export PLATFORM=aarch64-apple WIFI_ID=4433
 
 # The recovery command itself: wedge detection and the decision to reload.
 run_fix() {
@@ -263,7 +263,7 @@ pass "a reload that never reconnects fails loudly"
 
 out=$(LOAD_FAILS=1 run_fix) && fail "failed driver reload must fail" "$out"
 grep -q 'failed to reload' <<<"$out" || fail "failed reload is diagnosed" "$out"
-for spec in 'generic 4433' 'generic-aarch64 4434' 'qualcomm 4425' 'error 4434' 'apple-silicon 4488' 'apple-silicon 0000'; do
+for spec in 'x86 4433' 'aarch64 4434' 'aarch64-qualcomm 4425' 'error 4434' 'apple-silicon 4488' 'apple-silicon 0000'; do
   read -r PLATFORM WIFI_ID <<<"$spec"
   REJECT_LINES=2 run_fix >/dev/null 2>&1
   [[ ! -s $calls ]] || fail "unsupported hardware must not reload" "$spec"

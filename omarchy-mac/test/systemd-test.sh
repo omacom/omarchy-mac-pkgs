@@ -4,7 +4,7 @@ source "$(dirname "$0")/base-test.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
-printf '#!/bin/bash\necho apple-silicon\n' >"$work/bin/omarchy-hw-platform"
+printf '#!/bin/bash\necho aarch64-apple\n' >"$work/bin/omarchy-hw-platform"
 printf '#!/bin/bash\necho "14e4:${WIFI_ID:-4433}"\n' >"$work/bin/lspci"
 chmod +x "$work/bin/"*
 

@@ -186,7 +186,7 @@ on_a_mac() {
   local platform status
   if command -v omarchy-hw-platform >/dev/null 2>&1; then
     if platform=$(omarchy-hw-platform); then
-      [[ $platform == apple-silicon ]]
+      [[ $platform == @(aarch64-apple|apple-silicon) ]]
       return
     fi
   else
