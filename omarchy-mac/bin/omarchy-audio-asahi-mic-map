@@ -20,11 +20,21 @@ import tempfile
 import time
 import uuid
 
-# The mapping is a virtual source. It used to be a null sink whose monitor was
-# the default input, but pipewire-pulse clients that name no device (most apps)
-# were then linked to the default sink's monitor instead: silence (#99).
+# The mapping is a typed stereo source: pipewire-pulse's remap source, a
+# loopback whose capture stream records asahi-audio's mono DSP microphone and
+# whose other side is an Audio/Source with front-left and front-right, like a
+# stock microphone. The desktop shell drives such a source's volume, mute and
+# level meter as it does any other; it gives an Audio/Source/Virtual (the
+# null sink 0.1.2 mapped into) no level meter, and its peak monitor drops
+# every buffer of the mono DSP source. WirePlumber links the mono port to one
+# side only, so the mapper links it to the other.
+# Earlier still the mapping was a null sink whose monitor was the default
+# input, but pipewire-pulse clients that name no device (most apps) were then
+# linked to the default sink's monitor instead: silence (#99).
 MAPPING = 'omarchy_asahi_mic'
+CAPTURE = 'input.' + MAPPING
 LEGACY = MAPPING + '.monitor'
+VIRTUAL = 'media.class=Audio/Source/Virtual'
 OWNER = 'omarchy.asahi-mic.owner'
 ROUTE_CLIENT = 'omarchy-asahi-mic-route'
 DSP = re.compile(r'effect_output\.j[0-9]+-mic')
@@ -198,6 +208,13 @@ def links(graph, output, input_):
             and obj['info'].get('state') in ('active', 'paused')]
 
 
+def failed_links(graph, output, input_):
+    return [obj['id'] for obj in graph if obj.get('type', '').endswith(':Link')
+            and obj.get('info', {}).get('output-port-id') == output
+            and obj['info'].get('input-port-id') == input_
+            and obj['info'].get('state') == 'error']
+
+
 def gain(obj):
     values = [channel['value'] for channel in obj['volume'].values()]
     if len(values) != 2 or any(type(value) is not int or not 0 <= value < 2**32 - 1 for value in values) or type(obj['mute']) is not bool:
@@ -249,10 +266,14 @@ def restore_gain(audio, path):
     audio.run('pactl', 'set-source-mute', MAPPING, '1' if state['mute'] else '0')
 
 
-def owned(module, media_class=None):
+def owned(module, kind='module-remap-source'):
     argument = module.get('argument', '')
-    return (module.get('name') == 'module-null-sink' and 'sink_name=' + MAPPING + ' ' in argument + ' '
-            and OWNER + '=' in argument and (media_class is None or ('media.class=' + media_class) in argument))
+    name = ('source_name=' if kind == 'module-remap-source' else 'sink_name=') + MAPPING + ' '
+    return module.get('name') == kind and name in argument + ' ' and OWNER + '=' in argument
+
+
+def virtual(module):
+    return owned(module, 'module-null-sink') and VIRTUAL in module.get('argument', '')
 
 
 def retire_legacy(audio, state, dsp):
@@ -263,7 +284,7 @@ def retire_legacy(audio, state, dsp):
     sinks = {obj['name']: obj for obj in audio.objects('sinks')}
     if MAPPING not in sinks:
         return
-    modules = [module for module in audio.modules() if owned(module) and 'media.class=Audio/Source/Virtual' not in module['argument']]
+    modules = [module for module in audio.modules() if owned(module, 'module-null-sink') and not virtual(module)]
     if len(modules) != 1:
         raise RuntimeError(MAPPING + ' is a sink this service does not own; not replacing it')
     sources = {obj['name']: obj for obj in audio.objects('sources')}
@@ -271,6 +292,28 @@ def retire_legacy(audio, state, dsp):
         write_state(state, legacy_gain(gain(sinks[MAPPING]), gain(sources[LEGACY])))
     selected = audio.run('pactl', 'get-default-source') == LEGACY
     audio.run('pactl', 'unload-module', modules[0]['index'])
+    if selected:
+        audio.run('pactl', 'set-default-source', dsp)
+
+
+def retire_virtual(audio, state, dsp):
+    # 0.1.2 mapped into a virtual source of the same name, which the shell
+    # leaves without a level meter. Keep its gain and mute, then remove it; a
+    # selected one hands the default to the DSP, which the typed mapping then
+    # takes over like any first mapping, under the same name. Until then the
+    # DSP is the default, as at every login before the mapping is selected;
+    # a saved mute is restored on the typed source before it is selected.
+    # Only a mapper restarted within a session meets a 0.1.2 source: a new
+    # session's pipewire-pulse starts without modules.
+    modules = [module for module in audio.modules() if virtual(module)]
+    if not modules:
+        return
+    sources = {obj['name']: obj for obj in audio.objects('sources')}
+    if MAPPING in sources:
+        write_state(state, gain(sources[MAPPING]))
+    selected = audio.run('pactl', 'get-default-source') == MAPPING
+    for module in modules:
+        audio.run('pactl', 'unload-module', module['index'])
     if selected:
         audio.run('pactl', 'set-default-source', dsp)
 
@@ -424,6 +467,7 @@ def reconcile(audio, state, save_only=False, checked=None):
     dsp = find_dsp(sources)
     if dsp:
         retire_legacy(audio, state, dsp)
+        retire_virtual(audio, state, dsp)
         sources = audio.objects('sources')
     original_input = audio.run('pactl', 'get-default-source')
     if not dsp:
@@ -470,12 +514,12 @@ def reconcile(audio, state, save_only=False, checked=None):
                     audio.run('pactl', 'set-default-source', original_input)
     try:
         if any(obj['name'] == MAPPING for obj in sources):
-            if not any(owned(module, 'Audio/Source/Virtual') for module in audio.modules()):
+            if not any(owned(module) for module in audio.modules()):
                 raise RuntimeError(MAPPING + ' is a source this service does not own; not mapping into it')
         else:
-            module = audio.run('pactl', 'load-module', 'module-null-sink', 'media.class=Audio/Source/Virtual',
-                               'sink_name=' + MAPPING, 'channels=2', 'channel_map=front-left,front-right',
-                               "sink_properties='device.description=\"" + description() + "\" node.virtual=true priority.session=1 " + OWNER + '=' + owner + "'")
+            module = audio.run('pactl', 'load-module', 'module-remap-source', 'source_name=' + MAPPING, 'master=' + dsp,
+                               'channels=2', 'channel_map=front-left,front-right',
+                               "source_properties='device.description=\"" + description() + "\" priority.session=1 " + OWNER + '=' + owner + "'")
             if not module.isdecimal():
                 raise RuntimeError('PulseAudio did not return a module identity')
             # A new mapping may reuse the port IDs of one sampled before an
@@ -488,7 +532,7 @@ def reconcile(audio, state, save_only=False, checked=None):
         for attempt in range(30):
             graph = audio.graph()
             output = port(graph, dsp, 'capture_AUX0')
-            inputs = [port(graph, MAPPING, 'input_' + channel) for channel in ('FL', 'FR')]
+            inputs = [port(graph, CAPTURE, 'input_' + channel) for channel in ('FL', 'FR')]
             if output is not None and all(value is not None for value in inputs):
                 break
             audio.pause()
@@ -498,15 +542,35 @@ def reconcile(audio, state, save_only=False, checked=None):
             restore_gain(audio, state)
         def validate_endpoints(graph):
             if port(graph, dsp, 'capture_AUX0') != output or [
-                port(graph, MAPPING, 'input_' + channel) for channel in ('FL', 'FR')
+                port(graph, CAPTURE, 'input_' + channel) for channel in ('FL', 'FR')
             ] != inputs:
                 raise RuntimeError('Asahi microphone endpoints changed during mapping')
-        for input_ in inputs:
+        # WirePlumber links the mono port to the left side as the remap
+        # source's target: wait for that link rather than race it with a
+        # duplicate, and link the right side, which WirePlumber never does.
+        if module is not None:
+            for attempt in range(20):
+                if links(audio.graph(), output, inputs[0]):
+                    break
+                audio.pause()
+        for input_ in (inputs[1], inputs[0]):
             graph = audio.graph()
             validate_endpoints(graph)
             if not links(graph, output, input_):
-                audio.run('pw-link', '-L', '-w', '-p', json.dumps({OWNER: owner}), str(output), str(input_))
-                graph = audio.graph()
+                link = ('pw-link', '-L', '-w', '-p', json.dumps({OWNER: owner}), str(output), str(input_))
+                try:
+                    audio.run(*link)
+                except RuntimeError as error:
+                    if 'File exists' not in str(error):
+                        raise
+                    # WirePlumber made the same link meanwhile, which is
+                    # fine; one it left failed holds the ports and carries
+                    # nothing, so it is replaced.
+                    failed = failed_links(audio.graph(), output, input_)
+                    if failed:
+                        for id_ in failed:
+                            audio.run('pw-link', '-d', str(id_))
+                        audio.run(*link)
         for attempt in range(30):
             graph = audio.graph()
             validate_endpoints(graph)
@@ -586,7 +650,7 @@ def reconcile(audio, state, save_only=False, checked=None):
         def remove_module():
             if module is not None:
                 for obj in audio.modules():
-                    if str(obj['index']) == module and obj.get('name') == 'module-null-sink' and OWNER + '=' + owner in obj.get('argument', ''):
+                    if str(obj['index']) == module and obj.get('name') == 'module-remap-source' and OWNER + '=' + owner in obj.get('argument', ''):
                         audio.run('pactl', 'unload-module', module)
         # A dead PipeWire graph must not prevent removing a module still owned
         # by PulseAudio, or restoring a default that this invocation changed.
