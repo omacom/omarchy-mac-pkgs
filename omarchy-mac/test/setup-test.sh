@@ -7,12 +7,9 @@ mkdir -p "$work/bin"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
 [[ -z ${PLATFORM_ERROR:-} ]] || { echo "Error: $PLATFORM_ERROR" >&2; exit 1; }
-echo "${PLATFORM:-apple-silicon}"
+echo "${PLATFORM:-aarch64-apple}"
 STUB
-cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
-#!/bin/bash
-[[ $(omarchy-hw-platform) == "apple-silicon" ]]
-STUB
+stub_apple_predicate "$work/bin"
 cat >"$work/bin/lspci" <<'STUB'
 #!/bin/bash
 echo "Broadcom [14e4:${WIFI_ID:-4433}]"
@@ -42,7 +39,7 @@ ln -s /dev/null "$unit"
 "$setup" "$stage"
 [[ $(readlink "$unit") == /dev/null && ! -s $CALLS ]] || fail 'mask survives setup'
 rm "$unit"
-for spec in 'generic 4433' 'qualcomm 4434' 'apple-silicon 0000'; do
+for spec in 'x86 4433' 'qualcomm 4434' 'aarch64-apple 0000'; do
   read -r platform wifi <<<"$spec"
   PLATFORM=$platform WIFI_ID=$wifi "$setup" "$stage"
   [[ ! -s $CALLS ]] || fail 'non-Apple and excluded hardware are untouched'
@@ -51,9 +48,10 @@ rm "$stage/var/lib/omarchy-mac/wifi-configured"
 if SYSTEMCTL_STATUS=42 "$setup" "$stage"; then fail 'enable failure must be retryable'; fi
 "$setup" "$stage"
 pass 'fresh, repeated, overrides, masks and hardware gates'
-# Each fresh root: recovery is enabled for BCM4378, BCM4387 and BCM4388 on Apple Silicon only.
-for spec in 'apple-silicon 4425 1' 'apple-silicon 4433 1' 'apple-silicon 4434 1' 'apple-silicon 4488 0' \
-  'generic 4433 0' 'generic-aarch64 4434 0' 'qualcomm 4434 0'; do
+# Each fresh root: recovery is enabled for BCM4378, BCM4387 and BCM4388 on Apple Silicon only,
+# by the platform's name or by its name on a runtime from before the rename.
+for spec in 'aarch64-apple 4425 1' 'aarch64-apple 4433 1' 'aarch64-apple 4434 1' 'aarch64-apple 4488 0' \
+  'apple-silicon 4433 1' 'x86 4433 0' 'aarch64 4434 0' 'qualcomm 4434 0'; do
   read -r platform wifi enabled <<<"$spec"
   fresh="$work/fresh-$platform-$wifi"
   "$ROOT/install" "$fresh"

@@ -35,8 +35,9 @@ firmware_listing='./usr/lib/systemd/system-generators/systemd-cryptsetup-generat
 
 cat >"$stub_bin/omarchy-hw-platform" <<'SH'
 #!/bin/bash
-echo "${TEST_PLATFORM:-apple-silicon}"
+echo "${TEST_PLATFORM:-aarch64-apple}"
 SH
+stub_apple_predicate "$stub_bin"
 cat >"$stub_bin/omarchy-mac-kernel" <<'SH'
 #!/bin/bash
 echo linux-aurora
@@ -225,7 +226,7 @@ done
 
 fixture
 before=$(boot_tree)
-for platform in generic-aarch64 qualcomm generic; do
+for platform in aarch64 qualcomm x86; do
   if TEST_PLATFORM=$platform run reset-prepare "$next" "$root/dev/luks"; then fail "reset-prepare refuses to run on $platform"; fi
   error_says "runs only on Apple Silicon"
   for name in reset-commit reset-rollback; do

@@ -41,7 +41,7 @@ Exec=env SPECIAL=yes chromium %U
   apple.write_text('#!/bin/bash\nexit 0\n')
   apple.chmod(0o755)
   platform = bind / 'omarchy-hw-platform'
-  platform.write_text('#!/bin/bash\necho apple-silicon\n')
+  platform.write_text('#!/bin/bash\necho aarch64-apple\n')
   platform.chmod(0o755)
   sentinel = tmp / 'forbidden'
   for name in ('sudo', 'pkexec', 'curl'):

@@ -15,8 +15,10 @@ runtime=${OMARCHY_TEST_RUNTIME:-$ROOT}
 platform_root=$tmpdir/pkg/usr/share/omarchy-platform
 
 mkdir -p "$tmpdir/apple-bin"
-printf '#!/bin/sh\nexit 0\n' >"$tmpdir/apple-bin/omarchy-hw-apple-silicon"
-chmod +x "$tmpdir/apple-bin/omarchy-hw-apple-silicon"
+for predicate in omarchy-hw-aarch64-apple omarchy-hw-apple-silicon; do
+  printf '#!/bin/sh\nexit 0\n' >"$tmpdir/apple-bin/$predicate"
+  chmod +x "$tmpdir/apple-bin/$predicate"
+done
 
 [[ ! -e $platform_root/hypr ]] || fail "omarchy-mac ships no Hyprland files; Omarchy's own config carries the Mac's binds"
 

@@ -34,8 +34,8 @@ guarded() {
   timeout --kill-after=5 60 "$@"
 }
 
-for platform in apple-silicon generic; do
-  fake_platform "$tmp/$platform" "$platform"
+for platform in aarch64-apple x86; do
+  fake_platform "$tmp/$platform" "$(runtime_platform "$platform")"
 done
 limine_mac_init "$tmp/mac"
 
@@ -149,7 +149,7 @@ run_restore() {
 # x86: the package's hooks are installed but let the restore through untouched,
 # and nothing asks whether a Mac boots Limine.
 limine_mac
-run_restore generic limine "$tmp/hooks"
+run_restore x86 limine "$tmp/hooks"
 (( status == 0 )) && [[ $(cat "$tmp/calls") == $'sudo limine-snapper-restore\nrestored' ]] && grep -Fq "Reboot now" "$tmp/out" ||
   fail "x86 restores with limine-snapper-restore through the Mac hooks" "$(cat "$tmp/calls" "$tmp/out" "$tmp/err")"
 pass "x86 restores as before, without any Mac check"
@@ -158,7 +158,7 @@ pass "x86 restores as before, without any Mac check"
 # Limine, when the Mac booted GRUB: Limine's restore hook says why it can't.
 limine_mac
 rm "$mac_root/var/lib/omarchy/limine.enabled"
-run_restore apple-silicon limine "$tmp/hooks"
+run_restore aarch64-apple limine "$tmp/hooks"
 (( status != 0 )) && grep -Fxq 'sudo limine-snapper-restore' "$tmp/calls" && ! grep -Fxq restored "$tmp/calls" &&
   grep -Fq "Snapshot 7 was taken before Limine was activated on this Mac" "$tmp/err" ||
   fail "a boot of a snapshot from before Limine is refused by Limine's restore hook" "$(cat "$tmp/calls" "$tmp/err")"
@@ -167,7 +167,7 @@ pass "a boot of a snapshot from before Limine is told why it cannot be restored"
 # A Limine Mac booted into snapshot 7 from the menu: the x86 restore, which the
 # package's pre hook lets through when the snapshot matches the boot files.
 limine_mac
-run_restore apple-silicon limine "$tmp/hooks"
+run_restore aarch64-apple limine "$tmp/hooks"
 (( status == 0 )) && grep -Fxq 'sudo limine-snapper-restore' "$tmp/calls" && grep -Fxq restored "$tmp/calls" ||
   fail "a Limine Mac restores a matching snapshot with limine-snapper-restore" "$(cat "$tmp/calls" "$tmp/out" "$tmp/err")"
 grep -Fq "Snapshot 7 matches this Mac's boot files" "$tmp/out" || fail "the restore says the snapshot was checked" "$(cat "$tmp/out")"
@@ -176,7 +176,7 @@ pass "a Limine Mac restores a snapshot that matches its boot files through limin
 # The same, after a kernel update the snapshot predates.
 limine_mac
 printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n' >"$mac_root/boot/vmlinuz-linux-aurora"
-run_restore apple-silicon limine "$tmp/hooks"
+run_restore aarch64-apple limine "$tmp/hooks"
 (( status != 0 )) && ! grep -Fxq restored "$tmp/calls" ||
   fail "a snapshot from before a kernel update is not restored" "$(cat "$tmp/calls" "$tmp/err")"
 grep -Fq "Snapshot 7 does not match this Mac's boot files, so it is not restored" "$tmp/err" &&
@@ -190,7 +190,7 @@ pass "a Limine Mac refuses a snapshot from before a kernel update, and explains"
 limine_mac
 rm -rf "$tmp/state"
 snapshot_root_tree "$tmp/picked" "linux-aurora kernel 6.16.0-aurora0-ARCH"
-LSS_PICK=$tmp/picked run_restore apple-silicon limine "$tmp/hooks"
+LSS_PICK=$tmp/picked run_restore aarch64-apple limine "$tmp/hooks"
 grep -Fxq restored "$tmp/calls" && grep -Fq "Please reboot manually" "$tmp/out" && ! grep -Fq "Reboot now" "$tmp/out" ||
   fail "a mismatched snapshot picked from the list is not offered the reboot" "$(cat "$tmp/calls" "$tmp/out" "$tmp/err")"
 grep -Fq "The restore put back a root this Mac's boot files do not match" "$tmp/err" &&
@@ -200,7 +200,7 @@ pass "a snapshot picked from limine-snapper-restore's list is checked after the 
 
 # Undo it as the message says, from the same boot: the ESP's UKI now carries the
 # refused root's kernel, which the pre hook's boot check would refuse.
-LSS_PICK=$tmp/booted run_restore apple-silicon limine "$tmp/hooks"
+LSS_PICK=$tmp/booted run_restore aarch64-apple limine "$tmp/hooks"
 (( status == 0 )) && grep -Fq "Press l and pick snapshot 13, the backup that restore made." "$tmp/out" &&
   grep -Fq "Reboot now" "$tmp/out" && grep -Fq "The restored root matches this Mac's boot files" "$tmp/out" ||
   fail "the previous root is put back through the hooks and offered the reboot" "$(cat "$tmp/out" "$tmp/err")"
@@ -210,7 +210,7 @@ pass "a refused restore is undone through the hooks, as the message says"
 limine_mac
 rm -rf "$tmp/state"
 snapshot_root_tree "$tmp/picked" "linux-aurora kernel $mac_kver"
-LSS_PICK=$tmp/picked run_restore apple-silicon limine "$tmp/hooks"
+LSS_PICK=$tmp/picked run_restore aarch64-apple limine "$tmp/hooks"
 (( status == 0 )) && grep -Fq "Reboot now" "$tmp/out" && grep -Fq "The restored root matches this Mac's boot files" "$tmp/out" ||
   fail "a matching snapshot picked from the list is restored and offered the reboot" "$(cat "$tmp/out" "$tmp/err")"
 pass "a matching snapshot picked from limine-snapper-restore's list is restored"
@@ -219,7 +219,7 @@ pass "a matching snapshot picked from limine-snapper-restore's list is restored"
 # swap, so the pre hook refuses a GRUB Mac without sending it back to one.
 limine_mac
 rm "$mac_root/var/lib/omarchy/limine.enabled"
-TEST_CMDLINE=$live_cmdline run_restore apple-silicon limine "$tmp/hooks"
+TEST_CMDLINE=$live_cmdline run_restore aarch64-apple limine "$tmp/hooks"
 (( status != 0 )) && ! grep -Fxq restored "$tmp/calls" && grep -Fq "This Mac boots GRUB" "$tmp/err" &&
   ! grep -Fq "omarchy-snapshot restore" "$tmp/err" ||
   fail "a GRUB Mac is refused and not sent back to omarchy-snapshot restore" "$(cat "$tmp/calls" "$tmp/err")"

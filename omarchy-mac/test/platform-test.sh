@@ -16,7 +16,7 @@ STUB
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
 echo platform >>"$CALLS"
-echo generic-aarch64
+echo aarch64
 STUB
 for command in systemctl nmcli pactl pw-dump pw-cli wpctl modprobe journalctl lspci rfkill udevadm busctl sudo tee; do
   printf '#!/bin/bash\necho %s >>"$CALLS"\n' "$command" >"$work/bin/$command"

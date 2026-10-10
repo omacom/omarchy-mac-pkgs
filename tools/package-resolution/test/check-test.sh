@@ -99,7 +99,7 @@ expect_fail() {
   pass "$2"
 }
 
-generic='forbidden_packages=("${mac_only[@]}")'
+aarch64='forbidden_packages=("${mac_only[@]}")'
 
 package core filesystem 1-1 file=etc/hostname
 package core linux-aarch64 7.0-1 provides=linux depend=filesystem file=usr/lib/modules/7.0/vmlinuz
@@ -124,37 +124,37 @@ package stale stale 2.0-1 file=usr/bin/stale
 cp "$scratch/stale-1.files" "$scratch/repos/stale/stale.files.tar.gz"
 legacy_layout core
 
-platform generic "core omarchy" "omarchy omarchy-settings tool" "$generic" 'transitions=(omarchy omarchy-settings)'
-expect_pass generic "a generic set that stays generic passes" \
-  'ok    generic: linux resolves to core/linux-aarch64'
-grep -Fq 'note  generic: Mac-only omarchy/linux-aurora still provides linux' <<<"$output" ||
+platform aarch64 "core omarchy" "omarchy omarchy-settings tool" "$aarch64" 'transitions=(omarchy omarchy-settings)'
+expect_pass aarch64 "an aarch64 set without Mac packages passes" \
+  'ok    aarch64: linux resolves to core/linux-aarch64'
+grep -Fq 'note  aarch64: Mac-only omarchy/linux-aurora still provides linux' <<<"$output" ||
   fail "a Mac-only linux provider is reported while it is not selected" "$output"
 pass "a Mac-only linux provider is reported while it is not selected"
-grep -Fq 'ok    generic: omarchy 1.0-1: -Su keeps equal and newer installs; -S replaces both; -S --needed skips equal' <<<"$output" ||
+grep -Fq 'ok    aarch64: omarchy 1.0-1: -Su keeps equal and newer installs; -S replaces both; -S --needed skips equal' <<<"$output" ||
   fail "equal-version and locally-newer transitions are checked" "$output"
 pass "equal-version and locally-newer transitions are checked"
 
-platform apple "asahi-alarm core omarchy" "omarchy omarchy-mac linux-aurora uboot-asahi" 'kernel=linux-aurora' \
+platform aarch64-apple "asahi-alarm core omarchy" "omarchy omarchy-mac linux-aurora uboot-asahi" 'kernel=linux-aurora' \
   'transitions=(omarchy-mac linux-aurora uboot-asahi)'
-expect_pass apple "the Apple set resolves with the Asahi repositories" \
-  'ok    apple: linux resolves to asahi-alarm/linux-asahi'
-grep -Fq 'note  apple: with linux-aurora installed, linux resolves to omarchy/linux-aurora' <<<"$output" ||
+expect_pass aarch64-apple "the Apple set resolves with the Asahi repositories" \
+  'ok    aarch64-apple: linux resolves to asahi-alarm/linux-asahi'
+grep -Fq 'note  aarch64-apple: with linux-aurora installed, linux resolves to omarchy/linux-aurora' <<<"$output" ||
   fail "the linux provider is reported with the Apple kernel installed" "$output"
 pass "the linux provider is reported with the Apple kernel installed"
 
-platform leak "core omarchy leaky" "omarchy leaky" "$generic"
-expect_fail leak "a Mac package in a generic closure fails" 'leak: forbidden packages in the closure: omarchy/omarchy-mac'
+platform leak "core omarchy leaky" "omarchy leaky" "$aarch64"
+expect_fail leak "a Mac package in an aarch64 closure fails" 'leak: forbidden packages in the closure: omarchy/omarchy-mac'
 grep -Eq '^FAIL  leak: packages depend on Mac-only names' <<<"$output" ||
-  fail "a generic package depending on a Mac package fails" "$output"
-pass "a generic package depending on a Mac package fails"
+  fail "an aarch64 package depending on a Mac package fails" "$output"
+pass "an aarch64 package depending on a Mac package fails"
 
 platform owners "core omarchy" "omarchy clash" 'transitions=()'
 expect_fail owners "two packages owning one file fails" 'owners: files owned by more than one package'
 grep -Eq '/usr/bin/omarchy: (omarchy clash|clash omarchy)' <<<"$output" || fail "the shared path and both owners are named" "$output"
 pass "the shared path and both owners are named"
 
-platform kernel "kernel-first core" "tool" "$generic"
-expect_fail kernel "a generic root that selects the Apple kernel for linux fails" 'kernel: linux resolves to Mac-only kernel-first/linux-aurora'
+platform kernel "kernel-first core" "tool" "$aarch64"
+expect_fail kernel "an aarch64 root that selects the Apple kernel for linux fails" 'kernel: linux resolves to Mac-only kernel-first/linux-aurora'
 
 platform conflicting "core conflicts" "tool rival"
 expect_fail conflicting "two conflicting packages in one closure fail" 'conflicting: conflicting packages in the closure'
@@ -168,7 +168,7 @@ platform versioned "core conflicts" "tool old-rival"
 expect_pass versioned "a versioned conflict the closure does not meet passes" 'ok    versioned: no declared conflicts'
 
 platform repos "asahi-alarm core" "tool" "forbidden_repos=('asahi*')"
-expect_fail repos "an Asahi repository on a generic platform fails" 'repos: forbidden repositories configured: asahi-alarm'
+expect_fail repos "an Asahi repository on the aarch64 platform fails" 'repos: forbidden repositories configured: asahi-alarm'
 
 platform missing "core" "tool ghost" 'unpublished=([ghost]="not published yet")' 'transitions=(ghost)'
 expect_pass missing "an unpublished package with a reason is skipped" 'skip  missing: ghost transitions \(not published yet\)'

@@ -51,12 +51,9 @@ pass 'the setup entrypoints, platform files and Electron helpers are staged'
 mkdir -p "$work/bin" "$work/apps"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
-echo "${PLATFORM:-apple-silicon}"
+echo "${PLATFORM:-aarch64-apple}"
 STUB
-cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
-#!/bin/bash
-[[ $(omarchy-hw-platform) == "apple-silicon" ]]
-STUB
+stub_apple_predicate "$work/bin"
 cat >"$work/bin/lspci" <<'STUB'
 #!/bin/bash
 echo "Broadcom [14e4:4433]"
@@ -100,6 +97,7 @@ grep -q 'Preserving administrator-owned chromium launcher' <<<"$output" && grep 
 if WRAP_1PASSWORD=1 "$launchers" >/dev/null 2>&1; then fail 'a wrapper that fails fails setup'; fi
 mkdir -p "$work/bare"
 ln -s "$work/bin/omarchy-hw-platform" "$work/bare/omarchy-hw-platform"
+ln -s "$work/bin/omarchy-hw-apple-silicon" "$work/bare/omarchy-hw-apple-silicon"
 : >"$CALLS"
 output=$(PATH="$work/bare" "$launchers" 2>&1) || fail 'a runtime without the wrapper helper does not fail setup' "$output"
 grep -q 'runtime has no omarchy-cmd-electron-gl-wrap' <<<"$output" || fail 'a runtime without the wrapper helper is named' "$output"
@@ -146,7 +144,7 @@ pass "user setup writes nothing into the user's input.lua"
 
 flags="$HOME/.config/brave-flags.conf"
 printf '%s\n' '--ozone-platform=wayland' >"$flags"
-PLATFORM=generic-aarch64 "$setup_user" "$stage"
+PLATFORM=aarch64 "$setup_user" "$stage"
 [[ $(<"$flags") == '--ozone-platform=wayland' ]] || fail 'other platforms keep browser hardware decode'
 "$setup_user" "$stage"
 [[ $(<"$flags") == $'--ozone-platform=wayland\n--disable-features=AcceleratedVideoDecoder' ]] || fail 'a plain flags file gets the decode workaround' "$(cat "$flags")"
@@ -217,7 +215,7 @@ INSTALLED_PACKAGES="steam omarchy-steam-fex" "$steam_launcher"
 ! grep -q '^pacman -S' "$CALLS" || fail 'an installed launcher is left alone'
 if INSTALLED_PACKAGES="steam" PACMAN_STATUS=1 "$steam_launcher" >/dev/null 2>&1; then fail 'a failed launcher install fails setup'; fi
 : >"$CALLS"
-PLATFORM=generic-aarch64 INSTALLED_PACKAGES="steam" "$steam_launcher"
+PLATFORM=aarch64 INSTALLED_PACKAGES="steam" "$steam_launcher"
 ! grep -q '^pacman' "$CALLS" || fail 'other platforms never get the FEX launcher'
 : >"$CALLS"
 INSTALLED_PACKAGES="steam" OMARCHY_MAC_SETUP_OFFLINE=1 "$steam_launcher"

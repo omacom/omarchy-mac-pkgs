@@ -8,7 +8,7 @@
 | A new Mac-only package | Here: open an issue first, then a pull request that meets the package contract |
 | The Mac manual | Here, in the same pull request as the behaviour it describes |
 | Release, acceptance or package-resolution tooling | Here, in `tools/` |
-| The desktop, shell, bindings or shared helpers | [omacom/omarchy](https://github.com/omacom/omarchy). Apple Silicon desktop work that builds on [#14431](https://github.com/omacom/omarchy/pull/14431) goes to that pull request while it is open. omarchy-mac's `quattro-upstream` is frozen. |
+| The desktop, shell, bindings or shared helpers | [omacom/omarchy](https://github.com/omacom/omarchy). Apple Silicon desktop work goes there too, now that [#14431](https://github.com/omacom/omarchy/pull/14431) has merged it. omarchy-mac's `quattro-upstream` is frozen. |
 | Package recipes, signing and publication | [omacom/omarchy-pkgs](https://github.com/omacom/omarchy-pkgs) |
 | The macOS app, the Linux image or anything that runs once to install | [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer) |
 | A hardware test report | [omarchy-m-testing.org](https://omarchy-m-testing.org) |
@@ -21,10 +21,10 @@ Omarchy keeps no Mac code of its own. It knows which platform it runs on and giv
 
 **Upstream, in omacom/omarchy:**
 
-- Platform detection: `omarchy-hw-platform` and the `omarchy-hw-apple-silicon` predicate.
+- Platform detection: `omarchy-hw-platform`, which names an Apple Silicon Mac `aarch64-apple`, and the `omarchy-hw-aarch64-apple` predicate. The packages here call it by its old name, `omarchy-hw-apple-silicon`, which every runtime they support ships.
 - The places a platform plugs in: the lifecycle dispatch operations (`setup-boot`, `setup-system`, `setup-user`, provisioning, reset, `update-verify`, `update-takeover`, the app install hooks), the platform root `/usr/share/omarchy-platform` and what Omarchy reads from it, the mkinitcpio HOOKS baseline, and the pacman platform guard.
-- The default package lists, the Apple Silicon one included: adding or dropping a package every Mac gets by default is an upstream change to `install/omarchy-apple-silicon.packages`.
-- Skipping a PC or Intel Mac quirk that misfires on Apple Silicon, behind `omarchy-hw-apple-silicon`.
+- The default package lists, the Apple Silicon one included: adding or dropping a package every Mac gets by default is an upstream change to `install/omarchy-aarch64-apple.packages`.
+- Skipping a PC or Intel Mac quirk that misfires on Apple Silicon, behind `omarchy-hw-aarch64-apple`.
 - Fixes found during Mac work that help every machine, such as the battery, LUKS and keyboard-layout fixes in [#14431](https://github.com/omacom/omarchy/pull/14431), which superseded #13362.
 
 **Here, in the packages:**
@@ -40,7 +40,7 @@ Omarchy keeps no Mac code of its own. It knows which platform it runs on and giv
 | A bind or gesture behaves wrongly | Upstream, the same on every machine (the Apple SMC lid switch is the one Apple bind core keeps) |
 | Wi-Fi drops after resume on one Broadcom chip | `omarchy-mac` |
 | A new default package for every Mac | Upstream, in the Apple Silicon package list |
-| A PC-only quirk also fires on Macs | Upstream, skipped behind `omarchy-hw-apple-silicon` |
+| A PC-only quirk also fires on Macs | Upstream, skipped behind `omarchy-hw-aarch64-apple` |
 | Encrypted first boot fails on every machine, Macs included | Upstream |
 | The Mac's boot chain needs checking after an update | `omarchy-mac-boot`, in its `update-verify` entrypoint |
 | The Mac needs to act at a moment Omarchy has no hook for | Both: see below |

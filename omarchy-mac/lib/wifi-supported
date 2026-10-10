@@ -1,4 +1,4 @@
 #!/bin/bash
 # BCM4378, BCM4387 and BCM4388. T2 Macs share some of these IDs, so the platform decides first.
 set -o pipefail
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] && lspci -nn | grep -E '14e4:(4425|4433|4434)' >/dev/null
+omarchy-hw-apple-silicon && lspci -nn | grep -E '14e4:(4425|4433|4434)' >/dev/null
