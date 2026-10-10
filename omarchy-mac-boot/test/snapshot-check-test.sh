@@ -36,14 +36,14 @@ mkdir -p "$fake" "$tmp/check-stub"
 mkdir -p "$tmp/detector" "$tmp/no-detector"
 cat >"$tmp/detector/omarchy-hw-platform" <<'SH'
 #!/bin/bash
-[[ ${TEST_PLATFORM:-apple-silicon} != error ]] || exit 1
-echo "${TEST_PLATFORM:-apple-silicon}"
+[[ ${TEST_PLATFORM:-aarch64-apple} != error ]] || exit 1
+echo "${TEST_PLATFORM:-aarch64-apple}"
 SH
 # TEST_APPLE_STATUS: an exit status other than a clear answer, such as 127.
 cat >"$fake/omarchy-hw-apple-silicon" <<'SH'
 #!/bin/bash
 [[ -z ${TEST_APPLE_STATUS:-} ]] || exit "$TEST_APPLE_STATUS"
-[[ ${TEST_PLATFORM:-apple-silicon} == apple-silicon ]]
+[[ ${TEST_PLATFORM:-aarch64-apple} == aarch64-apple || $TEST_PLATFORM == apple-silicon ]]
 SH
 printf '#!/bin/bash\nexit 0\n' >"$fake/limine-update"
 # pacman -Q lists the snapshot's packages; everything else is the fixture's.
@@ -149,7 +149,7 @@ for hook_cmdline in "" "--add 3" "--no-force-save --add 3" "--debounce" "--no-ho
   (( status == 0 )) && [[ ! -s $tmp/out && ! -s $tmp/err && ! -s $tmp/check-ran ]] ||
     fail "limine-snapper-sync '$hook_cmdline' passes the hook untouched"
 done
-TEST_PLATFORM=generic TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$snapshot_cmdline"
+TEST_PLATFORM=x86 TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$snapshot_cmdline"
 (( status == 0 )) && [[ ! -s $tmp/err && ! -s $tmp/check-ran ]] || fail "a restore on anything but a Mac is not this hook's to check"
 pass "the hook stays out of everything but a restore on a Mac"
 
@@ -160,7 +160,7 @@ pass "a restore is refused when the platform cannot be told"
 
 TEST_NO_DETECTOR=1 TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$live_cmdline"
 expect_refused "a restore from the running system of a root without the platform detector" "open Snapshots"
-TEST_NO_DETECTOR=1 TEST_PLATFORM=generic TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$snapshot_cmdline"
+TEST_NO_DETECTOR=1 TEST_PLATFORM=x86 TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$snapshot_cmdline"
 (( status == 0 )) && [[ ! -s $tmp/err && ! -s $tmp/check-ran ]] || fail "a root without the detector and not a Mac is not this hook's to check"
 TEST_NO_DETECTOR=1 TEST_APPLE_STATUS=127 TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$snapshot_cmdline"
 expect_refused "a restore where omarchy-hw-apple-silicon is missing" "Cannot tell which platform this is"
@@ -244,6 +244,8 @@ expect_refused "a restore from the running system" \
   "open Snapshots" "run omarchy-snapshot restore once it" \
   "Snapshots taken before Limine was activated on this Mac cannot be restored" \
   "that is gets refused"
+TEST_PLATFORM=apple-silicon TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$live_cmdline"
+expect_refused "a restore from the running system of a runtime from before the platform rename" "open Snapshots"
 rm "$mac_root/var/lib/omarchy/limine.enabled"
 TEST_PATH_FIRST=$tmp/check-stub run_check "--restore --no-mutex" "$live_cmdline"
 expect_refused "limine-snapper-restore on a Mac that boots GRUB" \
