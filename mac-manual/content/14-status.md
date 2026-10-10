@@ -19,7 +19,7 @@ This manual describes the stack the first release installs. The packages are bui
 
 ## Not in the first release
 
-- M3 and M4 Macs, Touch ID, MLX and Secure Enclave disk encryption. Each is separate work.
+- M3 and M4 Macs, MLX and Secure Enclave disk encryption. Each is separate work.
 - Encrypting an unencrypted Mac in place while moving it from an earlier install. It may come later as an opt-in.
 - The Asahi kernel as a supported choice. Every Mac runs Aurora.
 - A portable installer that runs without installing a privileged helper.
