@@ -9,8 +9,9 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash
-echo "${PLATFORM:-apple-silicon}"
+echo "${PLATFORM:-aarch64-apple}"
 STUB
+stub_apple_predicate "$work/bin"
 cat >"$work/bin/lspci" <<'STUB'
 #!/bin/bash
 echo "Broadcom [14e4:4433]"
@@ -83,7 +84,7 @@ for line in '#options brcmfmac feature_disable=0x82000' 'options brcmfmac featur
 done
 reset
 printf '\n%s\n' "$block" >"$conf"
-PLATFORM=generic setup
+PLATFORM=x86 setup
 [[ -f $conf && ! -e $pending ]] || fail 'a machine that is not a Mac is untouched'
 reset
 printf '\n%s\n' "$block" >"$work/target"

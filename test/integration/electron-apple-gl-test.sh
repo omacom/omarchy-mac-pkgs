@@ -31,7 +31,7 @@ cat >"$apple_stub/omarchy-hw-apple-silicon" <<'SH'
 SH
 cat >"$apple_stub/omarchy-hw-platform" <<'SH'
 #!/bin/bash
-if omarchy-hw-apple-silicon; then echo apple-silicon; else echo generic; fi
+if omarchy-hw-apple-silicon; then echo aarch64-apple; else echo x86; fi
 SH
 chmod +x "$apple_stub/omarchy-hw-apple-silicon" "$apple_stub/omarchy-hw-platform"
 

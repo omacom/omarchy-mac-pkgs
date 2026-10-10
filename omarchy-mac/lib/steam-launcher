@@ -5,7 +5,7 @@
 # it. An image's first boot (OMARCHY_MAC_SETUP_OFFLINE=1) may be offline and
 # downloads nothing; Steam is never part of an image anyway.
 set -euo pipefail
-[[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+omarchy-hw-apple-silicon || exit 0
 [[ ${OMARCHY_MAC_SETUP_OFFLINE:-} != "1" ]] || exit 0
 if pacman -Q steam >/dev/null 2>&1 && ! pacman -Q omarchy-steam-fex >/dev/null 2>&1; then
   echo "Installing the Steam FEX launcher"

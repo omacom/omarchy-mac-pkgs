@@ -23,8 +23,9 @@ firmware_listing='./usr/lib/systemd/system-generators/systemd-cryptsetup-generat
 ./usr/lib/systemd/system/systemd-cryptsetup@.service.d/omarchy-vendorfw-initrd.conf'
 cat >"$stub_bin/omarchy-hw-platform" <<'SH'
 #!/bin/bash
-echo "${TEST_PLATFORM:-apple-silicon}"
+echo "${TEST_PLATFORM:-aarch64-apple}"
 SH
+stub_apple_predicate "$stub_bin"
 cat >"$stub_bin/omarchy-mac-kernel" <<'SH'
 #!/bin/bash
 echo linux-aurora
@@ -184,7 +185,7 @@ run provision-prepare || fail "an encrypted image root is ready for owner setup"
 [[ $(snapshot) == "$before" && ! -s $calls ]] || fail "provision-prepare changes nothing"
 pass "provision-prepare accepts an encrypted image root and changes nothing"
 
-for platform in generic-aarch64 qualcomm generic; do
+for platform in aarch64 qualcomm x86; do
   fixture
   before=$(snapshot)
   for name in provision-prepare provision-commit provision-verify luks-slots; do
@@ -598,7 +599,7 @@ TEST_KEYSLOTS="2 3 32" owner_refused "an owner slot out of range" "records owner
 sed -i 's/^owner_slot=.*/owner_slot=/' "$root/boot/omarchy/encrypt.state"
 TEST_KEYSLOTS="2 3" owner_refused "an empty owner slot" "records owner_slot=, which is not a LUKS key slot number"
 sed -i 's/^owner_slot=.*/owner_slot=2/' "$root/boot/omarchy/encrypt.state"
-TEST_PLATFORM=generic-aarch64 TEST_KEYSLOTS="2 3" owner_refused "off Apple Silicon" "runs only on Apple Silicon"
+TEST_PLATFORM=aarch64 TEST_KEYSLOTS="2 3" owner_refused "off Apple Silicon" "runs only on Apple Silicon"
 TEST_BOOT_UUID="" TEST_KEYSLOTS="2 3" owner_refused "an unmounted Boot partition" "Boot partition is not mounted at /boot"
 mv "$root/dev/disk/by-uuid/$luks_uuid" "$test_tmp/by-uuid"
 TEST_KEYSLOTS="2 3" owner_refused "a crypttab device that is not there" "Could not find the encrypted disk"

@@ -14,7 +14,7 @@ require_platform_fixtures "the Apple Silicon owner provisioning path"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fake_platform "$tmp/apple" apple-silicon
+fake_platform "$tmp/apple" "$(runtime_platform aarch64-apple)"
 stub_bin=$tmp/bin
 root=$tmp/root
 calls=$tmp/calls

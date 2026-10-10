@@ -6,7 +6,7 @@ set -euo pipefail
 saved_file="/etc/udev/macsmc-battery.conf"
 end_file="/sys/class/power_supply/macsmc-battery/charge_control_end_threshold"
 
-[[ $(omarchy-hw-platform 2>/dev/null) == "apple-silicon" ]] || exit 0
+omarchy-hw-apple-silicon 2>/dev/null || exit 0
 [[ -r $saved_file && -w $end_file ]] || exit 0
 
 limit=""

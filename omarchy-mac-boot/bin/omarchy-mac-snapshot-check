@@ -180,14 +180,16 @@ restore_mode() {
 }
 
 # Only a Mac's restores are this hook's to check. A root from before the
-# platform detector has only omarchy-hw-apple-silicon. Anything but a clear
-# answer returns 2: the platform cannot be told, which is not waved through.
+# platform detector has only omarchy-hw-apple-silicon, and one from before the
+# rename names a Mac apple-silicon. Anything unclear returns 2, never waved through.
 on_a_mac() {
   local platform status
   if command -v omarchy-hw-platform >/dev/null 2>&1; then
     if platform=$(omarchy-hw-platform); then
-      [[ $platform == apple-silicon ]]
-      return
+      case $platform in
+        aarch64-apple | apple-silicon) return 0 ;;
+        *) return 1 ;;
+      esac
     fi
   else
     omarchy-hw-apple-silicon

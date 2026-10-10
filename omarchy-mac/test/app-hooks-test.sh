@@ -19,7 +19,7 @@ mkdir -p "$work/bin" "$work/home"
 for command in sudo omarchy-pkg-drop omarchy-launch-steam omarchy-hw-platform; do
   case $command in
     sudo) body='echo "sudo $*" >>"$CALLS"; "$@"' ;;
-    omarchy-hw-platform) body='echo apple-silicon' ;;
+    omarchy-hw-platform) body='echo aarch64-apple' ;;
     *) body='echo "${0##*/} $*" >>"$CALLS"; exit "${FAIL_STATUS:-0}"' ;;
   esac
   printf '#!/bin/bash\n%s\n' "$body" >"$work/bin/$command"
