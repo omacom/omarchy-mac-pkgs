@@ -8,17 +8,33 @@
 # system ESP, and on a Limine Mac the loader, menu and UKI on that same ESP.
 # The installed kernel may be newer than the running one until that reboot.
 # Nothing here rebuilds a boot file.
+#
+# A Mac whose owner boots a chain this package does not build, such as a
+# kernel or m1n1 built by hand, names it in /etc/omarchy-mac-boot/owner-boot-chain.
+# There a failed check is reported as a warning and the update finishes.
 
 set -uo pipefail
 
+owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-chain
+
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
-  cat >&2 <<'MESSAGE'
+  if [[ -f $owner_boot_chain ]]; then
+    chain=$(grep -m 1 -v '^[[:space:]]*$' "$owner_boot_chain")
+    cat >&2 <<MESSAGE
+
+The boot files were not verified: /etc/omarchy-mac-boot/owner-boot-chain says this Mac's owner manages its boot chain:
+  ${chain:-(the file names no chain)}
+The update finishes anyway. Before you reboot, make sure that chain boots what the update installed.
+MESSAGE
+  else
+    cat >&2 <<'MESSAGE'
 
 This Mac might not boot what the update installed, so do not reboot yet.
 Fix what the boot check reported above. To rebuild the initramfs, m1n1 and the boot menu:
   sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update
 Then run omarchy update again: it checks the boot files before it offers the reboot.
 MESSAGE
-  exit 1
+    exit 1
+  fi
 fi

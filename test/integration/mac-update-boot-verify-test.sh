@@ -101,3 +101,18 @@ limine_mac
 rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 blocked "a missing UKI" "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing"
 pass "apple: a wrong device tree, a stale m1n1 or a missing UKI fails the update, explained, with no reboot offered"
+
+# A boot chain its owner names in /etc/omarchy-mac-boot/owner-boot-chain is
+# reported, not enforced: the update finishes and offers the reboot.
+limine_mac
+rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+printf 'a kernel and m1n1 stage 2 built by hand\n' >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+run_update aarch64-apple "$tmp/mac-boot"
+(( status == 0 )) && reboot_offered ||
+  fail "apple: an update on an owner-managed boot chain finishes and offers the reboot" "status $status: $(cat "$tmp/out" "$tmp/err")"
+grep -Fq "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing" "$tmp/err" &&
+  grep -Fq "says this Mac's owner manages its boot chain:" "$tmp/err" && grep -Fq "a kernel and m1n1 stage 2 built by hand" "$tmp/err" ||
+  fail "apple: an owner-managed boot chain shows what the check found and that it was not verified" "$(cat "$tmp/err")"
+! grep -Fq "The update is not finished" "$tmp/err" || fail "apple: an owner-managed boot chain does not leave the update unfinished" "$(cat "$tmp/err")"
+pass "apple: an owner-managed boot chain that fails the check warns, and the update finishes with its reboot"
