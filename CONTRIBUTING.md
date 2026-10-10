@@ -23,7 +23,7 @@ Omarchy keeps no Mac code of its own. It knows which platform it runs on and giv
 
 - Platform detection: `omarchy-hw-platform` and the `omarchy-hw-apple-silicon` predicate.
 - The places a platform plugs in: the lifecycle dispatch operations (`setup-boot`, `setup-system`, `setup-user`, provisioning, reset, `update-verify`, `update-takeover`, the app install hooks), the platform root `/usr/share/omarchy-platform` and what Omarchy reads from it, the mkinitcpio HOOKS baseline, and the pacman platform guard.
-- The default package lists, the Apple Silicon one included: adding or dropping a package every Mac gets by default is an upstream change to `install/omarchy-apple-silicon.packages`.
+- The default package lists, the Apple Silicon one included: adding or dropping a package every Mac gets by default is an upstream change to `install/omarchy-aarch64-apple.packages`.
 - Skipping a PC or Intel Mac quirk that misfires on Apple Silicon, behind `omarchy-hw-apple-silicon`.
 - Fixes found during Mac work that help every machine, such as the battery, LUKS and keyboard-layout fixes in [#14431](https://github.com/omacom/omarchy/pull/14431), which superseded #13362.
 

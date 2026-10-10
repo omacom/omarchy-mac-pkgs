@@ -4,7 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/stage"
-grep -Fxq omarchy-mac-boot "$ROOT/install/omarchy-apple-silicon.packages" || fail "Apple fresh-install inputs carry the boot package"
+grep -Fxq omarchy-mac-boot "$ROOT/install/omarchy-aarch64-apple.packages" || fail "Apple fresh-install inputs carry the boot package"
 pass "Apple installs carry the boot package their lifecycles dispatch to"
 bash "$BOOT/install" "$work/stage"
 # Owner provisioning and factory reset are upstream's scripts, which run only

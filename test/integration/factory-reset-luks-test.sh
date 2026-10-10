@@ -16,8 +16,8 @@ require_platform_fixtures "factory reset through lifecycle dispatch"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fake_platform "$tmp/apple" apple-silicon
-fake_platform "$tmp/x86" generic
+fake_platform "$tmp/apple" aarch64-apple
+fake_platform "$tmp/x86" x86
 real_cryptsetup=$(command -v cryptsetup || true)
 stub_bin=$tmp/bin
 calls=$tmp/calls

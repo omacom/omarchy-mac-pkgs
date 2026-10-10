@@ -4,7 +4,7 @@ Resolves each aarch64 platform's package set against the live pacman databases i
 
 ```bash
 tools/package-resolution/check                 # every platform under platforms/
-tools/package-resolution/check generic-aarch64 # one platform
+tools/package-resolution/check aarch64         # one platform
 tools/package-resolution/test/check-test.sh    # the checks against synthetic repositories
 ```
 

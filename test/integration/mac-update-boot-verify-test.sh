@@ -24,7 +24,7 @@ export OMARCHY_UPDATE_LOGGED=1
 
 tmp=$boundary_tmp/mac-update
 mkdir -p "$tmp"
-fake_platform "$tmp/apple-silicon" apple-silicon
+fake_platform "$tmp/aarch64-apple" aarch64-apple
 
 # omarchy update -y on platform $1, with the boot package's entrypoints in the
 # lifecycle root $2. The update's PATH is fixed, so uname goes beside the stubs.
@@ -66,12 +66,12 @@ mac_boot_package() {
 limine_mac_init "$tmp/mac"
 limine_mac
 mac_boot_package
-run_update apple-silicon "$tmp/mac-boot"
+run_update aarch64-apple "$tmp/mac-boot"
 (( status == 0 )) || fail "apple: an update that leaves a coherent boot chain succeeds" "status $status: $(cat "$tmp/out" "$tmp/err")"
 reboot_offered || fail "apple: a verified update offers the reboot" "$(cat "$SUDO_TEST_LOG")"
 grep -Fq "running linux-aurora $mac_kver; installed boot files match" "$tmp/out" || fail "apple: the update shows what it verified" "$(cat "$tmp/out")"
 mac_boot_package 6.16.0-aurora9-ARCH
-run_update apple-silicon "$tmp/mac-boot"
+run_update aarch64-apple "$tmp/mac-boot"
 (( status == 0 )) && reboot_offered ||
   fail "apple: an update that installed a new kernel is verified before its reboot" "status $status: $(cat "$tmp/out" "$tmp/err")"
 pass "apple: an update that leaves a coherent boot chain passes verification and offers the reboot"
@@ -80,7 +80,7 @@ pass "apple: an update that leaves a coherent boot chain passes verification and
 # offer the reboot. Everything else still runs.
 blocked() {
   local description=$1 reason=$2
-  run_update apple-silicon "$tmp/mac-boot"
+  run_update aarch64-apple "$tmp/mac-boot"
   (( status == 1 )) || fail "apple: $description fails the update" "status $status: $(cat "$tmp/err")"
   ! reboot_offered || fail "apple: $description offers no reboot"
   ran 'omarchy-update-stay-awake stop' || fail "apple: $description still releases Stay Awake" "$(cat "$SUDO_TEST_LOG")"

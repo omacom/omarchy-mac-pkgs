@@ -1,5 +1,5 @@
 # Sourced by check. Lists are relative to the repository root.
-lists=(install/omarchy-base.packages install/omarchy-aarch64.packages install/omarchy-apple-silicon.packages)
+lists=(install/omarchy-base.packages install/omarchy-aarch64.packages install/omarchy-aarch64-apple.packages)
 # The image's kernel, boot chain and Asahi platform packages.
 packages=(omarchy omarchy-settings omarchy-mac-boot linux-aurora linux-aurora-headers m1n1-aurora uboot-asahi
   limine limine-mkinitcpio-hook limine-snapper-sync asahi-alarm-keyring asahi-bless asahi-desktop-meta

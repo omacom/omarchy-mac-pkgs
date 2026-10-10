@@ -14,7 +14,7 @@ require_platform_fixtures "the Apple Silicon owner provisioning path"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fake_platform "$tmp/apple" apple-silicon
+fake_platform "$tmp/apple" aarch64-apple
 stub_bin=$tmp/bin
 root=$tmp/root
 calls=$tmp/calls
@@ -189,7 +189,8 @@ sed -n '/^PROVISIONING_UNLOCK_FILES=(/,/^)/p; /^UNLOCK_OWNER=/p; /^log_step() {/
   /^rekey_luks() {/,/^}/p; /^luks_boot_layout() {/,/^}/p; /^rekey_accepts_password() {/,/^}/p
   /^esp_path() {/,/^}/p; /^reset_limine_config() {/,/^}/p; /^cleanup_oem_state() {/,/^}/p
   /^run_provisioning() {/,/^}/p; /^platform_ready() {/,/^}/p' \
-  "$ROOT/bin/omarchy-provision-owner" | sed "s|/etc/|$root/etc/|g" >"$tmp/provision-owner.sh"
+  "$ROOT/bin/omarchy-provision-owner" |
+  sed -e "s|/etc/|$root/etc/|g" -e "s|/usr/bin/omarchy-thunderbolt-authorization-admin|omarchy-thunderbolt-authorization-admin|" >"$tmp/provision-owner.sh"
 for function in luks_record_slots rekey_luks luks_boot_layout run_provisioning platform_ready; do
   grep -q "^$function() {" "$tmp/provision-owner.sh" || fail "omarchy-provision-owner defines $function"
 done
@@ -211,6 +212,9 @@ configure_login() { :; }
 configure_hostname() { :; }
 configure_timezone() { :; }
 finalize_user() { :; }
+# Accessory enrollment runs after the re-key and is the runtime's own to test.
+omarchy-pkg-present() { return 1; }
+omarchy-thunderbolt-authorization-admin() { :; }
 limine_entries_stale() { return 1; }
 luks_device() { echo "$tmp/luks-device"; }
 clear_logo() { :; }

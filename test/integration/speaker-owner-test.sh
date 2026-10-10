@@ -12,7 +12,7 @@ real_systemctl=$(command -v systemctl) || fail 'systemctl is available'
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/first-boot-bin"
-printf '#!/bin/bash\necho apple-silicon\n' >"$work/bin/omarchy-hw-platform"
+printf '#!/bin/bash\necho aarch64-apple\n' >"$work/bin/omarchy-hw-platform"
 printf '#!/bin/bash\necho 14e4:4433\n' >"$work/bin/lspci"
 # First boot enables units on the live system; here they land in the image root.
 cat >"$work/first-boot-bin/systemctl" <<STUB

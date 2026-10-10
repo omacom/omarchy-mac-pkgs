@@ -12,7 +12,7 @@ require_platform_fixtures "the Apple boot drop-ins on the platform baseline"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-fake_platform "$tmp/platform" apple-silicon
+fake_platform "$tmp/platform" aarch64-apple
 mkdir -p "$tmp/bin"
 # No kernel modules here: the HID drop-in adds only what modinfo finds.
 printf '#!/bin/bash\nexit 1\n' >"$tmp/bin/modinfo"
