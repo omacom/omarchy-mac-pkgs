@@ -80,11 +80,10 @@ exit 1
 SH
 chmod +x "$mock_bin/omarchy-cmd-present"
 
-cat >"$mock_bin/omarchy-hw-apple-silicon" <<'SH'
-#!/bin/bash
-exit 0
-SH
-chmod +x "$mock_bin/omarchy-hw-apple-silicon"
+for predicate in omarchy-hw-aarch64-apple omarchy-hw-apple-silicon; do
+  printf '#!/bin/bash\nexit 0\n' >"$mock_bin/$predicate"
+  chmod +x "$mock_bin/$predicate"
+done
 
 # Pre-seed the exact cache file that v13 production would read for these
 # mocked inputs. Cached records use the rendered row as field 1, followed by

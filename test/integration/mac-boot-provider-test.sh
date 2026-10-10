@@ -4,7 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/stage"
-grep -Fxq omarchy-mac-boot "$ROOT/install/omarchy-apple-silicon.packages" || fail "Apple fresh-install inputs carry the boot package"
+grep -Fxq omarchy-mac-boot "$ROOT/install/omarchy-$(runtime_platform aarch64-apple).packages" || fail "Apple fresh-install inputs carry the boot package"
 pass "Apple installs carry the boot package their lifecycles dispatch to"
 bash "$BOOT/install" "$work/stage"
 # Owner provisioning and factory reset are upstream's scripts, which run only
@@ -19,7 +19,7 @@ pass "owner provisioning parses, and the boot package ships every operation it d
 # state included.
 patterns=(/boot/omarchy encrypt.state rd.luks.key /etc/default/grub omarchy-mac-boot omarchy-mac/boot update-grub)
 for entry in omarchy-provision-owner omarchy-system-factory-reset; do
-  [[ $entry != omarchy-system-factory-reset ]] || patterns+=(omarchy-hw-apple-silicon mac-first-boot efi/omarchy)
+  [[ $entry != omarchy-system-factory-reset ]] || patterns+=(omarchy-hw-aarch64-apple omarchy-hw-apple-silicon mac-first-boot efi/omarchy)
   for pattern in "${patterns[@]}"; do
     ! grep -Fq -- "$pattern" "$ROOT/bin/$entry" ||
       fail "$entry leaves $pattern to the boot package" "$(grep -Fn -- "$pattern" "$ROOT/bin/$entry")"
