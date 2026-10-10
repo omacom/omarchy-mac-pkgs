@@ -12,7 +12,7 @@ An installed Mac is an upstream Omarchy installation plus two Mac packages and t
 | --- | --- |
 | `omarchy-settings` | `/etc/skel`, `/etc` drop-ins, boot loader and snapper configuration, Plymouth and SDDM themes, branding. One aarch64 build that picks the Apple profile at runtime. |
 | `omarchy` | The `omarchy-*` commands, install scripts, migrations, themes and the Quickshell desktop |
-| `omarchy-mac` | Microphone mapping, Wi-Fi resume recovery, the iwd Wi-Fi backend for NetworkManager, the notch setting, the Electron software GL wrappers, browser decode flags |
+| `omarchy-mac` | Microphone mapping, Wi-Fi resume recovery, the iwd Wi-Fi backend for NetworkManager, the notch setting, the Electron software GL wrappers (when the runtime has their helpers), browser decode flags |
 | `omarchy-mac-boot` | Initramfs fragments, vendor firmware hooks, first-boot and encryption units, Limine and U-Boot deployment, boot verification |
 | `linux-aurora` | The kernel and the device trees. `linux-aurora-headers` adds the headers when a DKMS module needs them. |
 | `m1n1-aurora`, `uboot-asahi` | The boot stages between Apple's firmware and Limine |

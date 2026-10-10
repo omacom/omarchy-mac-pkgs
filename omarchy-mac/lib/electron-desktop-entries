@@ -3,9 +3,16 @@
 # desktop entry of the user's own that names the real binary would bypass the
 # wrapper, so runtime's omarchy-cmd-desktop-exec-repair points it at the
 # wrapper once that is in place. omarchy-mac-setup-user runs this as the user;
-# a wrapper that is not ready yet (exit 3 or 4 from --check) is skipped.
+# a wrapper that is not ready yet (exit 3 or 4 from --check) is skipped, and
+# so is a runtime without the helpers.
 set -euo pipefail
 [[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+for helper in omarchy-cmd-electron-gl-wrap omarchy-cmd-desktop-exec-repair; do
+  if ! command -v "$helper" >/dev/null; then
+    echo "Skipping Electron desktop repair: the runtime has no $helper" >&2
+    exit 0
+  fi
+done
 bind_dir=${OMARCHY_ELECTRON_GL_BIND_DIR:-/usr/local/bin}
 applications=$HOME/.local/share/applications
 for app in chromium 1password cursor; do
