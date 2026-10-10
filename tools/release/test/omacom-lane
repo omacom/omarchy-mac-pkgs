@@ -33,15 +33,22 @@ git config --global uploadpack.allowFilter true
 git config --global uploadpack.allowAnySHA1InWant true
 
 # ── omarchy-mac-pkgs: three commits on main ──────────────────────────
+# omarchy-mac/version stays 1.0, then moves to 1.1. The commit dates are
+# Brisbane times: mac1 and mac2 fall on 20261008 in UTC, and mac3 on
+# 20261009, a day behind its local date.
 git init --quiet "$tmp/mac-work"
+mkdir -p "$tmp/mac-work/omarchy-mac"
+mac_versions=('' 1.0 1.0 1.1)
+mac_dates=('' 2026-10-08T12:00:00+10:00 2026-10-08T20:00:00+10:00 2026-10-10T09:00:00+10:00)
 for n in 1 2 3; do
-  echo "$n" >"$tmp/mac-work/version"
-  git -C "$tmp/mac-work" add version
-  git -C "$tmp/mac-work" commit --quiet -m "change $n"
+  echo "${mac_versions[n]}" >"$tmp/mac-work/omarchy-mac/version"
+  echo "$n" >"$tmp/mac-work/change"
+  git -C "$tmp/mac-work" add -A
+  GIT_AUTHOR_DATE=${mac_dates[n]} GIT_COMMITTER_DATE=${mac_dates[n]} git -C "$tmp/mac-work" commit --quiet -m "change $n"
   declare "mac$n=$(git -C "$tmp/mac-work" rev-parse HEAD)"
 done
 git -C "$tmp/mac-work" checkout --quiet -b side "$mac1"
-echo side >"$tmp/mac-work/version"
+echo side >"$tmp/mac-work/change"
 git -C "$tmp/mac-work" commit --quiet -am side
 side=$(git -C "$tmp/mac-work" rev-parse HEAD)
 git clone --quiet --bare "$tmp/mac-work" "$tmp/omarchy-mac.git"
@@ -78,7 +85,7 @@ EOF
 }
 git init --quiet "$tmp/pkgs-work"
 recipe omarchy-mac 1.0-1 "$mac1" '["edge"]'
-recipe omarchy-mac-boot 1.0-1 "$mac1" '["edge"]'
+recipe omarchy-mac-boot 20261008-1 "$mac1" '["edge"]'
 mkdir -p "$tmp/pkgs-work/pkgbuilds/linux-aurora/.omarchy" "$tmp/pkgs-work/bin"
 cat >"$tmp/pkgs-work/pkgbuilds/linux-aurora/PKGBUILD" <<EOF
 _auroraver=7.1.12
@@ -241,9 +248,9 @@ has() { grep -Fq -- "$1" "$tmp/out" || fail "$2: expected '$1'"; }
 
 # ── nothing to move ─────────────────────────────────────────────────────────
 x86
-db edge aarch64 'omarchy-mac|omarchy-mac|1.0-1' 'omarchy-mac-boot|omarchy-mac-boot|1.0-1' \
+db edge aarch64 'omarchy-mac|omarchy-mac|1.0-1' 'omarchy-mac-boot|omarchy-mac-boot|20261008-1' \
   'linux-aurora|linux-aurora|7.1.12.aurora2-9' 'linux-aurora-headers|linux-aurora|7.1.12.aurora2-9'
-db rc aarch64 'omarchy-mac|omarchy-mac|1.0-1' 'omarchy-mac-boot|omarchy-mac-boot|1.0-1' \
+db rc aarch64 'omarchy-mac|omarchy-mac|1.0-1' 'omarchy-mac-boot|omarchy-mac-boot|20261008-1' \
   'linux-aurora|linux-aurora|7.1.12.aurora2-9' 'linux-aurora-headers|linux-aurora|7.1.12.aurora2-9'
 run "$release" --dry-run || fail "a dry run with nothing to move failed"
 has "moves:           nothing (rc already serves edge's set)" "nothing to move"
@@ -257,7 +264,7 @@ echo "ok - with edge and rc serving one set there is nothing to promote"
 # ── the pin ─────────────────────────────────────────────────────────────────
 run "$release" --dry-run "$mac2" || fail "the dry run of a release failed"
 has "pin:             omarchy-mac 1.0-1 -> 1.0-2 (_commit -> ${mac2:0:12}, sha256sums[0] -> $(gsum "$mac2");" "the runtime pin"
-has "pin:             omarchy-mac-boot 1.0-1 -> 1.0-2" "the boot pin"
+has "pin:             omarchy-mac-boot 20261008-1 -> 20261008-2" "the boot pin"
 has "waits for:       omarchy-mac 1.0-2 (after the pin merges) on edge" "the pending publication"
 run "$release" --dry-run "$side" && fail "a commit off main was accepted"
 has "is not on omacom/omarchy-mac-pkgs main" "a commit off the branch"
@@ -269,6 +276,9 @@ git -C "$tmp/pkgs.git" show "$pin_branch:pkgbuilds/omarchy-mac/PKGBUILD" | grep 
   fail "the pin branch does not pin omarchy-mac"
 git -C "$tmp/pkgs.git" show "$pin_branch:pkgbuilds/omarchy-mac-boot/PKGBUILD" | grep -Fxq 'pkgrel=2' ||
   fail "the pin branch does not bump omarchy-mac-boot"
+[[ $(recipe_field "$pin_branch" omarchy-mac pkgver)-$(recipe_field "$pin_branch" omarchy-mac pkgrel) == 1.0-2 ]] ||
+  fail "omarchy-mac at the same version did not keep pkgver and bump pkgrel"
+[[ $(recipe_field "$pin_branch" omarchy-mac-boot pkgver) == 20261008 ]] || fail "omarchy-mac-boot on the same UTC day changed pkgver"
 for package in omarchy-mac omarchy-mac-boot; do
   [[ $(recipe_field "$pin_branch" "$package" sha256sums) == "('$(gsum "$mac2")')" ]] ||
     fail "$package on the pin branch keeps a checksum other than makepkg's for ${mac2:0:12}: $(recipe_field "$pin_branch" "$package" sha256sums)"
@@ -290,13 +300,13 @@ has "edge does not serve master's set yet: omarchy-mac 1.0-2" "the edge publicat
 echo "ok - a pin never moves backwards, and promotion waits for CI to publish master's version to edge"
 
 # ── gates ───────────────────────────────────────────────────────────────────
-db edge aarch64 'omarchy-mac|omarchy-mac|1.0-2' 'omarchy-mac-boot|omarchy-mac-boot|1.0-2' \
+db edge aarch64 'omarchy-mac|omarchy-mac|1.0-2' 'omarchy-mac-boot|omarchy-mac-boot|20261008-2' \
   'linux-aurora|linux-aurora|7.1.12.aurora2-9' 'linux-aurora-headers|linux-aurora|7.1.12.aurora2-9'
 run "$release" --dry-run "$mac2" || fail "the dry run after the edge publication failed"
 digest=$(sed -n 's/.*set digest:      \([0-9a-f]\{64\}\).*/\1/p' "$tmp/out")
 [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail "the plan names no set digest"
 has "moves:           omarchy-mac 1.0-1 -> 1.0-2" "the runtime move"
-has "kernel or boot:  omarchy-mac-boot 1.0-2" "the boot move"
+has "kernel or boot:  omarchy-mac-boot 20261008-2" "the boot move"
 has "widen:           omarchy-mac omarchy-mac-boot to rc" "the widening"
 has "advance:         bin/repo advance --from edge --to rc --arch aarch64 --package omarchy-mac omarchy-mac-boot --skip-prod-check" "the scoped advance"
 has "would copy:      omarchy-mac-1.0-2-aarch64.pkg.tar.zst (+ .sig)" "the copied file"
@@ -311,12 +321,12 @@ run "$release" --vm-evidence "$tmp/vm-bad" "$mac2" && fail "a VM record saying b
 has "does not record acceptance of this set" "a contradictory VM record"
 printf 'VM acceptance of the Mac set\nformat=1\nset_sha256=%s\nstatus=accepted\nrun_id=vm-1\n' "$digest" >"$tmp/vm"
 run "$release" --vm-evidence "$tmp/vm" "$mac2" && fail "a boot move went ahead without hardware evidence"
-has "this promotion moves omarchy-mac-boot 1.0-2" "the hardware gate"
-has "  boot=omarchy-mac-boot 1.0-2" "the hardware gate's lines"
-printf 'set_sha256=%s\nboot=omarchy-mac-boot 1.0-2\nboot=omarchy-mac 1.0-2\n' "$digest" >"$tmp/hw-bad"
+has "this promotion moves omarchy-mac-boot 20261008-2" "the hardware gate"
+has "  boot=omarchy-mac-boot 20261008-2" "the hardware gate's lines"
+printf 'set_sha256=%s\nboot=omarchy-mac-boot 20261008-2\nboot=omarchy-mac 1.0-2\n' "$digest" >"$tmp/hw-bad"
 run "$release" --vm-evidence "$tmp/vm" --hardware-evidence "$tmp/hw-bad" "$mac2" && fail "a hardware record with an extra line was accepted"
 has "does not record exactly what this promotion moves" "an inexact hardware record"
-printf 'Cold boots on the M1 Pro and the M2 Max\nset_sha256=%s\nboot=omarchy-mac-boot 1.0-2\n' "$digest" >"$tmp/hw"
+printf 'Cold boots on the M1 Pro and the M2 Max\nset_sha256=%s\nboot=omarchy-mac-boot 20261008-2\n' "$digest" >"$tmp/hw"
 echo "ok - promotion needs VM evidence of the set's digest and hardware evidence of exactly its boot moves"
 
 # ── widening and the advance ────────────────────────────────────────────────
@@ -430,13 +440,30 @@ has "cannot promote: linux-aurora: pinned builds natively for rc" "a blocked pac
 run "$release" --package omarchy-mac "$mac3" && fail "the narrow pin did not stop for the merge"
 has "pinning ${mac3:0:12}" "the narrow pin"
 narrow=$(git -C "$tmp/pkgs.git" for-each-ref --format='%(refname:short)' "refs/heads/mac-release/pin-${mac3:0:12}-*")
+[[ $(recipe_field "$narrow" omarchy-mac pkgver)-$(recipe_field "$narrow" omarchy-mac pkgrel) == 1.1-1 ]] ||
+  fail "omarchy-mac/version 1.0 -> 1.1 did not set pkgver=1.1 and reset pkgrel to 1"
+[[ $(recipe_field "$narrow" omarchy-mac sha256sums) == "('$(gsum "$mac3")')" ]] || fail "the version bump kept a stale checksum"
 merge "$narrow"
 run "$release" --package omarchy-mac --package omarchy-mac-boot "$mac3" && fail "the rest of the pin did not stop for its merge"
 has "pinning ${mac3:0:12}" "the rest of the pin"
 rest=$(git -C "$tmp/pkgs.git" for-each-ref --format='%(refname:short)' "refs/heads/mac-release/pin-${mac3:0:12}-*" | grep -vxF "$narrow")
 [[ $(git -C "$tmp/pkgs.git" diff --name-only master "$rest") == pkgbuilds/omarchy-mac-boot/PKGBUILD ]] ||
   fail "the rest of the pin is not omarchy-mac-boot alone"
+[[ $(recipe_field "$rest" omarchy-mac-boot pkgver)-$(recipe_field "$rest" omarchy-mac-boot pkgrel) == 20261009-1 ]] ||
+  fail "omarchy-mac-boot did not take the UTC date of ${mac3:0:12} with pkgrel 1: $(recipe_field "$rest" omarchy-mac-boot pkgver)-$(recipe_field "$rest" omarchy-mac-boot pkgrel)"
 echo "ok - a blocked set opens no pin, and a pin merged for part of the set does not stop the rest of the same commit's pin"
+echo "ok - a pin takes pkgver from omarchy-mac/version and from the commit's UTC date, resetting pkgrel when it moves"
+
+git -C "$tmp/mac-work" checkout --quiet master
+echo 1.2-rc1 >"$tmp/mac-work/omarchy-mac/version"
+git -C "$tmp/mac-work" commit --quiet -am "a version that is not a pkgver"
+mac4=$(git -C "$tmp/mac-work" rev-parse HEAD)
+git -C "$tmp/mac-work" push --quiet "$tmp/omarchy-mac.git" master:main
+run "$release" --dry-run --package omarchy-mac "$mac4" || fail "the dry run of an unusable version failed"
+has "pin:             blocked: omarchy-mac: '1.2-rc1' at ${mac4:0:12} is not a pkgver" "a version that is not a pkgver"
+run "$release" --package omarchy-mac "$mac4" && fail "a pin to a version that is not a pkgver went ahead"
+has "cannot pin: omarchy-mac: '1.2-rc1'" "an unusable version on the real path"
+echo "ok - a version file that cannot be a pkgver blocks the pin"
 
 # ── mac-aurora-pin on omacom ────────────────────────────────────────────────
 run "$pin" pin --dry-run --archive-sha256 "$(printf 'a%.0s' {1..64})" && fail "a pin to the pinned head was accepted"
