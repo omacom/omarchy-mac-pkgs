@@ -112,7 +112,18 @@ run_update aarch64-apple "$tmp/mac-boot"
 (( status == 0 )) && reboot_offered ||
   fail "apple: an update on an owner-managed boot chain finishes and offers the reboot" "status $status: $(cat "$tmp/out" "$tmp/err")"
 grep -Fq "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing" "$tmp/err" &&
-  grep -Fq "says this Mac's owner manages its boot chain:" "$tmp/err" && grep -Fq "a kernel and m1n1 stage 2 built by hand" "$tmp/err" ||
-  fail "apple: an owner-managed boot chain shows what the check found and that it was not verified" "$(cat "$tmp/err")"
+  grep -Fq "says this Mac's owner manages its boot chain:" "$tmp/err" && grep -Fq "a kernel and m1n1 stage 2 built by hand" "$tmp/err" &&
+  grep -Fq "To have updates verify the boot files again, remove /etc/omarchy-mac-boot/owner-boot-chain." "$tmp/err" ||
+  fail "apple: an owner-managed boot chain shows what the check found, that it was not verified and how to go back" "$(cat "$tmp/err")"
 ! grep -Fq "The update is not finished" "$tmp/err" || fail "apple: an owner-managed boot chain does not leave the update unfinished" "$(cat "$tmp/err")"
 pass "apple: an owner-managed boot chain that fails the check warns, and the update finishes with its reboot"
+
+limine_mac
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+printf 'a kernel and m1n1 stage 2 built by hand\n' >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+run_update aarch64-apple "$tmp/mac-boot"
+(( status == 0 )) && reboot_offered ||
+  fail "apple: an update on an owner-managed boot chain that passes the check succeeds" "status $status: $(cat "$tmp/out" "$tmp/err")"
+grep -Fq "Boot files verified; /etc/omarchy-mac-boot/owner-boot-chain is present, so a failed check would only warn." "$tmp/out" ||
+  fail "apple: an update on an owner-managed boot chain that passes the check says the file is present" "$(cat "$tmp/out")"
+pass "apple: an owner-managed boot chain that passes the check still says the file is present"

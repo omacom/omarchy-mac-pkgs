@@ -11,7 +11,9 @@
 #
 # A Mac whose owner boots a chain this package does not build, such as a
 # kernel or m1n1 built by hand, names it in /etc/omarchy-mac-boot/owner-boot-chain.
-# There a failed check is reported as a warning and the update finishes.
+# There a failed check is reported as a warning and the update finishes. While
+# the file exists, every update says so, even when the check passes, so that a
+# declaration nobody needs any more is seen before it hides a real failure.
 
 set -uo pipefail
 
@@ -26,6 +28,7 @@ if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check 
 The boot files were not verified: /etc/omarchy-mac-boot/owner-boot-chain says this Mac's owner manages its boot chain:
   ${chain:-(the file names no chain)}
 The update finishes anyway. Before you reboot, make sure that chain boots what the update installed.
+To have updates verify the boot files again, remove /etc/omarchy-mac-boot/owner-boot-chain.
 MESSAGE
   else
     cat >&2 <<'MESSAGE'
@@ -37,4 +40,6 @@ Then run omarchy update again: it checks the boot files before it offers the reb
 MESSAGE
     exit 1
   fi
+elif [[ -f $owner_boot_chain ]]; then
+  echo "Boot files verified; /etc/omarchy-mac-boot/owner-boot-chain is present, so a failed check would only warn."
 fi
