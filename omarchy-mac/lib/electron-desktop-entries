@@ -6,6 +6,8 @@
 # a wrapper that is not ready yet (exit 3 or 4 from --check) is skipped.
 set -euo pipefail
 [[ $(omarchy-hw-platform) == @(aarch64-apple|apple-silicon) ]] || exit 0
+# The wrapper returns to the runtime with omacom/omarchy#14717; until then there is none to set up.
+command -v omarchy-cmd-electron-gl-wrap >/dev/null || exit 0
 bind_dir=${OMARCHY_ELECTRON_GL_BIND_DIR:-/usr/local/bin}
 applications=$HOME/.local/share/applications
 for app in chromium 1password cursor; do

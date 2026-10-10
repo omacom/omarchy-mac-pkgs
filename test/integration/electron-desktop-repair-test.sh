@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
+if [[ ! -x $ROOT/bin/omarchy-cmd-electron-gl-wrap ]]; then
+  printf 'skip - %s: the runtime has no Electron GL wrapper before omacom/omarchy#14717\n' "$(basename -- "$0")"
+  exit 0
+fi
 export ROOT
 python3 - <<'PY'
 import os
@@ -41,7 +45,7 @@ Exec=env SPECIAL=yes chromium %U
   apple.write_text('#!/bin/bash\nexit 0\n')
   apple.chmod(0o755)
   platform = bind / 'omarchy-hw-platform'
-  platform.write_text('#!/bin/bash\necho apple-silicon\n')
+  platform.write_text('#!/bin/bash\necho aarch64-apple\n')
   platform.chmod(0o755)
   sentinel = tmp / 'forbidden'
   for name in ('sudo', 'pkexec', 'curl'):

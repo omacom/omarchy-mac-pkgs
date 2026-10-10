@@ -98,9 +98,12 @@ grep -q 'Preserving administrator-owned chromium launcher' <<<"$output" && grep 
 if WRAP_1PASSWORD=1 "$launchers" >/dev/null 2>&1; then fail 'a wrapper that fails fails setup'; fi
 mkdir -p "$work/bare"
 ln -s "$work/bin/omarchy-hw-platform" "$work/bare/omarchy-hw-platform"
-if PATH="$work/bare" "$launchers" >/dev/null 2>&1; then fail 'a runtime without the wrapper helper fails setup'; fi
-if PATH="$work/bare" "$entries" >/dev/null 2>&1; then fail 'a runtime without the desktop helpers fails user setup'; fi
-pass 'system setup wraps each installed Electron app, keeping administrator-owned launchers, and needs the runtime helpers'
+# A runtime from before omacom/omarchy#14717 has no wrapper: setup leaves the apps alone.
+: >"$CALLS"
+PATH="$work/bare" "$launchers" >/dev/null 2>&1 || fail 'a runtime without the wrapper helper skips system setup'
+PATH="$work/bare" "$entries" >/dev/null 2>&1 || fail 'a runtime without the wrapper helper skips user setup'
+[[ ! -s $CALLS ]] || fail 'a runtime without the wrapper helper wraps nothing' "$(cat "$CALLS")"
+pass 'system setup wraps each installed Electron app, keeping administrator-owned launchers, and skips a runtime without the helpers'
 
 export OMARCHY_CURSOR_BIN="$work/apps/cursor"
 applications=$HOME/.local/share/applications
