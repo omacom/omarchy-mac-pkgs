@@ -60,7 +60,7 @@ Bugs go to [the issue tracker](https://github.com/omacom/omarchy-mac-pkgs/issues
 
 ## Releases
 
-- `omarchy-mac` uses semver in its `version` file. Bump it in the pull request that changes behaviour.
+- `omarchy-mac` uses semver in its `version` file. Pull requests don't change it: a release bumps it in a pull request of its own, from a branch named `release/omarchy-mac-<the new version>` that changes nothing else, and CI fails any other pull request that touches the file.
 - `omarchy-mac-boot` is versioned by the UTC date of the commit its recipe pins; there is nothing to bump.
 - A release is tagged per package, `omarchy-mac-v1.2.3` or `omarchy-mac-boot-v20261010`, and tags are never moved.
 - Recipes in omacom/omarchy-pkgs pin full commit SHAs. `tools/release/mac-release` opens the pull request that moves them.
