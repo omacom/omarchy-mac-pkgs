@@ -17,6 +17,15 @@ CI rejects files outside these, the root documents and `.github/`.
 - Run the suite of every package you change, and `test/integration/all` with `OMARCHY_TEST_RUNTIME` set when a change touches what the runtime reads.
 - `omarchy-mac-boot` covers what stays installed and runs again at updates. What runs once to install a Mac belongs in omacom/omarchy-mac-installer.
 - Change the manual in the same commit as the behaviour it describes.
+- A udev `add` action that must reach a device already present also gets a pacman hook that does that work on install and upgrade, since on the upgrade that installs the rule no `add` comes. The hook exits 0 in a chroot or an unbooted root, and never fails the transaction. An `add` that should only run when the device appears, such as one tied to the boot splash, does not.
+- An invitation is a prompt the runtime shows the owner once, such as the post-update offer to set up a newly found fingerprint reader. A change that makes one appear, such as a new `fingerprint-readers` entry, ships only after everything the invitation leads to is published to the repositories Macs update from. `omarchy-hw-fingerprint`, the runtime's detector, reads `fingerprint-readers`, a platform file omarchy-mac ships (#12).
+
+## Tests
+
+- A test passes or fails the same on every machine. It never reads the host's `/usr/share/omarchy-platform`, installed `omarchy-*` commands, `/sys` or running services: stage into a temporary root, point copies at fixtures, and stub external dependencies, keeping the real commands under test. Where the container can verify units, run `systemd-analyze verify` with `--root` at the staged tree. A pass on a Mac with Omarchy installed says nothing about CI.
+- When a change adds a detection path or a fallback, test the inverse too: the new path never hides what the old one found.
+- A test that needs something the runtime gained at a later commit moves `test/integration/runtime` to a commit that has it; it does not skip because the current pin lacks it.
+- Before calling a change tested, check that CI ran it: a skipped test, or a job that failed before reaching the tests, is not a pass.
 
 ## Style
 
