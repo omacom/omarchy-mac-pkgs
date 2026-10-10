@@ -56,6 +56,29 @@ Exec=env SPECIAL=yes chromium %U
   # omarchy-mac's user and system halves of the Electron wrapping.
   leaf = '"$MAC/lib/electron-desktop-entries"'
   system = '"$MAC/lib/electron-launchers"'
+  if not os.path.exists(wrap):
+    # A runtime without the wrapper: both halves skip and change nothing.
+    for script in (system, leaf):
+      assert 'runtime has no' in run(['bash', '-euo', 'pipefail', '-c', script]).stderr
+    assert not sentinel.exists() and not (bind / 'chromium').exists()
+    assert not (home / '.local/share/applications').exists()
+    print('ok - Electron setup skips a runtime without the wrapper helpers')
+    raise SystemExit(0)
+  # A runtime with the wrapper but no desktop repair: system setup wraps, user
+  # setup leaves the desktop entries alone.
+  partial = tmp / 'partial-runtime'
+  partial.mkdir()
+  for helper in (root / 'bin').iterdir():
+    if helper.name != 'omarchy-cmd-desktop-exec-repair':
+      (partial / helper.name).symlink_to(helper)
+  full_path = env['PATH']
+  env['PATH'] = full_path.replace(f'{root}/bin:', f'{partial}:')
+  run(['bash', '-euo', 'pipefail', '-c', system])
+  assert (bind / 'chromium').exists()
+  assert 'runtime has no omarchy-cmd-desktop-exec-repair' in run(['bash', '-euo', 'pipefail', '-c', leaf]).stderr
+  assert not (home / '.local/share/applications').exists() and not sentinel.exists()
+  env['PATH'] = full_path
+  (bind / 'chromium').unlink()
   run([wrap, '--check', 'chromium', str(real)], 4)
   run(['bash', '-euo', 'pipefail', '-c', leaf])
   assert not sentinel.exists() and not (bind / 'chromium').exists()

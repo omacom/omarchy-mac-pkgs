@@ -5,9 +5,14 @@
 # omarchy-cmd-electron-gl-wrap puts a wrapper for each installed one in
 # /usr/local/bin, ahead of /usr/bin, which passes software GL flags only while
 # no render node exists. omarchy-mac-setup-system runs this as root; a
-# launcher an administrator owns (exit 3) is kept.
+# launcher an administrator owns (exit 3) is kept. A runtime without the
+# helper ships no wrapping, so there is nothing to install.
 set -euo pipefail
 [[ $(omarchy-hw-platform) == "apple-silicon" ]] || exit 0
+if ! command -v omarchy-cmd-electron-gl-wrap >/dev/null; then
+  echo "Skipping Electron launchers: the runtime has no omarchy-cmd-electron-gl-wrap" >&2
+  exit 0
+fi
 for app in chromium 1password cursor; do
   case $app in
     chromium) real=${OMARCHY_CHROMIUM_BIN:-/usr/bin/chromium} ;;

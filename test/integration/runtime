@@ -1,4 +1,5 @@
 # The Omarchy runtime CI tests the packages against: a repository and a full commit.
 # Move it deliberately, like a recipe pin. Today the head of omacom/omarchy#14675,
-# the fingerprint-readers detector on #14431; move it to the merge commit once that lands.
-omacom/omarchy f317ea50b86aea96a403df679ec098c18cef80eb
+# the fingerprint-readers detector on quattro, which needs #24's aarch64-apple platform name;
+# move it to the merge commit once #14675 lands.
+omacom/omarchy 00fcc451c4c92210bdd2b970106fb01b0f754fa6
