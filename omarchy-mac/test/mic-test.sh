@@ -321,6 +321,8 @@ with tempfile.TemporaryDirectory() as temporary:
     # keeping its selection and its gain.
     for selected, expected in ((m.MAPPING, m.MAPPING), (DSP, m.MAPPING), ('usb-mic', 'usb-mic')):
         audio = Audio(True, selected); audio.module = dict(VIRTUAL_MODULE)
+        # PipeWire falls back to a monitor when the default source goes.
+        audio.initial_input = 'headphones.monitor'
         audio.linked = {90: (21, 'virtual'), 91: (22, 'virtual')}
         audio.mapping = obj(m.MAPPING, 52429, False)
         saved = state(); saved.write_text(json.dumps({'source': {'volume': [65536, 65536], 'mute': False}}))
@@ -352,6 +354,18 @@ with tempfile.TemporaryDirectory() as temporary:
     audio = Racing()
     m.reconcile(audio, state())
     assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING, 'a link WirePlumber made first is no failure'
+    # A link WirePlumber left failed holds the ports: it is replaced, not
+    # taken for a working one.
+    class Stuck(Audio):
+        def graph(self):
+            graph = super().graph()
+            for item in graph:
+                if item.get('id') == 80: item['info']['state'] = 'error'
+            return graph
+    audio = Stuck(); audio.linked = {80: (21, None)}
+    m.reconcile(audio, state())
+    assert ('pw-link', '-d', '80') in audio.calls and 80 not in audio.linked, audio.calls
+    assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING
     legacy_state = state(); legacy_state.write_text(json.dumps({'sink': {'volume': [65536, 65536], 'mute': False}, 'monitor': {'volume': [32768, 32768], 'mute': False}}))
     audio = Audio(); m.reconcile(audio, legacy_state)
     assert m.gain(audio.mapping) == {'volume': [32768, 32768], 'mute': False}, 'legacy saved gain carries over'
