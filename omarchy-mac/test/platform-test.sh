@@ -42,7 +42,7 @@ for entry in "$ROOT"/bin/* "$ROOT"/lib/*; do
 done
 pass 'every command and helper re-checks the platform and stops off Apple Silicon'
 for unit in "$ROOT"/vendor/systemd/*/*.service; do
-  grep -Eqx 'ExecCondition=/usr/(bin/omarchy-hw-apple-silicon|lib/omarchy-mac/wifi-supported)' "$unit" ||
+  grep -Eqx 'ExecCondition=/usr/(bin/omarchy-hw-apple-silicon|lib/omarchy-mac/(wifi|bluetooth)-supported)' "$unit" ||
     fail "${unit##*/} re-checks the platform before it starts"
 done
 pass 'every service re-checks the platform before it starts'
