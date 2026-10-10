@@ -149,7 +149,8 @@ check_pinned() {
   source0=$(pkgbuild_first "$dir" source)
   sum0=$(pkgbuild_first "$dir" sha256sums)
   [[ $sum0 =~ ^[0-9a-f]{64}$ && $source0 == *git+*"#commit=$commit" ]] || return 0
-  want=$(git_source_sha256 "$source_dir" "$commit")
+  # die in the substitution has printed why; set -e is off in this || list.
+  want=$(git_source_sha256 "$source_dir" "$commit") || exit 1
   [[ $sum0 == "$want" ]] ||
     pin_gaps+=("$package: pkgbuilds/$package pins ${commit:0:12} with sha256sums[0]=$sum0, where makepkg records $want; fix the recipe by hand")
 }
