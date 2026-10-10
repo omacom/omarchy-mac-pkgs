@@ -582,17 +582,32 @@ for name in SOURCE M1N1 U_BOOT CONFIG; do
   [[ -n ${seen[$name]:-} ]] || fail "/usr/bin/update-m1n1 has no $name default this check recognises"
 done
 
-# Only what update-m1n1 takes from its configuration, read in a clean shell.
-SOURCE="" M1N1="" U_BOOT="" CONFIG="" DTBS="" disabled=""
+# What update-m1n1 builds from: the configuration sourced the way update-m1n1
+# sources it, with /bin/sh, root's PATH and the real library, the copies and
+# their manifest in the workdir. The configuration loads a shim of the library
+# whose only changes return the workdir as the copies' directory, whatever the
+# configuration does, and keep the library's notes, replayed below, apart from
+# anything else the configuration prints.
+SOURCE="" M1N1="" U_BOOT="" CONFIG="" DTBS="" disabled="" overlays_called=""
+dtbs_out=$workdir/dtbs-out
+library_notes=$workdir/library-notes
 config_file=$(path /etc/default/update-m1n1)
 if [[ -e $config_file ]]; then
-  env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
-    unset DTBS SOURCE M1N1 U_BOOT CONFIG M1N1_UPDATE_DISABLED
-    . "$1" >/dev/null 2>&1 || exit 1
-    for name in DTBS SOURCE M1N1 U_BOOT CONFIG M1N1_UPDATE_DISABLED; do
-      printf "%s=%s\0" "$name" "${!name-}"
-    done
-  ' _ "$config_file" >"$workdir/config" || fail "/etc/default/update-m1n1 cannot be read"
+  printf '. %s\ndtb_overlays_outdir() {\n  printf "%%s\\n" %s\n}\ndtb_overlays_note() {\n  printf "dtb-overlays: %%s\\n" "$*" >>%s\n}\n' \
+    "'$overlay_lib'" "'$dtbs_out'" "'$library_notes'" >"$workdir/dtb-overlays.sh"
+  sed -E -e "s|/usr/lib/omarchy-mac/boot/dtb-overlays\.sh|$workdir/dtb-overlays.sh|g" \
+    "$config_file" >"$workdir/config-real" || fail "/etc/default/update-m1n1 cannot be read"
+  rm -rf "$dtbs_out" "$library_notes"
+  env -i PATH="${root:+$root/usr/bin:}/usr/bin:/bin" LANG=${LANG:-C} \
+    OMARCHY_DTB_OVERLAYS_ROOT=$root \
+    /bin/sh -c '
+      set -e
+      unset DTBS SOURCE M1N1 U_BOOT CONFIG M1N1_UPDATE_DISABLED OMARCHY_DTB_OVERLAYS_CALLED
+      . "$1" >/dev/null 2>&1
+      printf "%s=%s\0" DTBS "${DTBS-}" SOURCE "${SOURCE-}" M1N1 "${M1N1-}" U_BOOT "${U_BOOT-}" CONFIG "${CONFIG-}" \
+        M1N1_UPDATE_DISABLED "${M1N1_UPDATE_DISABLED-}" OMARCHY_DTB_OVERLAYS_CALLED "${OMARCHY_DTB_OVERLAYS_CALLED-}"
+    ' _ "$workdir/config-real" >"$workdir/config" ||
+    fail "update-m1n1 would abort while reading /etc/default/update-m1n1"
   while IFS= read -r -d '' entry; do
     value=${entry#*=}
     case "${entry%%=*}" in
@@ -602,17 +617,11 @@ if [[ -e $config_file ]]; then
       CONFIG) CONFIG=$value ;;
       DTBS) DTBS=$value ;;
       M1N1_UPDATE_DISABLED) disabled=$value ;;
+      OMARCHY_DTB_OVERLAYS_CALLED) overlays_called=$value ;;
     esac
   done <"$workdir/config"
 fi
-# dtb-overlays.sh leaves a DTBS the administrator set alone, overlays and all.
-config_dtbs=$DTBS
-# update-m1n1 applies overlays only where its configuration calls for them,
-# which an edited copy kept over the packaged one's .pacnew does not.
-overlays_called=0
-if [[ -e $config_file ]] && grep -Eq '^[[:space:]]*dtb_overlays_update_m1n1([[:space:];|&]|$)' "$config_file"; then
-  overlays_called=1
-fi
+
 [[ -z $disabled ]] || (( boot_chain )) ||
   fail "M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1 does not follow the kernel and its device trees cannot be vouched for; remove it, run sudo update-m1n1, then omarchy update"
 
@@ -673,19 +682,48 @@ root_real=$(realpath -m "${root:-/}")
 grep -Fxq -- "$m1n1_file" "$workdir/bootloader-files" || fail "M1N1 $M1N1 is not owned by $bootloader"
 
 # Split and globbed the way update-m1n1's unquoted $DTBS is, in the C collation
-# /etc/default/update-m1n1 pins.
+# /etc/default/update-m1n1 pins. The library's copies in the workdir pass
+# through untouched. The library prints a tree it left alone with the root in
+# front; that root comes off first, so every word globs under the root once,
+# the same way whether the root is a test fixture or the empty real one.
 dtb_list() {
   local LC_ALL=$1 words word matches
   set -f
   read -r -d '' -a words <<<"$DTBS" || true
   set +f
   for word in "${words[@]}"; do
+    if [[ $word == "$dtbs_out/"* ]]; then
+      printf '%s\n' "$word"
+      continue
+    fi
+    [[ $word != "$root"/* ]] || word=${word#"$root"}
     matches=("$root"$word)
     printf '%s\n' "${matches[@]#"$root"}"
   done
 }
 mapfile -t dtbs < <(dtb_list C)
 (( ${#dtbs[@]} )) || fail "DTBS names no device tree"
+# The file each device tree is read from: the kernel's tree, or the copy the
+# real library left in the workdir, mapped back through the manifest.
+declare -A overlay_src=()
+if [[ -s $dtbs_out/manifest ]]; then
+  while read -r copy src; do
+    overlay_src[$copy]=$src
+  done <"$dtbs_out/manifest"
+fi
+paths=()
+copies_in_dtbs=0
+for i in "${!dtbs[@]}"; do
+  entry=${dtbs[i]}
+  base=${entry##*/}
+  if [[ $entry == "$dtbs_out/"* && -n ${overlay_src[$base]:-} ]]; then
+    dtbs[i]=${overlay_src[$base]}
+    paths[i]=$entry
+    copies_in_dtbs=1
+  else
+    paths[i]=$root$entry
+  fi
+done
 for dtb in "${dtbs[@]}"; do
   [[ -f $root$dtb ]] || fail "device tree $dtb does not exist"
   owned=$(realpath -e "$root$dtb")
@@ -693,37 +731,46 @@ for dtb in "${dtbs[@]}"; do
   [[ $owned == /usr/lib/modules/$kver/* ]] || fail "device tree $dtb is not one of $kernel $kver's"
   grep -Fxq -- "$owned" "$workdir/kernel-files" || fail "device tree $dtb is not owned by $kernel"
 done
-
-# The file each device tree is read from: the kernel's, or the copy that
-# carries the package-owned overlays update-m1n1 applies to it.
-paths=()
-for dtb in "${dtbs[@]}"; do
-  paths+=("$root$dtb")
-done
 export OMARCHY_DTB_OVERLAYS_ROOT=$root
 mapfile -t overlays < <(dtb_overlays_list)
-if (( ${#overlays[@]} )); then
-  for overlay in "${overlays[@]}"; do
-    pacman -Qoq "${overlay#"$root"}" >/dev/null 2>&1 ||
-      fail "device tree overlay ${overlay#"$root"} is not owned by a package"
-  done
-  if (( ! overlays_called )); then
-    echo "Apple Silicon boot check: warning: /etc/default/update-m1n1 does not apply the device tree overlays, so update-m1n1 leaves them out; merge its .pacnew if there is one" >&2
-  elif [[ -n $config_dtbs ]]; then
-    echo "Apple Silicon boot check: warning: DTBS is set in /etc/default/update-m1n1, so update-m1n1 leaves the device tree overlays out" >&2
-  elif ! dtb_overlays_supported "$script"; then
-    echo "Apple Silicon boot check: warning: /usr/bin/update-m1n1 has a DTBS default the device tree overlays do not follow, so it leaves them out" >&2
-  elif ! dtb_overlays_tools; then
-    echo "Apple Silicon boot check: warning: device tree overlays are installed, but update-m1n1 leaves them out without dtc 1.7.1 or newer (dtc, fdtoverlay and fdtget); install or update dtc" >&2
-  else
-    mkdir "$workdir/dtbs"
-    mapfile -t paths < <(dtb_overlays_apply "$workdir/dtbs" "${paths[@]}")
-  fi
-fi
-declare -A dtb_file=()
-for i in "${!dtbs[@]}"; do
-  dtb_file[${dtbs[$i]}]=${paths[$i]}
+for overlay in "${overlays[@]}"; do
+  pacman -Qoq "${overlay#"$root"}" >/dev/null 2>&1 ||
+    fail "device tree overlay ${overlay#"$root"} is not owned by a package"
 done
+if (( ${#overlays[@]} )) && [[ $overlays_called != 1 ]]; then
+  echo "Apple Silicon boot check: warning: /etc/default/update-m1n1 does not apply the device tree overlays, so update-m1n1 leaves them out; merge its .pacnew if there is one" >&2
+elif [[ -s $dtbs_out/manifest ]] && (( ! copies_in_dtbs )); then
+  echo "Apple Silicon boot check: warning: a line after dtb_overlays_update_m1n1 in /etc/default/update-m1n1 overwrites DTBS, so update-m1n1 leaves the device tree overlays out; move it above the call, or set OMARCHY_DTB_OVERLAYS=0 above it to keep the plain device trees" >&2
+fi
+[[ ! -s $library_notes ]] || cat "$library_notes" >&2
+# The file of each DTBS occurrence, parallel to dtbs: the copy the real
+# library left in the workdir, or the kernel's tree itself. Occurrences stay
+# separate: one word may name a tree that another word's overlaid copy also
+# carries, and update-m1n1 builds every word's own file in its position, so
+# the check must not keep one file per source path.
+dtb_paths=("${paths[@]}")
+unset paths
+declare -A dtb_next=()
+
+dtb_reset() {
+  local key
+  for key in "${!dtb_next[@]}"; do
+    unset "dtb_next[$key]"
+  done
+}
+
+# The file of the next unconsumed occurrence of NAME, in DTBS order.
+dtb_file_for() {
+  local name=$1 i next
+  next=${dtb_next[$name]:-0}
+  for (( i = next; i < ${#dtbs[@]}; i++ )); do
+    [[ ${dtbs[i]} == "$name" ]] || continue
+    dtb_next[$name]=$(( i + 1 ))
+    printf '%s\n' "${dtb_paths[i]}"
+    return 0
+  done
+  return 1
+}
 
 m1n1_options() {
   local line
@@ -739,10 +786,13 @@ m1n1_options() {
 }
 
 build_image() {
-  local image=$1 dtb paths=()
+  local image=$1 dtb file paths=()
   shift
+  dtb_reset
   for dtb; do
-    paths+=("${dtb_file[$dtb]}")
+    file=$(dtb_file_for "$dtb") ||
+      fail "$image names $dtb more often than DTBS lists it"
+    paths+=("$file")
   done
   {
     cat "$root$M1N1" "${paths[@]}"
@@ -758,10 +808,12 @@ build_image "$workdir/boot.bin" "${dtbs[@]}"
 # tree with the same bytes. Fails unless they are exactly the expected ones,
 # each as often, in whatever order.
 dtb_order() {
-  local image=$1 offset=$2 end magic size hash dtb
+  local image=$1 offset=$2 end magic size hash file dtb
   local -A by_hash=() left=()
+  dtb_reset
   for dtb in "${dtbs[@]}"; do
-    hash=$(sha256sum <"${dtb_file[$dtb]}")
+    file=$(dtb_file_for "$dtb") || return 1
+    hash=$(sha256sum <"$file")
     hash=${hash%% *}
     by_hash[$hash]=$dtb
     left[$hash]=$(( ${left[$hash]:-0} + 1 ))
@@ -861,5 +913,8 @@ if esp_order=$(dtb_order "$workdir/esp-boot.bin" "$(stat -L -c %s "$root$M1N1")"
     report_running_release
     exit 0
   fi
+fi
+if (( copies_in_dtbs )); then
+  fail "m1n1/boot.bin on the system ESP ($esp) is not m1n1, $kernel $kver's device trees with the package overlays, U-Boot and $CONFIG as installed; run sudo update-m1n1, then omarchy update, or set OMARCHY_DTB_OVERLAYS=0 above dtb_overlays_update_m1n1 in /etc/default/update-m1n1 to keep the plain device trees"
 fi
 fail "m1n1/boot.bin on the system ESP ($esp) is not m1n1, $kernel $kver's device trees, U-Boot and $CONFIG as installed; run sudo update-m1n1, then omarchy update"
