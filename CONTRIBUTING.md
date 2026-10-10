@@ -8,7 +8,7 @@
 | A new Mac-only package | Here: open an issue first, then a pull request that meets the package contract |
 | The Mac manual | Here, in the same pull request as the behaviour it describes |
 | Release, acceptance or package-resolution tooling | Here, in `tools/` |
-| The desktop, shell, bindings or shared helpers | [omacom/omarchy](https://github.com/omacom/omarchy). Apple Silicon desktop work that builds on [#14431](https://github.com/omacom/omarchy/pull/14431) goes to that pull request while it is open. omarchy-mac's `quattro-upstream` is frozen. |
+| The desktop, shell, bindings or shared helpers | [omacom/omarchy](https://github.com/omacom/omarchy). Apple Silicon desktop work goes there too, now that [#14431](https://github.com/omacom/omarchy/pull/14431) has merged it. omarchy-mac's `quattro-upstream` is frozen. |
 | Package recipes, signing and publication | [omacom/omarchy-pkgs](https://github.com/omacom/omarchy-pkgs) |
 | The macOS app, the Linux image or anything that runs once to install | [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer) |
 | A hardware test report | [omarchy-m-testing.org](https://omarchy-m-testing.org) |
