@@ -87,6 +87,10 @@ cat >"$stub_bin/stty" <<'SH'
 echo "24 80"
 SH
 printf '#!/bin/bash\nexit 0\n' >"$stub_bin/systemctl"
+# Owner setup's accessory enrollment: no usbguard installed, and the
+# Thunderbolt step (an absolute path, rewritten below) succeeds.
+printf '#!/bin/bash\nexit 1\n' >"$stub_bin/omarchy-pkg-present"
+printf '#!/bin/bash\nexit 0\n' >"$stub_bin/omarchy-thunderbolt-authorization-admin"
 
 cat >"$stub_bin/cryptsetup" <<SH
 #!/bin/bash
@@ -189,7 +193,7 @@ sed -n '/^PROVISIONING_UNLOCK_FILES=(/,/^)/p; /^UNLOCK_OWNER=/p; /^log_step() {/
   /^rekey_luks() {/,/^}/p; /^luks_boot_layout() {/,/^}/p; /^rekey_accepts_password() {/,/^}/p
   /^esp_path() {/,/^}/p; /^reset_limine_config() {/,/^}/p; /^cleanup_oem_state() {/,/^}/p
   /^run_provisioning() {/,/^}/p; /^platform_ready() {/,/^}/p' \
-  "$ROOT/bin/omarchy-provision-owner" | sed "s|/etc/|$root/etc/|g" >"$tmp/provision-owner.sh"
+  "$ROOT/bin/omarchy-provision-owner" | sed -e "s|/etc/|$root/etc/|g" -e "s|/usr/bin/omarchy-thunderbolt-authorization-admin|$stub_bin/omarchy-thunderbolt-authorization-admin|g" >"$tmp/provision-owner.sh"
 for function in luks_record_slots rekey_luks luks_boot_layout run_provisioning platform_ready; do
   grep -q "^$function() {" "$tmp/provision-owner.sh" || fail "omarchy-provision-owner defines $function"
 done
