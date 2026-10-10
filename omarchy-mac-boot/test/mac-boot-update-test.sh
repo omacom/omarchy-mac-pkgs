@@ -86,3 +86,16 @@ pass "a Mac with no GRUB needs none"
 FAIL_limine_update=1 run && fail "a failed limine-update fails the boot update"
 ! grep -q omarchy-mac-limine-deploy "$calls" || fail "Limine is not deployed after a failed limine-update"
 pass "a failed limine-update stops the boot update"
+
+# A missing GRUB helper stops the update: the script has no set -e, so an
+# unloaded helper would make grub_tools_present return 127 and the update
+# would carry on as if GRUB were absent.
+helper_less=$test_tmp/helper-less
+mkdir -p "$helper_less"
+cp "$update" "$helper_less/omarchy-mac-boot-update"
+: >"$calls"
+if PATH="$stub_bin:$PATH" bash "$helper_less/omarchy-mac-boot-update" 2>"$test_tmp/err"; then
+  fail "a missing GRUB helper fails the boot update"
+fi
+[[ ! -s $calls ]] || fail "a missing GRUB helper changes no boot files" "$(cat "$calls")"
+pass "a missing GRUB helper stops the boot update"

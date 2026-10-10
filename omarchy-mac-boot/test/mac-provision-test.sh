@@ -34,7 +34,7 @@ SH
 # initramfs it carries.
 cat >"$stub_bin/lsinitcpio" <<'SH'
 #!/bin/bash
-[[ $1 == -l && -f $2 ]] && exec cat "$2"
+[[ $1 == -l && -f $2 ]] && exec cat "$(f=$(head -n 1 "$2"); [[ $f == /* && -f $f ]] && echo "$f" || echo "$2")"
 [[ $1 == -x && -f $2 ]] || exit 1
 tree=$2.tree
 [[ -d $tree ]] || tree=$(head -n 1 "$2").tree
@@ -64,13 +64,17 @@ done
 for layout in ${layouts//,/ }; do [[ -f $include/symbols/$layout ]] || exit 1; done
 SH
 # mkinitcpio builds from /etc/vconsole.conf as sd-vconsole and the plymouth
-# hook do; keep-layout leaves the previous build's layout in the image.
-cat >"$stub_bin/mkinitcpio" <<SH
+# hook do; keep-layout leaves the previous build's layout in the image. A UKI
+# build (omarchy-mac-boot-update on a Limine Mac) runs the same build into its
+# own image; uki-without-firmware leaves the firmware out of that one only.
+cat >"$stub_bin/build-image" <<SH
 #!/bin/bash
-echo "mkinitcpio \$*" >>"$calls"
-[[ ! -e $test_tmp/fail-mkinitcpio ]] || exit 1
-image=$root/boot/initramfs-linux-aurora.img
-if [[ -e $test_tmp/build-without-firmware ]]; then
+image=\$1
+# grub-without-firmware leaves the firmware out of /boot's GRUB image only,
+# the way a build can leave one image behind.
+if [[ -e $test_tmp/build-without-firmware ]] \\
+  || { [[ \${2:-} == uki && -e $test_tmp/uki-without-firmware ]]; } \\
+  || { [[ \${2:-} != uki && -e $test_tmp/grub-without-firmware ]]; }; then
   echo ./usr/lib/systemd/system-generators/systemd-cryptsetup-generator >"\$image"
 else
   printf '%s\n' "$firmware_listing" >"\$image"
@@ -89,6 +93,16 @@ layout=\$(. "$root/etc/vconsole.conf"; echo "\$XKBLAYOUT")
 [[ -z \$keymap || -e $test_tmp/build-without-keymap ]] || : >"\$tree/usr/share/kbd/keymaps/i386/qwerty/\$keymap.map.gz"
 [[ -z \$layout ]] || : >"\$tree/usr/share/X11/xkb/symbols/\$layout"
 SH
+# The re-key builds with the image root's own mkinitcpio; the stub sits where
+# the fixed path below MAC_BOOT_ROOT resolves in tests.
+mkdir -p "$root/usr/bin"
+cat >"$root/usr/bin/mkinitcpio" <<SH
+#!/bin/bash
+echo "mkinitcpio \$*" >>"$calls"
+[[ ! -e $test_tmp/fail-mkinitcpio ]] || exit 1
+exec "$stub_bin/build-image" "$root/boot/initramfs-linux-aurora.img"
+SH
+chmod +x "$root/usr/bin/mkinitcpio"
 cat >"$stub_bin/omarchy-mac-boot-update" <<SH
 #!/bin/bash
 cmdline=\$(sed -n 's/^GRUB_CMDLINE_LINUX="\(.*\)"/\1/p' "$root/etc/default/grub")
@@ -97,10 +111,12 @@ echo "omarchy-mac-boot-update \$cmdline" >>"$calls"
 if [[ -e $root/var/lib/omarchy/limine.enabled ]]; then
   printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="%s"\n' "\$cmdline" >"$root/etc/default/limine"
   mkdir -p "$root/boot/efi/EFI/Linux"
-  echo "$root/boot/initramfs-linux-aurora.img" >"$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+  "$stub_bin/build-image" "$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi.img" uki
+  echo "$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi.img" >"$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
 else
   printf 'linux /vmlinuz-linux-aurora %s\n' "\$cmdline" >"$root/boot/grub/grub.cfg"
 fi
+[[ ! -e $test_tmp/fail-boot-update-after-write ]] || exit 1
 SH
 cat >"$stub_bin/findmnt" <<'SH'
 #!/bin/bash
@@ -115,6 +131,12 @@ cat >"$stub_bin/omarchy-mac-esp" <<'SH'
 #!/bin/bash
 [[ -n ${TEST_ESP-/boot/efi} ]] || exit 1
 echo "${TEST_ESP-/boot/efi}"
+SH
+# omarchy-cmd-present, as the entrypoints' PATH sees it on a live system: the
+# command is the fixture root's /usr/bin.
+cat >"$stub_bin/omarchy-cmd-present" <<'SH'
+#!/bin/bash
+[[ -x $OMARCHY_MAC_BOOT_ROOT/usr/bin/$1 ]]
 SH
 # The root's LUKS header: keyslots, then tokens, which luksDump lists alike.
 cat >"$stub_bin/cryptsetup" <<'SH'
@@ -150,7 +172,9 @@ fixture() {
   printf 'format=1\nencrypt=1\n' >"$root/var/lib/omarchy/mac-first-boot/install.conf"
   printf 'staged_slot=0\nowner_slot=2\nrecovery_slot=3\nrecovery_shown=1\nphase=owner\n' >"$root/var/lib/omarchy/provisioning/luks-rekey.state"
   printf '%s\n' "$firmware_listing" >"$root/boot/initramfs-linux-aurora.img"
-  rm -f "$test_tmp"/fail-* "$test_tmp/build-without-firmware" "$test_tmp/build-without-keymap" "$test_tmp/keep-layout"
+  rm -f "$test_tmp"/fail-* "$test_tmp/build-without-firmware" "$test_tmp/uki-without-firmware" "$test_tmp/grub-without-firmware" \
+    "$test_tmp/build-without-keymap" "$test_tmp/keep-layout"
+  rm -rf "$root/usr/bin/grub-probe" "$root/usr/bin/grub-mkconfig"
   : >"$calls"
 }
 
@@ -159,6 +183,10 @@ limine_fixture() {
   : >"$root/var/lib/omarchy/limine.enabled"
   printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID=x rw quiet rd.luks.name=%s=root %s"\n' "$luks_uuid" "$key_line" \
     >"$root/etc/default/limine"
+  # The UKI limine-update last built, which this Mac boots.
+  mkdir -p "$root/boot/efi/EFI/Linux"
+  "$stub_bin/build-image" "$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi.img" uki
+  echo "$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi.img" >"$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
 }
 
 run() {
@@ -317,7 +345,53 @@ limine_fixture
 run provision-commit || fail "commit succeeds on a Limine Mac" "$(cat "$test_tmp/err")"
 ! grep -q 'rd.luks.key=' "$root/etc/default/limine" || fail "the Limine command line drops rd.luks.key="
 run provision-verify || fail "a Limine Mac verifies after commit" "$(cat "$test_tmp/err")"
-pass "provision-commit rebuilds a Limine Mac's command line without the staged key"
+[[ $(cat "$calls") == "omarchy-mac-boot-update quiet rd.luks.name=$luks_uuid=root" ]] ||
+  fail "a Limine Mac without GRUB builds only the UKI, not /boot's GRUB image" "$(cat "$calls")"
+pass "provision-commit rebuilds a Limine Mac's command line without the staged key, with one initramfs build"
+
+limine_fixture
+install -Dm755 /dev/null "$root/usr/bin/grub-probe"
+install -Dm755 /dev/null "$root/usr/bin/grub-mkconfig"
+run provision-commit || fail "commit succeeds on a Limine Mac that keeps GRUB" "$(cat "$test_tmp/err")"
+[[ $(cat "$calls") == $'mkinitcpio -P\n'"omarchy-mac-boot-update quiet rd.luks.name=$luks_uuid=root" ]] ||
+  fail "a Limine Mac that keeps GRUB also rebuilds GRUB's image" "$(cat "$calls")"
+pass "a Limine Mac that keeps GRUB keeps its GRUB image current"
+
+# The firmware ordering is proven in the image the Mac boots, not in /boot's.
+limine_fixture
+key_before=$(sha256sum <"$root/boot/omarchy/luks-key")
+touch "$test_tmp/uki-without-firmware"
+if run provision-commit; then fail "a UKI without the firmware ordering fails commit"; fi
+error_says "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-aurora.efi does not load the vendor firmware"
+[[ $(sha256sum <"$root/boot/omarchy/luks-key") == "$key_before" ]] || fail "the key stays for the retry"
+rm "$test_tmp/uki-without-firmware"
+run provision-commit || fail "the retry with a good UKI commits" "$(cat "$test_tmp/err")"
+pass "on a Limine Mac the firmware ordering is proven in the UKI that boots"
+
+# A Limine Mac that keeps GRUB boots /boot's image through GRUB's retained
+# entries, so a good UKI does not save a /boot image without the firmware.
+limine_fixture
+install -Dm755 /dev/null "$root/usr/bin/grub-probe"
+install -Dm755 /dev/null "$root/usr/bin/grub-mkconfig"
+touch "$test_tmp/grub-without-firmware"
+key_before=$(sha256sum <"$root/boot/omarchy/luks-key")
+if run provision-commit; then fail "a good UKI does not save a GRUB image without the firmware ordering"; fi
+error_says "/boot/initramfs-linux-aurora.img does not load the vendor firmware"
+[[ $(sha256sum <"$root/boot/omarchy/luks-key") == "$key_before" ]] || fail "the key stays for the retry"
+rm "$test_tmp/grub-without-firmware"
+run provision-commit || fail "the retry with both images good commits" "$(cat "$test_tmp/err")"
+pass "on a Limine Mac that keeps GRUB, the firmware ordering is proven in /boot's image too"
+
+# Prepare applies the same rule: a stale /boot image nothing boots does not
+# refuse a UKI-only Mac, and a Limine Mac that keeps GRUB is held to both.
+limine_fixture
+echo ./usr/lib/systemd/system-generators/systemd-cryptsetup-generator >"$root/boot/initramfs-linux-aurora.img"
+run provision-prepare || fail "a UKI-only Mac is ready however stale its unbooted GRUB image is" "$(cat "$test_tmp/err")"
+install -Dm755 /dev/null "$root/usr/bin/grub-probe"
+install -Dm755 /dev/null "$root/usr/bin/grub-mkconfig"
+if run provision-prepare; then fail "a Limine Mac that keeps GRUB is held to its GRUB image too"; fi
+error_says "before the keyboard firmware loads"
+pass "provision-prepare proves the firmware ordering in the images that boot"
 
 fixture
 sed -i '/^recovery_shown=/d' "$root/var/lib/omarchy/provisioning/luks-rekey.state"
@@ -349,6 +423,24 @@ for failure in fail-mkinitcpio fail-boot-update build-without-firmware; do
   run provision-verify || fail "$failure: the retry leaves nothing behind"
 done
 pass "a failed rebuild, or one without the firmware ordering, keeps the unattended unlock for the retry"
+
+# An updater that fails after rewriting the command line, and whose restore
+# fails too: the key stays and the boot files carry the restored command line
+# for the retry.
+limine_fixture
+key_before=$(sha256sum <"$root/boot/omarchy/luks-key")
+touch "$test_tmp/fail-boot-update-after-write"
+if run provision-commit; then fail "commit fails when the updater fails after its rewrite"; fi
+[[ $(sha256sum <"$root/boot/omarchy/luks-key") == "$key_before" ]] || fail "the boot-partition key stays"
+grep -Fq 'rd.luks.key=' "$root/etc/default/limine" || fail "the restore names the key again" "$(cat "$root/etc/default/limine")"
+grep -Fxq 'phase=configured' "$root/boot/omarchy/encrypt.state" || fail "encrypt.state stays configured"
+[[ $(tail -n 1 "$calls") == "omarchy-mac-boot-update quiet rd.luks.name=$luks_uuid=root $key_line" ]] ||
+  fail "the restore rewrites the boot files with the key" "$(cat "$calls")"
+if run provision-verify; then fail "the staged unlock remains"; fi
+rm -f "$test_tmp/fail-boot-update-after-write"
+run provision-commit || fail "the retry commits" "$(cat "$test_tmp/err")"
+run provision-verify || fail "the retry leaves nothing behind"
+pass "an updater that fails after its rewrite still leaves the restored command line"
 
 # An attempt killed after it rewrote GRUB's defaults, then a retry whose
 # rebuild fails: the key is still on the boot partition, so the command line
