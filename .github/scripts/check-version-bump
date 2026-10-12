@@ -1,0 +1,22 @@
+#!/bin/bash
+# omarchy-mac/version changes only in a release's bump pull request: a branch named
+# release/omarchy-mac-<the new version> that changes nothing else. Pushes to main and
+# manual runs are not pull requests, so they pass.
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
+
+if [[ ${GITHUB_EVENT_NAME:-} != "pull_request" ]]; then
+  echo "Not a pull request; omarchy-mac/version is not checked."
+  exit 0
+fi
+
+# A pull request's checkout is its merge with the base, whose first parent is the base.
+changed=$(git diff --name-only HEAD^1 HEAD)
+if ! grep -qx 'omarchy-mac/version' <<<"$changed"; then
+  echo "omarchy-mac/version is unchanged."
+elif [[ $changed == "omarchy-mac/version" && ${GITHUB_HEAD_REF:-} == "release/omarchy-mac-$(<omarchy-mac/version)" ]]; then
+  echo "Release bump of omarchy-mac to $(<omarchy-mac/version)."
+else
+  echo "Only a release bump changes omarchy-mac/version: a pull request from release/omarchy-mac-<the new version> that changes nothing else (CONTRIBUTING.md, Releases)." >&2
+  exit 1
+fi
