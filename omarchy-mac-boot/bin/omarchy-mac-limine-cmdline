@@ -9,9 +9,14 @@
 # Limine's KERNEL_CMDLINE[default]: root=UUID= of the root filesystem, rw, one
 # rootflags= carrying the subvolume a btrfs root mounts (fstab's subvol= or
 # subvolid=; none on ext4 and other filesystems) and every flag GRUB's variables added, then
-# GRUB_CMDLINE_LINUX and GRUB_CMDLINE_LINUX_DEFAULT without repeats. Both
-# loaders boot the same line. Linked as /etc/boot/hooks/pre.d/20-omarchy-mac-cmdline
-# it runs before every UKI rebuild; omarchy-mac-boot-update runs it too.
+# the words Omarchy's limine-entry-tool drop-ins give KERNEL_CMDLINE[default]
+# (omarchy-defaults.conf among them), then GRUB_CMDLINE_LINUX and
+# GRUB_CMDLINE_LINUX_DEFAULT, without repeats. The assignment this writes to
+# /etc/default/limine replaces what the drop-ins add, so their boot defaults
+# reach a Mac only through this line; GRUB's come last so the Mac's own and the
+# owner's words win. Both loaders boot the same line. Linked as
+# /etc/boot/hooks/pre.d/20-omarchy-mac-cmdline it runs before every UKI
+# rebuild; omarchy-mac-boot-update runs it too.
 
 set -uo pipefail
 set -f
@@ -19,11 +24,32 @@ set -f
 grub_default=${OMARCHY_GRUB_DEFAULT:-/etc/default/grub}
 limine_default=${OMARCHY_LIMINE_DEFAULT:-/etc/default/limine}
 fstab=${OMARCHY_FSTAB:-/etc/fstab}
+dropins=${OMARCHY_LIMINE_DROPINS:-/etc/limine-entry-tool.d}
 
 [[ -f $grub_default && -f $limine_default ]] || exit 0
 
 grub_value() {
   sed -n "s/^$1=//p" "$grub_default" | tail -n 1 | sed -E "s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/"
+}
+
+# KERNEL_CMDLINE[default] as the drop-ins leave it, read rather than sourced,
+# in the order limine-entry-tool sources them: += appends, = starts over.
+dropin_cmdline() {
+  local - file line value cmdline=""
+  set +f # the script runs with globbing off; only this listing needs it
+  for file in "$dropins"/*.conf; do
+    [[ -f $file ]] || continue
+    while IFS= read -r line; do
+      [[ $line =~ ^[[:space:]]*KERNEL_CMDLINE\[default\](\+?)=[\"\']([^\"\']*)[\"\'][[:space:]]*$ ]] || continue
+      value=${BASH_REMATCH[2]}
+      if [[ -n ${BASH_REMATCH[1]} ]]; then
+        cmdline+=" $value"
+      else
+        cmdline=$value
+      fi
+    done <"$file"
+  done
+  printf '%s\n' "$cmdline"
 }
 
 # The installed system's root filesystem, as fstab names it (also right from
@@ -56,7 +82,7 @@ if [[ $root_fstype == btrfs ]]; then
   [[ -z $selector ]] || rootflags=("$selector")
 fi
 words=()
-for word in $(grub_value GRUB_CMDLINE_LINUX) $(grub_value GRUB_CMDLINE_LINUX_DEFAULT); do
+for word in $(dropin_cmdline) $(grub_value GRUB_CMDLINE_LINUX) $(grub_value GRUB_CMDLINE_LINUX_DEFAULT); do
   case $word in
     root=* | rw | ro) ;;
     rootflags=*)
