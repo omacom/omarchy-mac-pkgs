@@ -48,3 +48,5 @@ The conversion runs in the initramfs before `sysroot.mount`. It shrinks the file
 ## Boot verification
 
 After an update that touches the boot path, `omarchy-mac-boot` checks the kernel, the initramfs hooks, the device trees, the m1n1 payload and the Limine entries against what the installed packages say they should be. A mismatch stops the update before it offers a reboot. Hand-editing any of those files makes the next check fail, which is the point.
+
+If `DTBS` lists one device tree more than once, the check preserves each occurrence's bytes, including a package-overlaid copy and a plain copy of the same tree.
