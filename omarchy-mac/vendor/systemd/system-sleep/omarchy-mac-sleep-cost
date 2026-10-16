@@ -1,0 +1,3 @@
+#!/bin/bash
+# systemd-sleep runs this with pre|post and the action around every sleep.
+exec /usr/lib/omarchy-mac/sleep-cost "$@"

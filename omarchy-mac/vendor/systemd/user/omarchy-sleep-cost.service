@@ -1,0 +1,14 @@
+[Unit]
+Description=Show what the last suspend used from the battery
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStart=/usr/lib/omarchy-mac/sleep-cost watch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target
