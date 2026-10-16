@@ -24,6 +24,8 @@ BOOT_UUID=4f4d5801-424f-4f54-8000-000000000001
 
 # shellcheck source=boot-image-layout.sh
 source "$MAC_BOOT_ROOT/usr/lib/omarchy-mac/boot/boot-image-layout.sh"
+# shellcheck source=grub-keep.sh
+source "$MAC_BOOT_ROOT/usr/lib/omarchy-mac/boot/grub-keep.sh"
 
 log_step() { printf '%s\n' "$*" >&2; }
 
@@ -90,10 +92,16 @@ apple_rekey_boot() {
   if grep -q 'rd.luks.key=' "$GRUB_DEFAULT"; then
     grub_drop_rd_luks_key "$GRUB_DEFAULT" || return 1
   fi
-  if ! mkinitcpio -P </dev/null >&2 || ! omarchy-mac-boot-update >&2; then
-    log_step "mkinitcpio or omarchy-mac-boot-update failed while dropping the staged key"
-    return 1
+  # A Limine Mac without GRUB boots only the UKI, and omarchy-mac-boot-update
+  # builds it: that is the one initramfs build the re-key needs, as in
+  # omarchy-mac-encrypt. /boot's image is rebuilt only where GRUB can boot it.
+  if limine_mac && ! grub_tools_present; then
+    omarchy-mac-boot-update >&2 && return
+  elif "$MAC_BOOT_ROOT/usr/bin/mkinitcpio" -P </dev/null >&2 && omarchy-mac-boot-update >&2; then
+    return
   fi
+  log_step "mkinitcpio or omarchy-mac-boot-update failed while dropping the staged key"
+  return 1
 }
 
 state_get() {
@@ -112,16 +120,47 @@ limine_mac() {
 # The initramfs that asks for the owner's password must load the vendor
 # firmware first, or an M2 or later laptop's keyboard cannot type it.
 initramfs_orders_firmware() {
-  local kernel listing
+  local kernel
   kernel=$(omarchy-mac-kernel) || return 1
-  if ! listing=$(lsinitcpio -l "$MAC_BOOT_ROOT/boot/initramfs-$kernel.img" 2>/dev/null); then
-    log_step "cannot list /boot/initramfs-$kernel.img"
+  image_orders_firmware "$MAC_BOOT_ROOT/boot/initramfs-$kernel.img" "/boot/initramfs-$kernel.img"
+}
+
+# The images this Mac boots: on a Limine Mac the initramfs inside its UKI,
+# and /boot's image besides wherever GRUB is kept, because GRUB's retained
+# entries boot it -- also where OMARCHY_MAC_BOOT_UPDATE_GRUB only suppressed
+# the rebuild. Elsewhere GRUB boots /boot's image.
+boot_image_orders_firmware() {
+  local kernel uki image status=0
+  limine_mac || {
+    initramfs_orders_firmware
+    return
+  }
+  kernel=$(omarchy-mac-kernel) || return 1
+  uki=$(limine_esp_path)/EFI/Linux/omarchy_$kernel.efi
+  image=$(mktemp) || return 1
+  if objcopy -O binary --only-section=.initrd "$MAC_BOOT_ROOT$uki" "$image" 2>/dev/null && [[ -s $image ]]; then
+    image_orders_firmware "$image" "the initramfs inside $uki" || status=1
+  else
+    log_step "cannot read the initramfs inside $uki"
+    status=1
+  fi
+  rm -f "$image"
+  if grub_tools_present; then
+    image_orders_firmware "$MAC_BOOT_ROOT/boot/initramfs-$kernel.img" "/boot/initramfs-$kernel.img" || status=1
+  fi
+  return "$status"
+}
+
+image_orders_firmware() {
+  local listing
+  if ! listing=$(lsinitcpio -l "$1" 2>/dev/null); then
+    log_step "cannot list $2"
     return 1
   fi
   grep -Eq '(^|/)usr/lib/systemd/system-generators/systemd-cryptsetup-generator$' <<<"$listing" &&
     grep -Eq '(^|/)usr/lib/systemd/system/omarchy-vendorfw-initrd\.service$' <<<"$listing" &&
     grep -Eq '(^|/)usr/lib/systemd/system/systemd-cryptsetup@\.service\.d/omarchy-vendorfw-initrd\.conf$' <<<"$listing" || {
-    log_step "/boot/initramfs-$kernel.img does not load the vendor firmware before the disk password prompt"
+    log_step "$2 does not load the vendor firmware before the disk password prompt"
     return 1
   }
 }
@@ -297,7 +336,7 @@ provision_prepare() {
 
   luks_device_found ||
     refuse "Could not find the encrypted disk that /etc/crypttab names."
-  initramfs_orders_firmware ||
+  boot_image_orders_firmware ||
     refuse "The boot image would ask for the disk password before the keyboard firmware loads."
   esp_selected ||
     refuse "The EFI partition this Mac boots from is not where its boot files are written."
@@ -317,7 +356,7 @@ provision_commit() {
   # The boot-partition key goes last: until then the initramfs still unlocks
   # with it, so a failure only has to put rd.luks.key= back, whichever attempt
   # dropped it.
-  if ! apple_rekey_boot || ! initramfs_orders_firmware || ! boot_image_types_layout; then
+  if ! apple_rekey_boot || ! boot_image_orders_firmware || ! boot_image_types_layout; then
     if [[ -f $BOOT_LUKS_KEY ]] && ! grep -q 'rd.luks.key=' "$GRUB_DEFAULT" 2>/dev/null; then
       log_step "restoring rd.luks.key= for the retry"
       grub_restore_rd_luks_key && omarchy-mac-boot-update >&2 || true

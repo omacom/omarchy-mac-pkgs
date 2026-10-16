@@ -43,7 +43,10 @@ done
 chmod 755 "$lifecycle/usr/lib/omarchy/mac-boot"/*
 chmod -R go-w "$lifecycle"
 
-cat >"$stub_bin/mkinitcpio" <<SH
+# The re-key builds with the image root's own mkinitcpio; the stub sits where
+# the fixed path below MAC_BOOT_ROOT resolves in tests.
+mkdir -p "$root/usr/bin"
+cat >"$root/usr/bin/mkinitcpio" <<SH
 #!/bin/bash
 echo "mkinitcpio \$*" >>"$calls"
 [[ ! -e $tmp/fail-mkinitcpio ]] || exit 1
@@ -51,6 +54,7 @@ printf '%s\n' ./usr/lib/systemd/system-generators/systemd-cryptsetup-generator \
   ./usr/lib/systemd/system/omarchy-vendorfw-initrd.service \\
   ./usr/lib/systemd/system/systemd-cryptsetup@.service.d/omarchy-vendorfw-initrd.conf >"$root/boot/initramfs-linux-aurora.img"
 SH
+chmod +x "$root/usr/bin/mkinitcpio"
 # The image holds no vconsole.conf, like one built for a Mac left on the US map.
 cat >"$stub_bin/lsinitcpio" <<'SH'
 #!/bin/bash
@@ -259,7 +263,7 @@ fixture() {
   printf 'root UUID=%s none luks\n' "$luks_uuid" >"$root/etc/crypttab"
   : >"$root/dev/disk/by-uuid/$luks_uuid"
   printf 'format=1\nencrypt=1\n' >"$root/var/lib/omarchy/mac-first-boot/install.conf"
-  "$stub_bin/mkinitcpio" && : >"$calls"
+  "$root/usr/bin/mkinitcpio" && : >"$calls"
   printf '0 throwaway-install-key\n' >"$slots"
   rm -f "$tmp"/fail-* "$tmp/token-slot" "$tmp/token-id" "$screen" "$tmp/gum-stdin"
   rm -rf "$units"
