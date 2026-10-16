@@ -289,6 +289,7 @@ attempt() {
 # the splash), so this dismisses Plymouth and opens tty1 itself, keeping the
 # journal descriptors for the retry that follows.
 console_tty=${OMARCHY_MAC_FIRST_BOOT_TTY:-/dev/tty1}
+external_displays=${OMARCHY_MAC_EXTERNAL_DISPLAYS:-/usr/lib/omarchy/mac-boot/external-displays}
 console_taken=0
 take_console() {
   [[ -z $root && -w $console_tty ]] || return 0
@@ -297,6 +298,8 @@ take_console() {
     plymouth quit 2>/dev/null || true
   fi
   command -v chvt >/dev/null 2>&1 && chvt 1 2>/dev/null || true
+  # With external displays held, the console was sized for them; fill the panel.
+  [[ ! -x $external_displays ]] || "$external_displays" fit || true
   exec {journal_out}>&1 {journal_err}>&2
   exec <"$console_tty" >"$console_tty" 2>&1
   printf '\033c'
