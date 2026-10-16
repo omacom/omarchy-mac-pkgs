@@ -135,7 +135,7 @@ run_restore() {
     eval "$(limine_mac_env "$path")"
     export PATH="$path:$PATH"
     export CALLS="$tmp/calls" HOOKS_DIR="$hooks" OMARCHY_PROC_ROOT="$tmp/$platform/proc" OMARCHY_CMDLINE="$tmp/cmdline"
-    export OMARCHY_LIMINE_GATE="$mac_root/var/lib/omarchy/limine.enabled" OMARCHY_LIMINE_DEFAULT="$mac_root/etc/default/limine"
+    export OMARCHY_LIMINE_GATE="$mac_root/var/lib/omarchy/limine.enabled" OMARCHY_LIMINE_DEFAULT="$mac_root/etc/default/limine" OMARCHY_LIMINE_DROPINS="$mac_root/etc/limine-entry-tool.d"
     export OMARCHY_BOOT_DIR="$mac_root/boot" BOOTED="$tmp/booted"
     export OMARCHY_SNAPSHOT_TOP="$tmp/top" OMARCHY_SNAPSHOT_RESTORE_LOCK="$tmp/restore.lock" OMARCHY_SNAPSHOT_CHECK_STATE="$tmp/state"
     export MAC_UKI="$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"

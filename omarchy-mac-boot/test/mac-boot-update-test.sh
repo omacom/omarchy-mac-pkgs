@@ -38,7 +38,7 @@ printf 'GRUB_CMDLINE_LINUX="rd.luks.name=abc=root"\nGRUB_CMDLINE_LINUX_DEFAULT="
 printf 'UUID=root-uuid / btrfs subvol=@ 0 0\n' >"$fstab"
 
 run() {
-  OMARCHY_LIMINE_GATE="$gate" OMARCHY_LIMINE_DEFAULT="$limine_default" OMARCHY_GRUB_DEFAULT="$grub_default" \
+  OMARCHY_LIMINE_GATE="$gate" OMARCHY_LIMINE_DEFAULT="$limine_default" OMARCHY_LIMINE_DROPINS="$test_tmp/limine-entry-tool.d" OMARCHY_GRUB_DEFAULT="$grub_default" \
     OMARCHY_FSTAB="$fstab" PATH="$stub_bin:$PATH" bash "$update"
 }
 
