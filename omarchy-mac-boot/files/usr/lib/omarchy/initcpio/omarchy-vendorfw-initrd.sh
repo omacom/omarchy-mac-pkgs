@@ -29,14 +29,30 @@ log_missing() {
 }
 
 esp=
-dt=/proc/device-tree/chosen/asahi,efi-system-partition
+dt=${OMARCHY_VENDORFW_DEVICE_TREE_ESP:-/proc/device-tree/chosen/asahi,efi-system-partition}
 if [ -e "$dt" ]; then
     esp=$(tr -d '\0' <"$dt")
 fi
 
 dev=
 i=0
-while [ "$i" -lt 50 ]; do
+# About fourteen seconds, the unit's JobTimeoutSec, for the NVMe to come up.
+# The device tree's ESP goes first: this boot used it, and the late
+# omarchy-vendorfw.sh mounts it.
+while [ "$i" -lt 140 ]; do
+    if [ -n "$esp" ]; then
+        if [ -e "/dev/disk/by-partuuid/$esp" ]; then
+            dev="/dev/disk/by-partuuid/$esp"
+            break
+        fi
+        if command -v blkid >/dev/null 2>&1; then
+            found=$(blkid -l -t "PARTUUID=$esp" -o device 2>/dev/null || true)
+            if [ -n "$found" ]; then
+                dev=$found
+                break
+            fi
+        fi
+    fi
     if [ -e "/dev/disk/by-uuid/$image_esp_uuid" ]; then
         dev="/dev/disk/by-uuid/$image_esp_uuid"
         break
@@ -48,14 +64,12 @@ while [ "$i" -lt 50 ]; do
             break
         fi
     fi
-    if [ -n "$esp" ] && [ -e "/dev/disk/by-partuuid/$esp" ]; then
-        dev="/dev/disk/by-partuuid/$esp"
-        break
-    fi
     sleep 0.1
     i=$((i + 1))
 done
-[ -n "$dev" ] || log_missing "EFI system partition $image_esp_uuid is not available; vendor firmware was not staged"
+if [ -z "$dev" ]; then
+    log_missing "neither the device tree's ESP (PARTUUID ${esp:-none named}) nor the image ESP $image_esp_uuid is available; vendor firmware was not staged"
+fi
 
 mkdir -p "$mnt"
 mount -o ro "$dev" "$mnt"
