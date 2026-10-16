@@ -1,0 +1,25 @@
+#!/bin/bash
+# udev runs this as the SMC AC supply appears and whenever it changes. On AC the
+# CPUs run the performance governor; on battery they return to the kernel's
+# default, schedutil. It never fails the event: anything unexpected leaves the
+# governors alone.
+set -euo pipefail
+
+ac_file="/sys/class/power_supply/macsmc-ac/online"
+policies="/sys/devices/system/cpu/cpufreq/policy*"
+
+omarchy-hw-apple-silicon 2>/dev/null || exit 0
+[[ -r $ac_file ]] || exit 0
+
+read -r ac <"$ac_file" || exit 0
+case $ac in
+  1) governor=performance ;;
+  0) governor=schedutil ;;
+  *) exit 0 ;;
+esac
+
+for policy in $policies; do
+  [[ -w $policy/scaling_governor ]] || continue
+  grep -qw -- "$governor" "$policy/scaling_available_governors" 2>/dev/null || continue
+  printf '%s\n' "$governor" >"$policy/scaling_governor" || true
+done
