@@ -1,0 +1,13 @@
+[Unit]
+Description=Rebind hci_bcm4377 when Bluetooth times out after resume
+After=suspend.target
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/lib/omarchy-mac/bluetooth-supported
+ExecStart=/usr/bin/omarchy-bluetooth-resume-fix
+TimeoutStartSec=120
+
+[Install]
+WantedBy=suspend.target
