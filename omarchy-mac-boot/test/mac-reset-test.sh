@@ -128,7 +128,7 @@ echo "omarchy-mac-boot-update \$cmdline" >>"$calls"
 [[ ! -e $test_tmp/fail-boot-update ]] || exit 1
 esp=$root\${TEST_ESP-/boot/efi}
 if [[ -e $next/var/lib/omarchy/limine.enabled ]]; then
-  printf 'ESP_PATH="%s"\nKERNEL_CMDLINE[default]="%s"\n' "\${TEST_ESP-/boot/efi}" "\$cmdline" >"$next/etc/default/limine"
+  printf 'ESP_PATH="%s"\nKERNEL_CMDLINE[default]+="%s"\n' "\${TEST_ESP-/boot/efi}" "\$cmdline" >"$next/etc/default/limine"
   mkdir -p "\$esp/EFI/Linux" "\$esp/EFI/BOOT"
   printf 'new uki' >"\$esp/EFI/Linux/omarchy_linux-aurora.efi"
   printf 'new limine' >"\$esp/EFI/BOOT/BOOTAA64.EFI"
@@ -202,7 +202,7 @@ limine_fixture() {
   printf 'timeout: 3\n# path: boot():/EFI/Linux/removed.efi#0123abcd\n/+Omarchy\ncomment: machine-id=%s\n  //linux-aurora\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi#%s\n' \
     "$old_id" "$(b2sum "$esp/EFI/Linux/omarchy_linux-aurora.efi" | cut -d' ' -f1)" >"$esp/limine.conf"
   : >"$root/var/lib/omarchy/limine.enabled"
-  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID=x rw quiet rd.luks.name=%s=root"\n' "$luks_uuid" >"$root/etc/default/limine"
+  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]+="root=UUID=x rw quiet rd.luks.name=%s=root"\n' "$luks_uuid" >"$root/etc/default/limine"
   : >"$next/var/lib/omarchy/limine.enabled"
   printf 'ESP_PATH="/boot/efi"\n' >"$next/etc/default/limine"
 }

@@ -9,9 +9,11 @@
 # Limine's KERNEL_CMDLINE[default]: root=UUID= of the root filesystem, rw, one
 # rootflags= carrying the subvolume a btrfs root mounts (fstab's subvol= or
 # subvolid=; none on ext4 and other filesystems) and every flag GRUB's variables added, then
-# GRUB_CMDLINE_LINUX and GRUB_CMDLINE_LINUX_DEFAULT without repeats. Both
-# loaders boot the same line. Linked as /etc/boot/hooks/pre.d/20-omarchy-mac-cmdline
-# it runs before every UKI rebuild; omarchy-mac-boot-update runs it too.
+# GRUB_CMDLINE_LINUX and GRUB_CMDLINE_LINUX_DEFAULT without repeats. It is
+# written with +=, so limine-entry-tool appends what /etc/limine-entry-tool.d/
+# drop-ins add after it; GRUB, the fallback loader, boots without those. Linked
+# as /etc/boot/hooks/pre.d/20-omarchy-mac-cmdline it runs before every UKI
+# rebuild; omarchy-mac-boot-update runs it too.
 
 set -uo pipefail
 set -f
@@ -84,8 +86,9 @@ write_failed() {
 }
 tmp=$(mktemp) || write_failed "no temporary file"
 trap 'rm -f "$tmp"' EXIT
-awk -v line="KERNEL_CMDLINE[default]=\"$cmdline\"" '
-  /^KERNEL_CMDLINE\[default\]/ { if (!done) { print line; done = 1 }; next }
+awk -v line="KERNEL_CMDLINE[default]+=\"$cmdline\"" '
+  # Limine trims leading space, so an indented line counts as one too.
+  /^[[:space:]]*KERNEL_CMDLINE\[default\][[:space:]]*\+?=/ { if (!done) { print line; done = 1 }; next }
   { print }
   END { if (!done) print line }
 ' "$limine_default" >"$tmp" || write_failed "could not stage the new command line"

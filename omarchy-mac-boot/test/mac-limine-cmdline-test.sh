@@ -31,7 +31,7 @@ run() {
 }
 
 run || fail "omarchy-mac-limine-cmdline succeeds"
-want="KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=subvol=@,x-systemd.device-timeout=0 rd.luks.name=$luks=root rd.luks.key=$luks=/omarchy/luks-key:UUID=boot zswap.enabled=0 rootfstype=btrfs quiet splash\""
+want="KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw rootflags=subvol=@,x-systemd.device-timeout=0 rd.luks.name=$luks=root rd.luks.key=$luks=/omarchy/luks-key:UUID=boot zswap.enabled=0 rootfstype=btrfs quiet splash\""
 grep -Fxq "$want" "$limine" ||
   fail "the command line is root=UUID from fstab, rw, one merged rootflags with subvol=@, then GRUB's words without repeats" "$(cat "$limine")"
 (( $(grep -c '^KERNEL_CMDLINE\[default\]' "$limine") == 1 )) || fail "exactly one KERNEL_CMDLINE[default] line"
@@ -92,19 +92,19 @@ printf '#!/bin/bash\nexit 1\n' >"$stub_bin/findmnt"
 printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n' >"$grub"
 printf 'UUID=%s / ext4 rw,relatime 0 1\n' "$root_uuid" >"$fstab"
 PATH="$stub_bin:$PATH" run || fail "run on an ext4 root succeeds"
-grep -Fxq "KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw quiet splash\"" "$limine" ||
+grep -Fxq "KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw quiet splash\"" "$limine" ||
   fail "an ext4 root gets no rootflags" "$(cat "$limine")"
 printf 'GRUB_CMDLINE_LINUX_DEFAULT="rootflags=x-systemd.device-timeout=0 quiet"\n' >"$grub"
 PATH="$stub_bin:$PATH" run || fail "run on an ext4 root with GRUB rootflags succeeds"
-grep -Fxq "KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=x-systemd.device-timeout=0 quiet\"" "$limine" ||
+grep -Fxq "KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw rootflags=x-systemd.device-timeout=0 quiet\"" "$limine" ||
   fail "an ext4 root keeps GRUB's rootflags without subvol=" "$(cat "$limine")"
 printf 'UUID=%s / btrfs rw,noatime,subvol=/@root 0 0\n' "$root_uuid" >"$fstab"
 PATH="$stub_bin:$PATH" run || fail "run on a btrfs root with its own subvolume succeeds"
-grep -Fxq "KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=subvol=@root,x-systemd.device-timeout=0 quiet\"" "$limine" ||
+grep -Fxq "KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw rootflags=subvol=@root,x-systemd.device-timeout=0 quiet\"" "$limine" ||
   fail "a btrfs root boots the subvolume fstab mounts" "$(cat "$limine")"
 printf 'UUID=%s / btrfs rw,noatime 0 0\n' "$root_uuid" >"$fstab"
 PATH="$stub_bin:$PATH" run || fail "run on a btrfs root with no subvolume succeeds"
-grep -Fxq "KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=x-systemd.device-timeout=0 quiet\"" "$limine" ||
+grep -Fxq "KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw rootflags=x-systemd.device-timeout=0 quiet\"" "$limine" ||
   fail "a btrfs root mounted without a subvolume boots its default one" "$(cat "$limine")"
 # No fstab row: the mounted root.
 printf '# nothing\n' >"$fstab"
@@ -117,7 +117,7 @@ case "$*" in
 esac
 SH
 PATH="$stub_bin:$PATH" run || fail "run on a mounted ext4 root succeeds"
-grep -Fxq 'KERNEL_CMDLINE[default]="root=UUID=mounted-root-uuid rw rootflags=x-systemd.device-timeout=0 quiet"' "$limine" ||
+grep -Fxq 'KERNEL_CMDLINE[default]+="root=UUID=mounted-root-uuid rw rootflags=x-systemd.device-timeout=0 quiet"' "$limine" ||
   fail "without an fstab row the mounted root's filesystem decides" "$(cat "$limine")"
 pass "rootflags carry the subvolume only a btrfs root mounts"
 
@@ -149,3 +149,44 @@ PATH="$stub_bin:$PATH" run 2>/dev/null || status=$?
 (( status >= 100 )) || fail "a failed staging file aborts the rebuild (status $status)"
 rm "$stub_bin/mktemp"
 pass "write failures abort the UKI rebuild"
+
+# A Mac set up before += keeps a plain = line; the next run rewrites it, so
+# drop-ins reach its entries from the next UKI rebuild on.
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet"\n' >"$grub"
+printf 'UUID=%s / ext4 rw 0 1\n' "$root_uuid" >"$fstab"
+printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID=old rw quiet"\n' >"$limine"
+run || fail "the run over an old = line succeeds"
+grep -Fxq "KERNEL_CMDLINE[default]+=\"root=UUID=$root_uuid rw quiet\"" "$limine" &&
+  ! grep -q '^KERNEL_CMDLINE\[default\]=' "$limine" || fail "an old = line becomes +=" "$(cat "$limine")"
+printf 'ESP_PATH="/boot/efi"\n  KERNEL_CMDLINE[default]="root=UUID=old rw quiet"\n' >"$limine"
+run || fail "the run over an indented = line succeeds"
+[[ $(grep -c 'KERNEL_CMDLINE\[default\]' "$limine") == 1 ]] && ! grep -q 'root=UUID=old' "$limine" ||
+  fail "an indented = line is replaced, not left beside the new one" "$(cat "$limine")"
+pass "an existing = line is rewritten with +="
+
+# limine-entry-tool loads /etc/limine-entry-tool.d/*.conf before
+# /etc/default/limine, so only += keeps what a drop-in appended. Runs the real
+# tool in a user namespace with stand-ins bound over its config paths.
+if command -v limine-entry-tool >/dev/null && unshare -rm true 2>/dev/null &&
+  [[ -d /etc/limine-entry-tool.d && -f /etc/default/limine ]]; then
+  stand_in=$test_tmp/entry-tool
+  mkdir -p "$stand_in/d" "$stand_in/esp" "$stand_in/empty-dir"
+  : >"$stand_in/empty-file"
+  printf 'KERNEL_CMDLINE[default]+=" initramfs_async=0"\nKERNEL_CMDLINE[default]+=" systemd.tty.term.console=dumb"\n' \
+    >"$stand_in/d/10-defaults.conf"
+  printf 'ESP_PATH="%s"\n' "$stand_in/esp" >"$limine"
+  run || fail "the run for the entry tool succeeds"
+  # shellcheck disable=SC2016 # expanded by the namespace's shell
+  result=$(unshare -rm bash -c '
+    mount --bind "$1/d" /etc/limine-entry-tool.d && mount --bind "$2" /etc/default/limine || exit 1
+    [[ ! -f /etc/limine-entry-tool.conf ]] || mount --bind "$1/empty-file" /etc/limine-entry-tool.conf || exit 1
+    [[ ! -d /usr/share/limine-entry-tool.d ]] || mount --bind "$1/empty-dir" /usr/share/limine-entry-tool.d || exit 1
+    limine-entry-tool --get-cmdline linux-aurora --no-mutex --no-hooks | tail -n 1' _ "$stand_in" "$limine") ||
+    fail "limine-entry-tool reads the command line"
+  [[ $result == "root=UUID=$root_uuid rw quiet "* && " $result " == *" initramfs_async=0 "* &&
+    " $result " == *" systemd.tty.term.console=dumb "* ]] ||
+    fail "the drop-in's words follow the derived line in limine-entry-tool's command line" "$result"
+  pass "limine-entry-tool appends the drop-ins' words to the derived command line"
+else
+  printf 'skip - %s\n' "limine-entry-tool, a user namespace or its config paths are unavailable; its command line is not checked here"
+fi
