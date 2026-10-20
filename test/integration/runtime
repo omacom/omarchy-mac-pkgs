@@ -1,4 +1,4 @@
 # The Omarchy runtime CI tests the packages against: a repository and a full commit.
-# Move it deliberately, like a recipe pin. Today upstream quattro, where
-# omacom/omarchy#14431 merged.
-omacom/omarchy e1b0e5e9bb72b15dc494458925655bf32656382b
+# Move it deliberately, like a recipe pin. Today upstream quattro at the merge of
+# omacom/omarchy#14675, the fingerprint-readers detector.
+omacom/omarchy 81fd2d23ca6e3462183a4dc8360de3113fa8d80c

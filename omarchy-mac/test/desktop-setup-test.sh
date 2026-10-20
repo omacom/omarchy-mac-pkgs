@@ -13,11 +13,13 @@ for entry in setup-system setup-user; do
     fail "the $entry entrypoint is staged for omarchy-lifecycle-dispatch"
 done
 platform=$stage/usr/share/omarchy-platform
-for file in key-names display-cutouts.json displays.conf keyrings audio.json; do
+for file in key-names display-cutouts.json displays.conf keyrings audio.json fingerprint-readers; do
   [[ -f $platform/$file && ! -L $platform/$file ]] || fail "$file is staged in the platform root"
 done
 [[ $(grep -v '^#' "$platform/keyrings") == asahi-alarm-keyring ]] ||
   fail 'the platform names the [asahi-alarm] keyring for omarchy update to refresh'
+[[ $(grep -v '^#' "$platform/fingerprint-readers") == "/sys/bus/platform/drivers/apple_sep/*/diag/touchid ready" ]] ||
+  fail 'the platform names Touch ID by the Secure Enclave driver reporting it ready'
 python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$platform/display-cutouts.json" ||
   fail 'the cutout description is valid JSON'
 [[ ! -e $stage/usr/share/omarchy ]] || fail "nothing is staged in the omarchy package's tree"
