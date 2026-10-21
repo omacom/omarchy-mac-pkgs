@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+# Prints a framebuffer's visible size as "WIDTH HEIGHT", or sets it.
+#
+#   fb-geometry fbN
+#   fb-geometry fbN WIDTH HEIGHT
+#
+# Setting keeps the buffer and the display modes: DRM's fbdev emulation takes
+# any visible size inside its buffer, and the kernel console resizes every
+# terminal on it. Exits 1 when the framebuffer can't be read or refuses the size.
+use strict;
+use warnings;
+
+my $dev = $ENV{OMARCHY_DEV} // '/dev';
+my $FBIOGET_VSCREENINFO = 0x4600;
+my $FBIOPUT_VSCREENINFO = 0x4601;
+my $FB_ACTIVATE_ALL = 64;    # FB_ACTIVATE_NOW, for every console on it
+
+my ($fb, @size) = @ARGV;
+unless (defined $fb && $fb =~ /^fb[0-9]+$/ &&
+  (!@size || (@size == 2 && !grep { !/^[1-9][0-9]{0,4}$/ } @size))) {
+  print STDERR "Usage: fb-geometry fbN [WIDTH HEIGHT]\n";
+  exit 2;
+}
+
+open my $fh, @size ? '+<' : '<', "$dev/$fb" or exit 1;
+my $var = "\0" x 160;    # struct fb_var_screeninfo: 40 __u32
+ioctl($fh, $FBIOGET_VSCREENINFO, $var) or exit 1;
+my @var = unpack 'L40', $var;
+unless (@size) {
+  print "$var[0] $var[1]\n";
+  exit 0;
+}
+@var[0, 1] = @size;    # xres, yres
+@var[4, 5] = (0, 0);   # xoffset, yoffset
+$var[21] = $FB_ACTIVATE_ALL;
+$var = pack 'L40', @var;
+ioctl($fh, $FBIOPUT_VSCREENINFO, $var) or exit 1;
+exit 0;
