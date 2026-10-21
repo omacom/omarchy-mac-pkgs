@@ -5,14 +5,18 @@ build() {
     add_module dm-crypt
     add_module ext4
     add_module vfat
-    # Register power and boot state before a long first-boot conversion.
-    # The watchdog can then be serviced without waiting for the root mount.
-    add_module macsmc
-    add_module spmi_apple_controller
-    add_module apple_nvmem_spmi
-    add_module nvmem_apple_efuses
-    add_module macsmc_reboot
-    add_module apple_wdt
+    # U-Boot leaves the SoC watchdog running with a 60 second timeout.
+    # Load its driver here so the kernel services it through long initramfs
+    # work (first-boot conversion, the UKI rebuild, a passphrase prompt)
+    # instead of only after the root mount. The SMC and PMU NVMEM drivers
+    # record boot state and provide reboot from the initramfs. Optional,
+    # since some kernels build these drivers in.
+    add_module macsmc?
+    add_module spmi_apple_controller?
+    add_module apple_nvmem_spmi?
+    add_module nvmem_apple_efuses?
+    add_module macsmc_reboot?
+    add_module apple_wdt?
     add_all_modules '/crypto/'
 
     local binary

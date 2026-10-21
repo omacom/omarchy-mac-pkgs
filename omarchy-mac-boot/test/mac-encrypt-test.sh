@@ -31,8 +31,8 @@ grep -Eq '\bcryptsetup\b' "$INSTALL" && grep -Eq '\bbtrfs\b' "$INSTALL" && grep 
 grep -Fq 'add_file /usr/lib/omarchy/initcpio/omarchy-mac-encrypt' "$INSTALL" ||
   fail "the install hook copies the unit script into the initramfs"
 for module in macsmc spmi_apple_controller apple_nvmem_spmi nvmem_apple_efuses macsmc_reboot apple_wdt; do
-  grep -Fq "add_module $module" "$INSTALL" ||
-    fail "the initramfs includes $module before the root mount"
+  grep -Fxq "    add_module $module?" "$INSTALL" ||
+    fail "the initramfs includes $module before the root mount, optional when built in"
 done
 
 grep -Fq 'After=systemd-udevd.service systemd-udev-trigger.service systemd-udev-settle.service omarchy-vendorfw-initrd.service' "$UNIT" &&
