@@ -50,6 +50,10 @@ The default decodes H.264, HEVC and VP9 on the Apple Video Decoder with copy-bac
 
 A set limit is saved as `CHARGE_CONTROL_END_THRESHOLD=` in `/etc/udev/macsmc-battery.conf`, the file asahi-scripts' own rule restores from, so both agree on one value. The package's udev rule runs `/usr/lib/omarchy-mac/battery-charge-limit-restore` when the SMC battery appears at boot; it reapplies a saved 80 or 100 on Apple Silicon and otherwise leaves the SMC alone. Nothing needs enabling.
 
+## Built-in keyboard keys
+
+Omarchy binds screenshots to Print and the keyboard backlight to `XF86KbdBrightnessUp`/`Down`, and an Apple Silicon MacBook's keyboard has neither key. `/usr/lib/udev/hwdb.d/90-omarchy-mac-keyboard.hwdb` remaps three top-row keys on the built-in keyboard only (`Apple SPI Keyboard` on M1, `Apple MTP keyboard` on M2 and later): F4 (Spotlight) to Print (`sysrq`), and F5 (Dictation) and F6 (Do Not Disturb) to keyboard backlight down and up (`kbdillumdown`, `kbdillumup`). They send these with or without Fn. External keyboards keep their keys. systemd's pacman hook rebuilds the hwdb; the remap applies from the next boot or `udevadm trigger`.
+
 ## Keyboard function-key mode
 
 The built-in keyboard binds to `hid_apple`, whose `fnmode` decides what the top row sends. Apple Silicon uses the kernel's default, `fnmode=3` (auto): Apple keyboards send mute, volume, brightness and media first with F1-F12 behind Fn, as in macOS, and the non-Apple boards `hid_apple` recognises (Keychron and similar) keep F-keys first. The package ships no `hid_apple` option and the desktop install leaf writes none on Apple Silicon, so any option the owner sets wins, whatever its file name. For F-keys first on the Mac, write `options hid_apple fnmode=2` to `/etc/modprobe.d/hid_apple.conf` and rebuild the boot image (`sudo mkinitcpio -P`, or `sudo omarchy-mac-boot-update` on a Limine Mac): `hid_apple` loads from the initramfs with the options it was built with.
