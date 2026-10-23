@@ -74,7 +74,7 @@ run() {
   TEST_CALLS="$calls" TEST_ESP="$esp" TEST_UPDATE_GRUB_DEFAULT="$etc/update-grub" TEST_LIMINE_DEFAULT="$etc/limine" \
   TEST_GRUB_DIR="$test_tmp/boot/grub" OMARCHY_GRUB_DIR="$test_tmp/boot/grub" \
   OMARCHY_PATH="$test_tmp/runtime" OMARCHY_ESP="$esp" OMARCHY_LIMINE_EFI="$test_tmp/share/limine/BOOTAA64.EFI" \
-  OMARCHY_GRUB_DEFAULT="$etc/grub" OMARCHY_UPDATE_GRUB_DEFAULT="$etc/update-grub" OMARCHY_LIMINE_DEFAULT="$etc/limine" \
+  OMARCHY_GRUB_DEFAULT="$etc/grub" OMARCHY_UPDATE_GRUB_DEFAULT="$etc/update-grub" OMARCHY_LIMINE_DEFAULT="$etc/limine" OMARCHY_LIMINE_DROPINS="$etc/limine-entry-tool.d" \
   OMARCHY_GRUB_TARGET="$test_tmp/boot/grub/grub-aa64.efi" OMARCHY_LIMINE_BOOT_HOOKS_DIR="$etc/boot/hooks/pre.d" \
   OMARCHY_PACMAN_HOOKS_DIR="$etc/pacman.d/hooks" OMARCHY_SYSTEMD_DIR="$etc/systemd/system" \
   OMARCHY_LIMINE_GATE="$test_tmp/limine.enabled" OMARCHY_FSTAB="$etc/fstab" \
@@ -137,7 +137,7 @@ status=0
 TEST_CALLS="$calls" TEST_ESP="$esp" TEST_UPDATE_GRUB_DEFAULT="$etc/update-grub" TEST_LIMINE_DEFAULT="$etc/limine" \
   TEST_GRUB_DIR="$test_tmp/boot/grub" OMARCHY_GRUB_DIR="$test_tmp/boot/grub" \
   OMARCHY_PATH="$test_tmp/runtime" OMARCHY_ESP="$esp" OMARCHY_LIMINE_EFI="$test_tmp/share/limine/BOOTAA64.EFI" \
-  OMARCHY_GRUB_DEFAULT="$etc/grub" OMARCHY_UPDATE_GRUB_DEFAULT="$etc/update-grub" OMARCHY_LIMINE_DEFAULT="$etc/limine" \
+  OMARCHY_GRUB_DEFAULT="$etc/grub" OMARCHY_UPDATE_GRUB_DEFAULT="$etc/update-grub" OMARCHY_LIMINE_DEFAULT="$etc/limine" OMARCHY_LIMINE_DROPINS="$etc/limine-entry-tool.d" \
   OMARCHY_GRUB_TARGET="$test_tmp/boot/grub/grub-aa64.efi" OMARCHY_LIMINE_BOOT_HOOKS_DIR="$etc/boot/hooks/pre.d" \
   OMARCHY_PACMAN_HOOKS_DIR="$etc/pacman.d/hooks" OMARCHY_SYSTEMD_DIR="$etc/systemd/system" \
   OMARCHY_LIMINE_GATE="$test_tmp/limine.enabled" OMARCHY_FSTAB="$etc/fstab" \

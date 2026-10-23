@@ -26,8 +26,10 @@ KERNEL_CMDLINE[default]=""
 BOOT_ORDER="linux-aurora, *, Snapshots"
 CONF
 
+dropins="$test_tmp/limine-entry-tool.d"
+
 run() {
-  OMARCHY_GRUB_DEFAULT="$grub" OMARCHY_LIMINE_DEFAULT="$limine" OMARCHY_FSTAB="$fstab" bash "$cmdline"
+  OMARCHY_GRUB_DEFAULT="$grub" OMARCHY_LIMINE_DEFAULT="$limine" OMARCHY_FSTAB="$fstab" OMARCHY_LIMINE_DROPINS="$dropins" bash "$cmdline"
 }
 
 run || fail "omarchy-mac-limine-cmdline succeeds"
@@ -81,7 +83,7 @@ pass "no UUID, no change, a failure"
 
 # Nothing to derive from: the file is left alone.
 cp "$limine" "$test_tmp/before"
-OMARCHY_GRUB_DEFAULT="$test_tmp/missing" OMARCHY_LIMINE_DEFAULT="$limine" OMARCHY_FSTAB="$fstab" bash "$cmdline" ||
+OMARCHY_GRUB_DEFAULT="$test_tmp/missing" OMARCHY_LIMINE_DEFAULT="$limine" OMARCHY_FSTAB="$fstab" OMARCHY_LIMINE_DROPINS="$dropins" bash "$cmdline" ||
   fail "a missing GRUB default file is not an error"
 cmp -s "$limine" "$test_tmp/before" || fail "a missing GRUB default file changes nothing"
 pass "no GRUB defaults, no change"
@@ -149,3 +151,45 @@ PATH="$stub_bin:$PATH" run 2>/dev/null || status=$?
 (( status >= 100 )) || fail "a failed staging file aborts the rebuild (status $status)"
 rm "$stub_bin/mktemp"
 pass "write failures abort the UKI rebuild"
+
+# Omarchy's limine-entry-tool drop-ins add boot defaults to
+# KERNEL_CMDLINE[default] (omacom/omarchy#15223). The assignment written here
+# replaces them, so their words join the line: before GRUB's, so the Mac's and
+# the owner's words come last, and without repeats.
+printf 'UUID=%s / btrfs subvol=@ 0 0\n' "$root_uuid" >"$fstab"
+printf 'GRUB_CMDLINE_LINUX="rd.luks.name=%s=root"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3"\n' "$luks" >"$grub"
+mkdir -p "$dropins"
+cat >"$dropins/omarchy-defaults.conf" <<'CONF'
+TARGET_OS_NAME="Omarchy"
+
+KERNEL_CMDLINE[default]+=" quiet splash loglevel=0 vt.global_cursor_default=0"
+
+# A comment about the next line.
+KERNEL_CMDLINE[default]+=" initramfs_async=0"
+KERNEL_CMDLINE[default]+=" systemd.tty.term.console=dumb"
+CUSTOM_UKI_NAME="omarchy"
+CONF
+PATH="$stub_bin:$PATH" run || fail "run with Omarchy's drop-in succeeds"
+want="KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=subvol=@ quiet splash loglevel=0 vt.global_cursor_default=0 initramfs_async=0 systemd.tty.term.console=dumb rd.luks.name=$luks=root loglevel=3\""
+grep -Fxq "$want" "$limine" || fail "the drop-in's words come before GRUB's, without repeats" "$(cat "$limine")"
+(( $(grep -c '^KERNEL_CMDLINE\[default\]' "$limine") == 1 )) || fail "still exactly one KERNEL_CMDLINE[default] line"
+cp "$limine" "$test_tmp/before"
+PATH="$stub_bin:$PATH" run || fail "second run with the drop-in succeeds"
+cmp -s "$limine" "$test_tmp/before" || fail "a second run with the drop-in changes nothing"
+pass "Omarchy's drop-in boot defaults reach the Mac's command line"
+
+# Drop-ins are read in name order, as limine-entry-tool sources them: a later
+# plain assignment starts over, single quotes count, and root=, rw and the root
+# subvolume stay the script's own.
+cat >"$dropins/zz-owner.conf" <<'CONF'
+KERNEL_CMDLINE[default]="root=/dev/elsewhere ro rootflags=subvol=@other,compress=zstd"
+KERNEL_CMDLINE[default]+=' owner.flag=1'
+CONF
+PATH="$stub_bin:$PATH" run || fail "run with an owner drop-in succeeds"
+want="KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=subvol=@,compress=zstd owner.flag=1 rd.luks.name=$luks=root quiet splash loglevel=3\""
+grep -Fxq "$want" "$limine" || fail "a later drop-in's assignment replaces the earlier words" "$(cat "$limine")"
+rm -rf "$dropins"
+PATH="$stub_bin:$PATH" run || fail "run without drop-ins succeeds"
+grep -Fxq "KERNEL_CMDLINE[default]=\"root=UUID=$root_uuid rw rootflags=subvol=@ rd.luks.name=$luks=root quiet splash loglevel=3\"" "$limine" ||
+  fail "without drop-ins the line is GRUB's alone" "$(cat "$limine")"
+pass "drop-ins are read in order, and leave root= and rw to the script"
