@@ -50,6 +50,10 @@ The default decodes H.264, HEVC and VP9 on the Apple Video Decoder with copy-bac
 
 A set limit is saved as `CHARGE_CONTROL_END_THRESHOLD=` in `/etc/udev/macsmc-battery.conf`, the file asahi-scripts' own rule restores from, so both agree on one value. The package's udev rule runs `/usr/lib/omarchy-mac/battery-charge-limit-restore` when the SMC battery appears at boot; it reapplies a saved 80 or 100 on Apple Silicon and otherwise leaves the SMC alone. Nothing needs enabling.
 
+## Bluetooth wake
+
+The kernel leaves wakeup disabled on the Bluetooth function and on the Apple PCIe root port above it, so a paired keyboard or mouse cannot wake the Mac from s2idle. `/usr/lib/omarchy-mac/bluetooth-wake-sync` enables both while `macsmc-ac` reports the charger online and disables them otherwise, so a Mac on a desk wakes from its keyboard and one in a bag stays asleep. It reads the SMC's charger, not the USB-C supplies, which a dock can report online while passing no power. The package's udev rule runs it whenever the charger changes state and when a BCM4378, BCM4387 or BCM4388 function appears behind `pcie-apple`, and its pacman hook runs it on install and upgrade. Nothing needs enabling.
+
 ## Keyboard function-key mode
 
 The built-in keyboard binds to `hid_apple`, whose `fnmode` decides what the top row sends. Apple Silicon uses the kernel's default, `fnmode=3` (auto): Apple keyboards send mute, volume, brightness and media first with F1-F12 behind Fn, as in macOS, and the non-Apple boards `hid_apple` recognises (Keychron and similar) keep F-keys first. The package ships no `hid_apple` option and the desktop install leaf writes none on Apple Silicon, so any option the owner sets wins, whatever its file name. For F-keys first on the Mac, write `options hid_apple fnmode=2` to `/etc/modprobe.d/hid_apple.conf` and rebuild the boot image (`sudo mkinitcpio -P`, or `sudo omarchy-mac-boot-update` on a Limine Mac): `hid_apple` loads from the initramfs with the options it was built with.

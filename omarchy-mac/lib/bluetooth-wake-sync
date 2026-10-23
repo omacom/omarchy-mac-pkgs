@@ -1,0 +1,25 @@
+#!/bin/bash
+# Bluetooth input wakes the Mac only while the charger is connected: on a desk,
+# never in a bag. Wake needs the Bluetooth function and its PCIe root port.
+# udev and the package hook run this as root; it never fails either.
+set -uo pipefail
+
+sys=/sys
+
+omarchy-hw-apple-silicon 2>/dev/null || exit 0
+
+wake=disabled
+read -r online 2>/dev/null <"$sys/class/power_supply/macsmc-ac/online"
+if [[ ${online:-} == "1" ]]; then
+  wake=enabled
+fi
+
+for device in "$sys"/bus/pci/devices/*; do
+  read -r vendor 2>/dev/null <"$device/vendor" || continue
+  read -r product 2>/dev/null <"$device/device" || continue
+  if [[ $vendor == "0x14e4" && $product =~ ^0x5f(69|71|72)$ ]]; then
+    printf '%s\n' "$wake" 2>/dev/null >"$device/power/wakeup"
+    printf '%s\n' "$wake" 2>/dev/null >"$device/../power/wakeup"
+  fi
+done
+exit 0
