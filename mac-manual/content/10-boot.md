@@ -37,6 +37,7 @@ There is one kernel, `linux-aurora`, built in omarchy-pkgs from a pinned commit 
 The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcpio hooks, and `omarchy-mac-boot` adds Apple fragments on top, in order, rather than overwriting it. The fragments only apply on an Apple Silicon Mac:
 
 - `MODULES` entries for the Apple keyboard and trackpad drivers, added only when the running kernel really has them as modules, so a kernel that builds a driver in does not break a later `mkinitcpio -P`;
+- `apple_pmp`, the power management coprocessor's driver, on the same terms, so an encrypted root does not wait 20 seconds for it before the passphrase prompt;
 - a vendor firmware service that copies Apple firmware onto the root, and a second copy before `cryptsetup-pre.target` on encrypted Macs, so Wi-Fi and input work at the passphrase prompt;
 - a Plymouth drop-in, so the passphrase prompt is graphical;
 - the `kmod-static-nodes` ordering fix that btrfs roots need on Apple hardware.

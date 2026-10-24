@@ -3,9 +3,10 @@
 # omarchy-lifecycle-dispatch setup-boot [image-first-boot]. The platform setup
 # leaf runs this at the end of hardware setup, before omarchy-mac's
 # setup-system: the GRUB console settings, then the Limine activation on a Mac
-# that opted in. On an image's first boot the Limine leaf asks for the boot
-# rebuild the deferred setup does once after its last step, rather than
-# building the UKI itself. Both leaves re-check the platform.
+# that opted in, then the M3 Air display default in m1n1.conf. On an image's
+# first boot the Limine leaf asks for the boot rebuild the deferred setup does
+# once after its last step, rather than building the UKI itself. Every leaf
+# re-checks the platform.
 
 set -euo pipefail
 
@@ -18,7 +19,7 @@ if (( EUID == 0 )); then
   # Root takes nothing from its caller's environment.
   exec /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin OMARCHY_PATH=/usr/share/omarchy \
     ${1:+OMARCHY_IMAGE_BOOT_REBUILD=/var/lib/omarchy/image/boot-rebuild} \
-    /bin/bash -euo pipefail -c 'source "$1/grub-console.sh" || exit 1; source "$1/limine-boot.sh" || exit 1' setup-boot "$setup"
+    /bin/bash -euo pipefail -c 'source "$1/grub-console.sh" || exit 1; source "$1/limine-boot.sh" || exit 1; source "$1/m1n1-display.sh" || exit 1' setup-boot "$setup"
 else
   # Unprivileged tests stage the package under a fixture root.
   root=${OMARCHY_MAC_BOOT_ROOT:-}
@@ -28,4 +29,5 @@ else
   fi
   source "$root$setup/grub-console.sh" || exit 1
   source "$root$setup/limine-boot.sh" || exit 1
+  source "$root$setup/m1n1-display.sh" || exit 1
 fi
