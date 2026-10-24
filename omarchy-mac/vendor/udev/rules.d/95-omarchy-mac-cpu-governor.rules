@@ -1,0 +1,2 @@
+# Run the CPUs on the performance governor on AC and return them to schedutil on battery.
+ACTION=="add|change", SUBSYSTEM=="power_supply", KERNEL=="macsmc-ac", RUN+="/usr/lib/omarchy-mac/cpu-governor-policy"
