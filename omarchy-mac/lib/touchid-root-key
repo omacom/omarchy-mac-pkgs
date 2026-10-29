@@ -1,7 +1,7 @@
 #!/usr/bin/python3 -I
 # SPDX-License-Identifier: MIT
 """Rebuilds a MacBook Neo's Touch ID sensor root key, apple/msrk-j700.bin,
-once its owner has agreed to turn Touch ID on.
+when its owner turns Touch ID on.
 
 The key is device-private. asahi-installer leaves this Mac's factory records
 on the ESP, in asahi/all_firmware.tar.gz; the key is the MSRk record's IM4P

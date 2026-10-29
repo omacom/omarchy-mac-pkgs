@@ -10,7 +10,7 @@ Operation = Upgrade
 Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules
 
 [Action]
-# Without the owner's agreement nothing is activated, only the status recorded.
+# Until Touch ID is turned on nothing is activated, only the status recorded.
 Description = Checking Touch ID...
 When = PostTransaction
 # Skipped in a chroot or an unbooted root (offline provisioning, image builds,
