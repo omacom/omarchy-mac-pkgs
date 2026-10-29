@@ -3,8 +3,8 @@
 # partition link as it probes and does not retry, so it loads after the link.
 # The wait for the link is part of the service, not a device dependency:
 # systemd waits for a unit's devices before it checks its conditions, so every
-# boot would wait on the partition, agreed or not, and a machine without one
-# would hold the greeter until the device timed out.
+# boot would wait on the partition, with Touch ID on or off, and a machine
+# without one would hold the greeter until the device timed out.
 [Unit]
 Description=Load the Touch ID driver
 ConditionPathExists=/etc/omarchy-mac/touchid-on

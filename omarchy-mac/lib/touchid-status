@@ -1,16 +1,16 @@
 #!/bin/bash
 # At boot, while Touch ID is off: records whether it can be set up, so Omarchy
-# can ask the owner. It never loads the driver; only the owner's agreement
-# (the record enable-fingerprint writes) turns Touch ID on.
+# can ask the owner. It never loads the driver; only the fingerprint setup (the
+# record enable-fingerprint writes) turns Touch ID on.
 
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
-agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+record=${OMARCHY_MAC_TOUCHID_RECORD:-/etc/omarchy-mac/touchid-on}
 helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
 omarchy-hw-apple-silicon || exit 0
 
 # Turned on: omarchy-mac-touchid-load.service loads the driver, and the
 # activation records the status.
-if [[ -e $agreed ]]; then
+if [[ -e $record ]]; then
   exit 0
 fi
 # A driver touchid-enable loaded this boot that never came up stays so until a
@@ -25,7 +25,7 @@ if [[ $eligibility == "none" ]]; then
   exit 0
 fi
 # An Omarchy without the hook would enrol a reader nothing turned on, and the
-# invitation comes once, so it is offered only where setup can ask first.
+# invitation comes once, so it is offered only where setup turns it on first.
 if [[ $eligibility == "available" && -z $(omarchy-lifecycle-dispatch --resolve enable-fingerprint 2>/dev/null) ]]; then
   eligibility=unsupported:runtime
 fi

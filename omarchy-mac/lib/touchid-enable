@@ -1,12 +1,12 @@
 #!/bin/bash
-# Turns Touch ID on once the owner has agreed: carves this Mac's calibration
-# (and on the Neo installs its sensor root key) if they are missing, records the
-# agreement so the driver loads at every boot, and loads it now.
+# Turns Touch ID on for the fingerprint setup: carves this Mac's calibration
+# (and on the Neo installs its sensor root key) if they are missing, records
+# that Touch ID is on so the driver loads at every boot, and loads it now.
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
 extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
-agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+record=${OMARCHY_MAC_TOUCHID_RECORD:-/etc/omarchy-mac/touchid-on}
 options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
 module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
@@ -22,14 +22,14 @@ python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
 lock_wait=${OMARCHY_MAC_TOUCHID_LOCK_WAIT:-300}
 omarchy-hw-apple-silicon || exit 0
 
-# Once this run records the agreement, a failure takes it back, so a Touch ID
+# Once this run writes the record, a failure takes it back, so a Touch ID
 # that never came up doesn't load at every boot and is offered again after a
-# restart. A record from an earlier agreement stays.
+# restart. A record from an earlier setup stays.
 recorded=0
 rebuilt=0
 fail() {
   if (( recorded )); then
-    rm -f "$agreed" "$options"
+    rm -f "$record" "$options"
   fi
   if (( rebuilt )); then
     rm -f "$firmware/updates/apple/msrk-j700.bin"
@@ -112,18 +112,18 @@ if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 && ! root_key_instal
   mkdir -p -m 0755 "$firmware/updates/apple"
   # No whole key was installed, so whatever takes its name from here is this run's:
   # a failure, even one the extractor reports after its rename, takes it back
-  # with the agreement.
+  # with the record.
   rebuilt=1
   "$python" -I "$helpers/touchid-root-key" --archive "$esp/asahi/all_firmware.tar.gz" --container "$container" \
     -o "$firmware/updates/apple/msrk-j700.bin" || fail "this Mac's sensor key could not be read"
 fi
 
-# The record is the agreement: omarchy-mac-touchid-load.service loads the
-# driver at every boot while it exists, and disable-fingerprint removes it.
-[[ -e $agreed ]] || recorded=1
-{ mkdir -p -m 0755 "${agreed%/*}" &&
-  printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." >"$agreed" &&
-  chmod 0644 "$agreed"; } || fail "the owner's agreement could not be recorded in $agreed"
+# While the record exists, omarchy-mac-touchid-load.service loads the driver at
+# every boot; disable-fingerprint removes it.
+[[ -e $record ]] || recorded=1
+{ mkdir -p -m 0755 "${record%/*}" &&
+  printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." >"$record" &&
+  chmod 0644 "$record"; } || fail "its record could not be written to $record"
 # The driver's options say so too. Today's kernels write by default, so this
 # changes nothing yet; a kernel that loads apple_sep read-only by default
 # (omacom/linux-aurora#180) writes only with it. A driver already running
@@ -160,7 +160,7 @@ if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   echo "Touch ID is on."
   exit 0
 elif (( preloaded )); then
-  # It was loaded before it could be told to write, so the agreement stands and
+  # It was loaded before it could be told to write, so the record stands and
   # takes effect when it loads again.
   echo "Touch ID turns on when this Mac restarts: its driver was already running without permission to write. Restart, then set up the fingerprint again." >&2
   exit 1
