@@ -6,27 +6,37 @@
 #               can see it: forces every connector but the built-in panel off,
 #               only while the splash runs, on a laptop whose lid is open
 #               (a shut lid, a desktop Mac or an unknown lid keeps them all)
+#   fit         after the splash quits and before tty1 shows anything (owner
+#               setup, first boot's failure screen): while the externals are
+#               held, fits the kernel console to the built-in panel
 #   release     omarchy-mac-external-displays.service, after the splash quits
 #               and owner setup ends, before the display manager: turns them
-#               back on
+#               back on and gives the kernel console back its own size
 #
 # "off" and "detect" in a connector's status set and clear the kernel's force;
 # neither sends a uevent, so release sends each card a synthetic change that
 # the udev rule makes a hotplug (HOTPLUG=1) for the display manager and
 # compositor. The kernel console keeps the heads it lit when the card came up,
 # so an external display may wake to a black console instead of staying
-# asleep. A boot that never reaches multi-user.target (emergency, rescue)
-# keeps the held displays off for that session.
+# asleep. It also keeps the size it chose then, the smallest of those heads: a
+# 1440-row monitor left owner setup on tty1 in the top two thirds of a
+# 2234-row panel. Fitting it to the panel while the externals are held fills
+# the panel; the release restores it. The fit waits for the splash to quit:
+# the kernel console keeps each terminal's size and puts it back as Plymouth
+# hands tty1 back. A boot that never reaches multi-user.target (emergency,
+# rescue) keeps the held displays off for that session.
 
 set -uo pipefail
 
 sysfs=${OMARCHY_SYSFS:-/sys}
 state=${OMARCHY_MAC_DISPLAYS_STATE:-/run/omarchy-mac}
 plymouth=${OMARCHY_PLYMOUTH:-/usr/bin/plymouth}
+fb_geometry=${OMARCHY_FB_GEOMETRY:-/usr/lib/omarchy/mac-boot/fb-geometry}
 lid_state=${OMARCHY_LID_STATE:-/usr/lib/omarchy/mac-boot/lid-state}
 logger=${OMARCHY_LOGGER:-/usr/bin/logger}
 held=$state/external-displays-held
 released=$state/external-displays-released
+fitted=$state/console-fitted
 
 # udev drops a RUN program's output, so the hold logs to the journal.
 note() {
@@ -97,11 +107,89 @@ hold() {
   return 0
 }
 
+same_device() {
+  local a b
+  a=$(readlink -f "$1/device" 2>/dev/null) && b=$(readlink -f "$2/device" 2>/dev/null) && [[ -n $a && $a == "$b" ]]
+}
+
+# The kernel console's size is the smallest display lit as its card came up;
+# with the externals held, the built-in panel is the only one showing it. The
+# panel's preferred mode is the one the console lit it with, clipped to the
+# console's buffer. The first fit records the kernel's size for the release.
+fit_console() {
+  local card=$1 fb="" path panel="" mode width height vwidth vheight current
+  for path in "$sysfs/class/graphics"/fb*; do
+    same_device "$path" "$sysfs/class/drm/$card" && fb=${path##*/} && break
+  done
+  [[ -n $fb ]] || return 0
+  for path in "$sysfs/class/drm/$card"-eDP-*; do
+    [[ -r $path/modes ]] && panel=$path && break
+  done
+  [[ -n $panel ]] && read -r mode <"$panel/modes" && [[ $mode =~ ^([0-9]+)x([0-9]+) ]] ||
+    { note "not fitting the console on $fb: the built-in panel has no mode"; return 0; }
+  width=${BASH_REMATCH[1]} height=${BASH_REMATCH[2]}
+  if IFS=, read -r vwidth vheight <"$sysfs/class/graphics/$fb/virtual_size" &&
+    [[ $vwidth =~ ^[0-9]+$ && $vheight =~ ^[0-9]+$ ]]; then
+    (( width <= vwidth )) || width=$vwidth
+    (( height <= vheight )) || height=$vheight
+  fi
+  if ! current=$("$fb_geometry" "$fb") || [[ ! $current =~ ^[0-9]+\ [0-9]+$ ]]; then
+    note "not fitting the console on $fb: its size can't be read"
+    return 0
+  fi
+  [[ $current != "$width $height" ]] || return 0
+  local recorded=false
+  if [[ ! -e $fitted ]]; then
+    printf '%s %s\n' "$fb" "$current" >"$fitted" || return 0
+    recorded=true
+  fi
+  if "$fb_geometry" "$fb" "$width" "$height"; then
+    note "fitted the console on $fb to the built-in panel: ${current/ /x} to ${width}x$height"
+  else
+    ! $recorded || rm -f "$fitted"
+    note "could not fit the console on $fb to the built-in panel (${width}x$height)"
+  fi
+}
+
+fit() {
+  local connector card cards=()
+  lock || return 0
+  [[ -s $held && ! -e $released ]] || return 0
+  if splash_running; then
+    note "not fitting the console while the splash runs"
+    return 0
+  fi
+  while IFS= read -r connector; do
+    card=${connector%%-*}
+    [[ $card =~ ^card[0-9]+$ && " ${cards[*]-} " != *" $card "* ]] && cards+=("$card")
+  done <"$held"
+  for card in "${cards[@]}"; do
+    fit_console "$card"
+  done
+  return 0
+}
+
+# The console goes back to the size the kernel chose, before the external
+# displays it was sized for come back.
+restore_console() {
+  local fb width height
+  [[ -e $fitted ]] || return 0
+  if read -r fb width height <"$fitted" && [[ $fb =~ ^fb[0-9]+$ && $width =~ ^[0-9]+$ && $height =~ ^[0-9]+$ ]]; then
+    if ! "$fb_geometry" "$fb" "$width" "$height"; then
+      echo "omarchy-mac-external-displays: could not give the console on $fb back its ${width}x$height" >&2
+      return 1
+    fi
+    echo "omarchy-mac-external-displays: gave the console on $fb back its ${width}x$height"
+  fi
+  rm -f "$fitted"
+}
+
 # A connector that cannot be turned on stays in the list for a restart.
 release() {
   local connector card cards=() still=() uuid status=0
   lock || echo "omarchy-mac-external-displays: releasing without the lock" >&2
   : >"$released" || status=1
+  restore_console || status=1
   [[ -f $held ]] || return "$status"
   while IFS= read -r connector; do
     [[ $connector =~ ^card[0-9]+-[A-Za-z0-9-]+$ ]] || continue
@@ -134,9 +222,10 @@ release() {
 
 case ${1:-} in
   hold) hold "${2:-}" ;;
+  fit) fit ;;
   release) release ;;
   *)
-    echo "Usage: ${0##*/} hold cardN | release" >&2
+    echo "Usage: ${0##*/} hold cardN | fit | release" >&2
     exit 2
     ;;
 esac
