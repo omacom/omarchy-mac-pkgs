@@ -53,3 +53,5 @@ Conversion stages, command exit status and non-progress diagnostics are retained
 ## Boot verification
 
 After an update that touches the boot path, `omarchy-mac-boot` checks the kernel, the initramfs hooks, the device trees, the m1n1 payload and the Limine entries against what the installed packages say they should be. A mismatch stops the update before it offers a reboot. Hand-editing any of those files makes the next check fail, which is the point.
+
+If `DTBS` lists one device tree more than once, the check preserves each occurrence's bytes, including a package-overlaid copy and a plain copy of the same tree, even when the installed image orders them differently. The overlay copies used for verification stay in its private work directory, including when the configuration sources the overlay library through a variable.
