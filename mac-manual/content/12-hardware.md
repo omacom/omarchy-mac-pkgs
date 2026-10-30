@@ -94,3 +94,7 @@ pacman-conf --repo-list
 For an update that stopped, add the update output and `/var/log/pacman.log`. For an installer that stopped, add the app's log folder under `~/Library/Logs/`.
 
 Never post passwords, Wi-Fi credentials, private keys or complete connection profiles.
+
+## Battery charge limits
+
+Use `omarchy-battery-charge-limit 80` to cap charging, or `omarchy-battery-charge-limit 100` to restore full charging. The saved limit is restored when the battery appears at boot and when an update installs its restore rule on a running Mac. Without a saved limit, installing the rule leaves charging unchanged.

@@ -161,3 +161,43 @@ rm "$battery/charge_control_end_threshold"
 "$restore" || fail 'restore without a battery succeeds'
 [[ ! -e $battery/charge_control_end_threshold ]] || fail 'restore without a battery writes nothing'
 pass 'restore ignores unsupported saved values, missing batteries and non-Apple platforms'
+
+# Installing the rule on a running machine produces no battery add event.
+# Exercise the actual hook command against the existing fixture device.
+hook="$stage/usr/share/libalpm/hooks/90-omarchy-mac-battery-charge-limit.hook"
+[[ -f $hook ]] || fail 'the battery restoration pacman hook is staged'
+grep -Fxq '[Trigger]' "$hook" && grep -Fxq 'Type = Path' "$hook" &&
+  grep -Fxq 'Operation = Install' "$hook" && grep -Fxq 'Operation = Upgrade' "$hook" &&
+  grep -Fxq 'Target = usr/lib/udev/rules.d/94-omarchy-mac-battery-charge-limit.rules' "$hook" &&
+  grep -Fxq '[Action]' "$hook" && grep -Fxq 'When = PostTransaction' "$hook" ||
+  fail 'the hook runs after installing or upgrading the battery rule'
+target=$(sed -n 's/^Target = //p' "$hook")
+[[ -f $stage/$target && $stage/$target == "$rule" ]] || fail 'the hook targets the staged battery rule'
+hook_command=$(sed -n "s/^Exec = \/usr\/bin\/sh -c '\(.*\)'$/\1/p" "$hook")
+[[ -n $hook_command ]] || fail 'the hook has an executable restore action'
+hook_command=${hook_command//\/usr\/lib\/omarchy-mac\/battery-charge-limit-restore/$restore}
+cat >"$work/bin/systemd-detect-virt" <<'STUB'
+#!/bin/bash
+[[ ${IN_CHROOT:-0} == 1 ]]
+STUB
+cat >"$work/bin/systemd-notify" <<'STUB'
+#!/bin/bash
+[[ ${SYSTEM_BOOTED:-1} == 1 ]]
+STUB
+chmod +x "$work/bin/systemd-detect-virt" "$work/bin/systemd-notify"
+smc 100 100
+printf 'CHARGE_CONTROL_END_THRESHOLD=80\n' >"$saved"
+sh -c "$hook_command" || fail 'the upgrade hook succeeds'
+[[ $(<"$battery/charge_control_end_threshold") == 80 ]] || fail 'the upgrade restores a saved limit without another device event'
+pass 'installing the rule restores a saved limit on an already-present battery'
+
+for scenario in 'IN_CHROOT=1' 'SYSTEM_BOOTED=0' 'PLATFORM=x86'; do
+  smc 100 100
+  env "$scenario" sh -c "$hook_command" || fail 'skipping the upgrade hook succeeds'
+  [[ $(<"$battery/charge_control_end_threshold") == 100 ]] || fail "$scenario never writes the device"
+done
+rm "$saved"
+smc 100 100
+sh -c "$hook_command" || fail 'a missing saved limit is harmless during upgrade'
+[[ $(<"$battery/charge_control_end_threshold") == 100 ]] || fail 'an upgrade without a saved limit changes nothing'
+pass 'upgrade restoration skips chroots, unbooted roots, other platforms and absent settings'
