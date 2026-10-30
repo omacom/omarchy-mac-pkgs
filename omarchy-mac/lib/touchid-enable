@@ -9,6 +9,7 @@ extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
 agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
 options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
 module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
 # Set once this script has loaded the driver this boot, so a retry after a
 # failure doesn't take that driver for one loaded without the options.
@@ -36,6 +37,17 @@ fail() {
   fi
   echo "Touch ID was not turned on: $1" >&2
   exit 1
+}
+
+diag() {
+  local file
+  for file in "$driver"/*/diag/"$1"; do
+    if [[ -r $file ]]; then
+      cat "$file"
+      return
+    fi
+  done
+  echo missing
 }
 
 installed() {
@@ -85,7 +97,11 @@ elif ! flock -w "$lock_wait" "$lock_fd"; then
   fail "another Touch ID setup or removal is still running; try again once it finishes"
 fi
 
+unfinished="Touch ID's key store was never finished: $keybag records that the Secure Enclave driver started creating it, not that it finished. The enclave may hold a key store the driver never named, so the driver won't create another while that record exists (omacom/linux-aurora#209)"
 eligibility=$("$helpers/touchid-eligibility")
+if [[ $eligibility == "unsupported:unfinished-keybag" ]]; then
+  fail "$unfinished"
+fi
 [[ $eligibility == "available" ]] || fail "this Mac can't use it yet ($eligibility)"
 
 # Factory data from this Mac's own iBoot System Container, never another's.
@@ -171,11 +187,32 @@ missing=""
 [[ -e $node_path ]] || missing="$node_path"
 [[ -e $keybag ]] || missing="${missing:+$missing and }$keybag"
 reason=$(cat "$status_file" 2>/dev/null)
+# An unfinished creation's record outlives the restart, so the status says
+# that rather than offering a retry.
+state=failed
+record=$("$helpers/touchid-eligibility" keybag)
+if [[ -n $missing && $record == "unfinished" ]]; then
+  state=unsupported:unfinished-keybag
+fi
 if [[ -n $missing || -z $reason || $reason == "available" ]]; then
-  mkdir -p -m 0755 "${status_file%/*}" && printf '%s\n' failed >"$status_file.new" &&
+  mkdir -p -m 0755 "${status_file%/*}" && printf '%s\n' "$state" >"$status_file.new" &&
     chmod 0644 "$status_file.new" && mv -f "$status_file.new" "$status_file"
 fi
 if [[ -n $missing ]]; then
+  # A write the xART guard refuses leaves the enclave unanswering until a
+  # restart (omacom/linux-aurora#209).
+  refusals=$(diag xart_guard_refusals)
+  if [[ $refusals =~ ^[1-9][0-9]*$ ]]; then
+    refused="the Secure Enclave's safety check refused a write while Touch ID's key store was being created (xart_guard_refusals $refusals, keybag $(diag keybag)), and the enclave stays unavailable until this Mac restarts"
+    # A kernel with omacom/linux-aurora#212 marks the refused creation
+    # retryable; one without it leaves the unfinished record.
+    if [[ $record == "unfinished" ]]; then
+      fail "$refused. Setting it up again won't work: $unfinished. See journalctl -k for apple_sep"
+    fi
+    fail "$refused. Restart, then set up the fingerprint again. See journalctl -k for apple_sep"
+  elif [[ $record == "unfinished" ]]; then
+    fail "the Secure Enclave driver loaded but $missing never appeared, and setting it up again won't work: $unfinished. See journalctl -k for apple_sep"
+  fi
   fail "the Secure Enclave driver loaded but $missing never appeared; see journalctl -k for apple_sep. The driver stays loaded until this Mac restarts; restart before trying again"
 fi
 [[ -n $reason && $reason != "available" ]] || reason="the activation recorded nothing"

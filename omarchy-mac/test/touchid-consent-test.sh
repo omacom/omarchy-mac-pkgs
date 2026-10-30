@@ -35,10 +35,12 @@ tree=$fixture/tree
 mkdir -p "$fixture/bin" "$fixture/extractors"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/omarchy-hw-apple-silicon"
 # The stub keeps the driver options it was loaded with, as modprobe reads them.
-# With no-node or no-keybag, the driver loads but that never appears.
-printf '#!/bin/sh\necho modprobe "$@" >>"%s"\ncp "%s" "%s" 2>/dev/null\n[ -e "%s" ] && exit 1\nmkdir -p "%s"\n[ -e "%s" ] || touch "%s"\n[ -e "%s" ] || touch "%s"\n' \
+# With no-node or no-keybag, the driver loads but that never appears; with
+# load-leaves, the load writes that file as the keybag record.
+printf '#!/bin/sh\necho modprobe "$@" >>"%s"\ncp "%s" "%s" 2>/dev/null\n[ -e "%s" ] && exit 1\nmkdir -p "%s"\n[ -e "%s" ] || touch "%s"\n[ -e "%s" ] && cp "%s" "%s"\n[ -e "%s" ] || touch "%s"\n' \
   "$fixture/calls" "$fixture/etc/modprobe.conf" "$fixture/options-at-load" "$fixture/modprobe-fails" \
-  "$fixture/module" "$fixture/no-node" "$fixture/sep-bio" "$fixture/no-keybag" "$fixture/keybag" >"$fixture/bin/modprobe"
+  "$fixture/module" "$fixture/no-node" "$fixture/sep-bio" "$fixture/load-leaves" "$fixture/load-leaves" "$fixture/keybag" \
+  "$fixture/no-keybag" "$fixture/keybag" >"$fixture/bin/modprobe"
 printf '#!/bin/sh\necho systemctl "$@" >>"%s"\n[ "$1" = start ] && printf "%%s\\n" "$(cat "%s")" >"%s"\nexit 0\n' \
   "$fixture/calls" "$fixture/activation" "$fixture/run/touchid" >"$fixture/bin/systemctl"
 printf '#!/bin/sh\n[ -e "%s" ] || echo /usr/lib/omarchy/mac/enable-fingerprint\n' "$fixture/no-hook" >"$fixture/bin/omarchy-lifecycle-dispatch"
@@ -134,7 +136,7 @@ key_copies() {
 # A device tree: the machine's compatible list, a sensor node, and the identity.
 machine() {
   rm -rf "$tree" "$fixture/firmware" "$fixture/run" "$fixture/etc" "$fixture/sep-bio" "$fixture/keybag" "$fixture/calls" "$fixture/no-hook" "$fixture/no-node" "$fixture/no-keybag" "$fixture/options-at-load" "$fixture/module" \
-    "$fixture/esp"
+    "$fixture/esp" "$fixture/driver" "$fixture/load-leaves"
   mkdir -p "$tree/soc/spi@39b108000/fingerprint@0" "$tree/chosen" "$fixture/firmware" "$fixture/run"
   printf '%s\0' "$@" >"$tree/compatible"
   printf 'apple,mesa-fingerprint\0' >"$tree/soc/spi@39b108000/fingerprint@0/compatible"
@@ -154,12 +156,17 @@ run() {
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
     OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
-    OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
+    OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag OMARCHY_MAC_TOUCHID_DRIVER=$fixture/driver \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
     OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} "$ROOT/lib/$1" "${@:2}"
 }
 eligibility() {
   run touchid-eligibility
+}
+# A keybag record as the driver writes it: header only, in the given state
+# (0 while the creation is unfinished, 2 once it was refused, 1 committed).
+keybag_record() {
+  { printf 'APPLE-SEP-KBAG01\x02\x00\x00\x00'; printf "\\x0$1\\x00\\x00\\x00"; head -c 28 /dev/zero; } >"$2"
 }
 
 machine apple,j414c apple,t6021 apple,arm-platform
@@ -194,6 +201,24 @@ rm "$fixture/esp/asahi/all_firmware.tar.gz"
 mkdir -p "$fixture/firmware/updates/apple"
 cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
 [[ $(eligibility) == "available" ]] || fail "a Neo whose sensor key is installed needs nothing else"
+# An unfinished creation's record makes the driver refuse every later one.
+machine apple,j414c apple,t6021 apple,arm-platform
+keybag_record 0 "$fixture/keybag"
+[[ $(stat -c %s "$fixture/keybag") == 52 && $(eligibility) == "unsupported:unfinished-keybag" &&
+  $(run touchid-eligibility keybag) == "unfinished" ]] ||
+  fail "a Mac whose earlier creation never finished can't set Touch ID up" "$(eligibility)"
+declare -A record=([1]=present [2]=refused [3]=present)
+for state in 1 2 3; do
+  keybag_record "$state" "$fixture/keybag"
+  [[ $(eligibility) == "available" && $(run touchid-eligibility keybag) == "${record[$state]}" ]] ||
+    fail "a key store record in state $state is no unfinished creation" "$(eligibility); $(run touchid-eligibility keybag)"
+done
+rm "$fixture/keybag"
+[[ -z $(run touchid-eligibility keybag) ]] || fail 'with no record there is nothing to say'
+: >"$fixture/keybag"
+[[ $(run touchid-eligibility keybag) == "present" ]] || fail 'a file the driver did not write as a record is still a key store' 
+printf 'APPLE-SEP-KBAG01' >"$fixture/keybag"
+[[ $(eligibility) == "available" ]] || fail 'a record too short to have a state is no unfinished creation'
 pass 'only a Mac whose setup can finish is available'
 
 # At boot the status says so for the detector, and never loads the driver.
@@ -429,6 +454,54 @@ touch "$fixture/no-keybag"
   [[ $(<"$fixture/run/touchid") == failed ]] ||
   fail "a keybag that never appears records failed and points at the kernel log" "$out"
 rm "$fixture/no-keybag"
+# The xART guard refused the enclave's write while it created the key store:
+# the enclave stops answering until a restart, so the node never appears.
+xart_refusal() {
+  machine apple,j414c apple,t6021 apple,arm-platform
+  touch "$fixture/no-node"
+  echo available >"$fixture/activation"
+  mkdir -p "$fixture/driver/396400000.sep/diag"
+  printf 'failed\n' >"$fixture/driver/396400000.sep/diag/keybag"
+  printf '%s\n' "$1" >"$fixture/driver/396400000.sep/diag/xart_guard_refusals"
+}
+# A kernel with omacom/linux-aurora#212 marks the creation retryable.
+xart_refusal 1
+keybag_record 2 "$fixture/load-leaves"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"safety check refused a write while Touch ID's key store was being created"* &&
+  $out == *"xart_guard_refusals 1, keybag failed"* && $out == *"until this Mac restarts. Restart, then set up the fingerprint again"* &&
+  $out == *"journalctl -k"* && $out != *"never appeared"* ]] &&
+  [[ $(<"$fixture/run/touchid") == failed && ! -e $fixture/etc/touchid-on && -e $fixture/keybag ]] ||
+  fail "a refused write says so, records failed, takes the agreement back and says to restart" "$out"
+# One without it leaves the creation's unfinished record, so a restart can't help.
+xart_refusal 1
+keybag_record 0 "$fixture/load-leaves"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"safety check refused a write"* && $out == *"Setting it up again won't work"* &&
+  $out == *"never named"* && $out != *"Restart, then set up"* ]] && cmp -s "$fixture/keybag" "$fixture/load-leaves" &&
+  [[ $(<"$fixture/run/touchid") == unsupported:unfinished-keybag ]] ||
+  fail "a refused write that leaves an unfinished record says setting up again won't work, and keeps the record" "$out; $(<"$fixture/run/touchid")"
+# An update in the same boot keeps that, rather than offering a retry.
+run touchid-status
+[[ $(<"$fixture/run/touchid") == unsupported:unfinished-keybag ]] ||
+  fail "an update in the same boot keeps the unfinished creation" "$(<"$fixture/run/touchid")"
+# Its next setup stops before anything loads, and leaves the record alone.
+: >"$fixture/calls"
+rm -f "$fixture/no-node" "$fixture/run/touchid-loaded"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"Touch ID's key store was never finished"* &&
+  $out == *"$fixture/keybag records"* && $out == *"omacom/linux-aurora#209"* ]] &&
+  ! grep -q modprobe "$fixture/calls" && [[ ! -e $fixture/etc/touchid-on ]] && cmp -s "$fixture/keybag" "$fixture/load-leaves" ||
+  fail "a setup after an unfinished creation stops before loading anything and keeps the record" "$out"
+# With no refusal the node's absence is the plain one.
+xart_refusal 0
+! out=$(run touchid-enable 2>&1) && [[ $out == *"never appeared"* && $out != *"safety check"* && $out != *"never finished"* ]] &&
+  [[ $(<"$fixture/run/touchid") == failed ]] ||
+  fail "with no refusal a node that never appears points at the kernel log" "$out"
+# A creation that timed out for another reason leaves the unfinished record too.
+xart_refusal 0
+keybag_record 0 "$fixture/load-leaves"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"never appeared, and setting it up again won't work"* && $out != *"safety check"* ]] &&
+  [[ $(<"$fixture/run/touchid") == unsupported:unfinished-keybag ]] ||
+  fail "a creation that never finished without a refusal says setting up again won't work" "$out"
+rm -rf "$fixture/no-node" "$fixture/driver"
 # The node and keybag appeared but the activation recorded nothing.
 machine apple,j414c apple,t6021 apple,arm-platform
 echo available >"$fixture/activation"
@@ -526,7 +599,8 @@ for name in enable-fingerprint disable-fingerprint; do
   chmod +x "$entry/$name"
 done
 printf '#!/bin/sh\necho enable >>"%s"\nexit 0\n' "$fixture/calls" >"$fixture/bin/enable-stub"
-printf '#!/bin/sh\ncat "%s"\n' "$fixture/eligibility" >"$fixture/bin/eligibility-stub"
+printf '#!/bin/sh\nif [ "$1" = keybag ]; then OMARCHY_MAC_TOUCHID_KEYBAG="%s" exec "%s" keybag; fi\ncat "%s"\n' \
+  "$fixture/keybag" "$ROOT/lib/touchid-eligibility" "$fixture/eligibility" >"$fixture/bin/eligibility-stub"
 chmod +x "$fixture/bin/enable-stub" "$fixture/bin/eligibility-stub"
 ask() {
   : >"$fixture/calls"
@@ -556,6 +630,18 @@ touch "$fixture/keybag"
   fail 'a Neo with a key store is told what applies to it' "$(<"$fixture/out")"
 [[ -z $(key_copies) ]] || fail "a Neo whose owner says no has no copy of its sensor key" "$(key_copies)"
 awk 'length > 80 { exit 1 }' "$fixture/out" || fail 'the prompt fits in 80 columns' "$(<"$fixture/out")"
+# A refused creation's record holds no key store, so one is created.
+machine apple,j414c apple,t6021 apple,arm-platform
+keybag_record 2 "$fixture/keybag"
+! ask available n && grep -q 'creates a key store' "$fixture/out" && ! grep -q 'earlier Touch ID setup created' "$fixture/out" ||
+  fail "a refused creation's record is not called an earlier key store" "$(<"$fixture/out")"
+# An agreed Mac whose creation never finished is told why, not to restart.
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+keybag_record 0 "$fixture/keybag"
+ask failed '' && grep -q "can't come up on this Mac" "$fixture/out" && grep -q 'never finished creating' "$fixture/out" &&
+  ! grep -q 'Restart this Mac' "$fixture/out" && [[ ! -s $fixture/calls ]] && awk 'length > 80 { exit 1 }' "$fixture/out" ||
+  fail 'an agreed Mac whose creation never finished is told why and lets the setup go on' "$(<"$fixture/out")"
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"
@@ -574,6 +660,10 @@ rm "$fixture/etc/touchid-on"
 # Where Touch ID can't be set up, the setup goes on, so a USB reader enrols.
 ask failed '' && grep -q 'Restart this Mac' "$fixture/out" && [[ ! -s $fixture/calls ]] ||
   fail 'a Touch ID that failed this boot lets setup go on and says to restart' "$(<"$fixture/out")"
+ask unsupported:unfinished-keybag '' && grep -q 'never finished creating' "$fixture/out" && grep -q 'goes on with any other' "$fixture/out" &&
+  grep -q 'omacom/linux-aurora#209' "$fixture/out" &&
+  ! grep -q 'Restart this Mac' "$fixture/out" && [[ ! -s $fixture/calls ]] && awk 'length > 80 { exit 1 }' "$fixture/out" ||
+  fail 'a Mac whose earlier creation never finished is told why and lets the setup go on' "$(<"$fixture/out")"
 ask unsupported:board '' && grep -q 'unsupported:board' "$fixture/out" && grep -q 'any other fingerprint reader' "$fixture/out" &&
   ! grep -q 'Restart this Mac' "$fixture/out" &&
   [[ ! -s $fixture/calls ]] || fail 'an unsupported Mac is told why, turns nothing on, and lets the setup go on' "$(<"$fixture/out")"

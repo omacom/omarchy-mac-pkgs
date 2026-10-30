@@ -107,6 +107,18 @@ for case in "${!expected[@]}"; do
   [[ $(<"$fixture/journal") == "Touch ID is not ready to enrol and match: "* ]] || fail 'the journal says why' "$case"
   [[ $(wc -l <"$fixture/sleeps") == 0 ]] || fail 'a final answer does not wait' "$case"
 done
+# A write the xART guard refused leaves the enclave unanswering until a
+# restart, and the journal says so; the status is the same failed.
+attributes failed unknown unknown blocked
+printf 'failed\n' >"$diag/keybag"
+printf '1\n' >"$diag/xart_guard_refusals"
+! activate && [[ $(<"$status") == failed ]] &&
+  [[ $(<"$fixture/journal") == *"safety check refused a write"*"until this Mac restarts"*"xart_guard_refusals 1"* ]] ||
+  fail 'an activation the xART guard broke records failed and says the guard refused a write' "$(<"$fixture/journal")"
+printf '0\n' >"$diag/xart_guard_refusals"
+! activate && [[ $(<"$fixture/journal") == *"activation failed (touchid failed)" ]] ||
+  fail 'with no refusal the failure is the plain one' "$(<"$fixture/journal")"
+rm "$diag/keybag" "$diag/xart_guard_refusals"
 attributes ready retrying unknown usable
 ! activate || fail 'an attach still retrying when the wait ends fails'
 [[ $(<"$status") == "not-ready" && $(wc -l <"$fixture/sleeps") == 90 ]] ||
