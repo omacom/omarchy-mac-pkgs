@@ -50,7 +50,7 @@ echo "limine-update" >>"$TEST_CALLS"
 mkdir -p "$TEST_ESP/EFI/Linux"
 printf 'UKI\n' >"$TEST_ESP/EFI/Linux/omarchy_linux-aurora.efi"
 if ! grep -q '^/+Omarchy' "$TEST_ESP/limine.conf"; then
-  cmdline=$(sed -n 's/^KERNEL_CMDLINE\[default\]="\(.*\)"$/\1/p' "$TEST_LIMINE_DEFAULT")
+  cmdline=$(sed -n 's/^KERNEL_CMDLINE\[default\]+\{0,1\}="\(.*\)"$/\1/p' "$TEST_LIMINE_DEFAULT")
   printf '/+Omarchy\n  //linux-aurora\n  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n  cmdline: %s\n' "$cmdline" >>"$TEST_ESP/limine.conf"
 fi
 SH
@@ -168,7 +168,7 @@ grep -Fxq "TARGET=\"$test_tmp/boot/grub/grub-aa64.efi\"" "$etc/update-grub" || f
 [[ $(cat "$test_tmp/boot/grub/grub-aa64.efi") == "GRUB image" ]] || fail "update-grub wrote its image to the unused target"
 [[ ! -e $esp/EFI/BOOT/grub-aa64.efi ]] || fail "no GRUB image is left on the ESP"
 [[ $(cat "$esp/EFI/BOOT/BOOTAA64.EFI") == "LIMINE v1" ]] || fail "Limine takes the U-Boot slot"
-grep -Fxq 'KERNEL_CMDLINE[default]="root=UUID=root-uuid rw rootflags=subvol=@,x-systemd.device-timeout=0 quiet splash"' "$etc/limine" ||
+grep -Fxq 'KERNEL_CMDLINE[default]+="root=UUID=root-uuid rw rootflags=subvol=@,x-systemd.device-timeout=0 quiet splash"' "$etc/limine" ||
   fail "the Limine command line is derived from GRUB's defaults" "$(cat "$etc/limine")"
 grep -Fxq 'BOOT_ORDER="linux-aurora, *, *fallback, Snapshots"' "$etc/limine" && grep -Fxq 'ENABLE_UKI=yes' "$etc/limine" ||
   fail "the Limine defaults name the kernel entry first and build a UKI"
@@ -254,7 +254,7 @@ diff <(sed '/^comment: machine-id=/d' "$esp/limine.conf") "$test_tmp/image-menu"
 [[ $(grep -A1 '^/+Omarchy$' "$esp/limine.conf" | tail -n 1) == "comment: machine-id=$(cat "$etc/machine-id")" ]] ||
   fail "the image's entry is keyed to this Mac" "$(cat "$esp/limine.conf")"
 [[ $(grep -c '^comment: machine-id=' "$esp/limine.conf") == 1 ]] || fail "the entry is keyed once" "$(cat "$esp/limine.conf")"
-grep -q '^KERNEL_CMDLINE\[default\]="root=UUID=root-uuid ' "$etc/limine" || fail "the rebuild's command line is derived" "$(cat "$etc/limine")"
+grep -q '^KERNEL_CMDLINE\[default\]+="root=UUID=root-uuid ' "$etc/limine" || fail "the rebuild's command line is derived" "$(cat "$etc/limine")"
 [[ $(cat "$esp/EFI/BOOT/BOOTAA64.EFI") == "LIMINE v2" ]] || fail "Limine keeps the U-Boot slot"
 pass "under deferred hardware setup the leaf keys the image's entry and leaves the one UKI build to the end"
 
@@ -386,3 +386,15 @@ chmod +x "$stub_bin/omarchy-mac-limine-deploy"
 if run; then fail "success without matching EFI bytes is refused"; fi
 [[ $(cat "$esp/EFI/BOOT/BOOTAA64.EFI") == "previous-efi" ]] || fail "false-success rollback retains the prior loader"
 pass "successful activation requires actual packaged EFI bytes"
+
+# The setup's check that the derived line names the root filesystem takes the
+# += line the helper writes and an older = line alike.
+check=$(sed -n "s/^  sudo grep -Eq \('[^']*'\) \"\$limine_default\".*no root= in the derived command line.*/\1/p" "$ROOT/setup/limine-boot.sh")
+[[ -n $check ]] || fail "the setup's root= check is found"
+for form in '+=' '='; do
+  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]%s"root=UUID=root-uuid rw quiet"\n' "$form" >"$test_tmp/forms"
+  eval "grep -Eq $check \"\$test_tmp/forms\"" || fail "the root= check accepts the $form form"
+done
+printf 'KERNEL_CMDLINE[default]+="rw quiet"\n' >"$test_tmp/forms"
+! eval "grep -Eq $check \"\$test_tmp/forms\"" || fail "the root= check refuses a line without root=UUID="
+pass "the setup's root= check takes both the += and = forms"
