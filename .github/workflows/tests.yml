@@ -70,7 +70,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/work" -w /work/omarchy-mac-pkgs \
             "$ARCH_IMAGE" sleep infinity
           docker exec arch pacman -Syu --noconfirm --needed \
-            git jq lua python python-yaml nodejs npm ripgrep shellcheck imagemagick ffmpeg kitty \
+            git jq lua python python-yaml kmod nodejs npm ripgrep shellcheck imagemagick ffmpeg kitty \
             gum plocate openssh unzip bc libarchive libxkbcommon desktop-file-utils glib2 sqlite dtc
           docker exec arch bash -c 'echo "en_US.UTF-8 UTF-8" >/etc/locale.gen && locale-gen'
           docker exec arch useradd --create-home --uid "$(id -u)" tester
@@ -96,6 +96,12 @@ jobs:
         run: |
           docker exec -u tester -e HOME=/home/tester -e OMARCHY_TEST_RUNTIME=/work/runtime \
             arch test/integration/all
+
+      - name: Standalone Touch ID migration transactions
+        if: ${{ !cancelled() && steps.arch.outcome == 'success' }}
+        run: |
+          docker exec -u tester -e HOME=/home/tester arch \
+            python3 -B tools/migration/test/transition-test.py
 
       # hardware/test/all and release/test/fork-parity also fail on quattro-upstream,
       # where CI never ran them; they join this list once fixed.
