@@ -24,6 +24,8 @@ Platforms name the runtime's own package lists (`install/omarchy-*.packages`), r
 
 ## Platform fixtures
 
+The repository order follows the runtime pinned in `test/integration/runtime`. In particular, these fixtures omit the retired Arch Linux ARM `aur` binary repository, as the runtime templates do. Moving that pin requires reconciling the fixtures with the selected runtime before treating a resolution run as representative.
+
 Each directory under `platforms/` holds a `pacman.conf` (only its repository order and servers are used) and a `platform` file sourced by `check`:
 
 - `lists`: package lists, relative to the repository root
