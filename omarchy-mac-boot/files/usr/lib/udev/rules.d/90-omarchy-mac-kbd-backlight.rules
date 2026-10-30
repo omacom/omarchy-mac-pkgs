@@ -1,0 +1,4 @@
+# leds_pwm registers the keyboard backlight off. Turn it on at half so the disk
+# passphrase can be typed in the dark; systemd-backlight restores the saved level
+# once the root is unlocked, and a backlight already on is left alone.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="kbd_backlight", DRIVERS=="leds_pwm", ATTR{brightness}=="0", ATTR{brightness}="128"

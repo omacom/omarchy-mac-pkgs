@@ -38,6 +38,7 @@ The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcp
 
 - `MODULES` entries for the Apple keyboard and trackpad drivers, added only when the running kernel really has them as modules, so a kernel that builds a driver in does not break a later `mkinitcpio -P`;
 - `apple_pmp`, the power management coprocessor's driver, on the same terms, so an encrypted root does not wait 20 seconds for it before the passphrase prompt;
+- `pwm-apple` and a udev rule, so the keyboard backlight is on at the passphrase prompt;
 - a vendor firmware service that copies Apple firmware onto the root, and a second copy before `cryptsetup-pre.target` on encrypted Macs, so Wi-Fi and input work at the passphrase prompt;
 - a Plymouth drop-in, so the passphrase prompt is graphical;
 - the `kmod-static-nodes` ordering fix that btrfs roots need on Apple hardware.
