@@ -1,0 +1,12 @@
+#!/bin/bash
+# Snapper cleanup still runs before Limine is activated on a retained GRUB Mac.
+# Only the readiness helper's explicit inactive status skips this menu sync.
+status=0
+/usr/lib/omarchy/mac-boot/limine-ready || status=$?
+if (( status == 100 )); then
+  exit 0
+elif (( status != 0 )); then
+  exit "$status"
+else
+  exec /usr/bin/limine-snapper-sync
+fi

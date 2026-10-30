@@ -23,7 +23,7 @@ So before a restore, the snapshot is checked against the current boot files, and
 
 The check runs from the snapshot you booted. A snapshot taken before your Mac had it restores unchecked, so compare its packages with the current ones first.
 
-A Mac that still boots GRUB, from before the move to Limine, has no snapshot menu, and Omarchy has no other way to restore a snapshot there. The move to Limine makes later snapshots restorable.
+A Mac that still boots GRUB, from before the move to Limine, has no snapshot menu, and Omarchy has no other way to restore a snapshot there. The move to Limine makes later snapshots restorable. Scheduled Snapper cleanup still prunes old snapshots on that Mac; it skips the Limine menu update until Limine is activated. A successful cleanup does not mean those snapshots can be booted or restored through GRUB.
 
 ## The boot menu stays
 
