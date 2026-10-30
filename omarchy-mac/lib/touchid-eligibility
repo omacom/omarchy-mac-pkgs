@@ -51,7 +51,8 @@ if compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; t
   echo unsupported:m1-family
   exit 0
 elif ! compatible apple,t8112 && ! compatible apple,t6020 && ! compatible apple,t6021 && ! compatible apple,t8140 &&
-  ! { compatible apple,t8122 && { compatible apple,j613 || compatible apple,j615; }; }; then
+  ! { compatible apple,t8122 && { compatible apple,j613 || compatible apple,j615; }; } &&
+  ! { compatible apple,t8132 && compatible apple,j715; }; then
   echo unsupported:board
   exit 0
 fi
@@ -68,14 +69,34 @@ calibration=apple/mesa_calibration.bin
 if [[ -r $sensor/firmware-name ]]; then
   calibration=$(tr -d '\0' <"$sensor/firmware-name")
 fi
-if ! installed "$calibration" && { compatible apple,t8140 || ! can_extract extract-mesa-calibration; }; then
+if ! installed "$calibration" && { compatible apple,t8140 || compatible apple,t8132 || ! can_extract extract-mesa-calibration; }; then
   echo unsupported:no-calibration
   exit 0
+fi
+# A 130427-byte J715 FSC2 body worked on one reference Mac.
+# Size rejects other-sized inputs, not another Mac's or forged data.
+# Check every lookup candidate so a good copy cannot hide a malformed shadow.
+if compatible apple,t8132; then
+  for directory in "$firmware" "$firmware/vendor" "$firmware/updates"; do
+    calibration_path=$directory/$calibration
+    if [[ -e $calibration_path || -L $calibration_path ]]; then
+      if [[ ! -f $calibration_path || ! -r $calibration_path ]] || [[ $(wc -c <"$calibration_path") != 130427 ]]; then
+        echo unsupported:invalid-calibration
+        exit 0
+      fi
+    fi
+  done
 fi
 # The Neo's sensor key is rebuilt once the owner agrees, by touchid-root-key
 # (Python), from the factory records asahi-installer leaves on the ESP.
 if compatible apple,t8140 && ! installed apple/msrk-j700.bin &&
   { [[ ! -r $esp/asahi/all_firmware.tar.gz ]] || ! command -v "$python" >/dev/null; }; then
+  echo unsupported:no-root-key
+  exit 0
+fi
+# J715 needs its own FDR MSRk and FSC2, not the Neo's reconstructed key or
+# the older calibration an extractor can find in the system container.
+if compatible apple,t8132 && ! installed apple/msrk-j715.bin; then
   echo unsupported:no-root-key
   exit 0
 fi

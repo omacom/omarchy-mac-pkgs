@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.2.3` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.2.4` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
@@ -38,6 +38,32 @@ The same directory holds the app hooks a runtime with the step 6 seam calls as t
 The logind drop-in `/usr/lib/systemd/logind.conf.d/20-omarchy-mac-sleep-key.conf` keeps logind from suspending on the top row's moon key, which the kernel reports as `KEY_SLEEP` but is Do Not Disturb on a Mac; it applies from the next boot or logind reload.
 
 Vendor defaults use NetworkManager's `/usr/lib/NetworkManager/conf.d`, systemd's `/usr/lib/systemd` and `/usr/lib/tmpfiles.d`, modprobe's `/usr/lib/modprobe.d`, and WirePlumber's `/usr/share/wireplumber/wireplumber.conf.d`. Same-name `/etc` or user fragments retain precedence. iwd has no vendor directory, so an `iwd.service` drop-in lists `/usr/lib/omarchy-mac/iwd` after `/etc/iwd`; iwd loads the first `main.conf` it can read, so an `/etc/iwd/main.conf` replaces the Apple one whole. The Apple default keeps iwd off 6 GHz: on the BCM4388 a join the firmware makes to a 6 GHz access point reports connected and authorized, yet the access point drops everything the Mac sends and DHCP never completes, so a network that also offers 5 GHz joins there instead. The firmware's own roaming can still move a weak connection onto 6 GHz, and `omarchy network band 6` cannot reach 6 GHz. Like the backend, it applies when iwd next starts: setup restarts nothing, so an upgraded Mac keeps 6 GHz until it reboots. Setup reports effective live NetworkManager/module configuration and systemd fragments. Review those reports and any drop-ins when diagnosing overrides; custom policy is never normalized to the package default.
+
+## J715 Touch ID
+
+J715 (the 15-inch M4 Air, `apple,j715` and `apple,t8132`) additionally needs a kernel with the J715 nonce-session support and this Mac's own installed 10848-byte FDR MSRk body at `apple/msrk-j715.bin`. Its FSC2 calibration must already be installed under the sensor node's `firmware-name`, or `apple/mesa_calibration.bin` when the node omits it. There is no automatic extraction path for this board: the older calibration carve and the Neo's root-key envelope are not substitutes. Eligibility checks the files without reading or copying the key. Enablement checks the existing body's observed size before it records consent or loads the driver. A length check does not authenticate the body: it must already have been acquired and verified for this Mac, and the enclave decides whether to accept it. Keep the key root-only. This package neither distributes private factory data nor recreates or resets existing enrollments.
+
+For J715, eligibility requires every present calibration candidate to be readable and 130427 bytes, the size observed working on one reference Mac. The comparison with an earlier failure was not a controlled A/B test. This deliberately rejects other sizes until they are tested. Size alone does not prove that a body is complete, authentic or this Mac's own.
+
+The existing consent-gated boot service loads the driver before the display manager and fprintd. Its failure does not prevent password login. An already enrolled fingerprint still needs the driver's successful restore and matching diagnostics on the new boot. Same-boot enrollment alone does not prove that.
+
+## Touch ID at the SDDM login screen
+
+Where SDDM is installed, enabling Touch ID also adds an authentication include to its stock `system-login` PAM stack. This applies on every supported board. The include preserves shell, nologin and account-lock checks. It copies the lockout options (`silent`, `deny=`, `unlock_time=`, `fail_interval=`) from the system's `system-auth`, so Omarchy's limits apply, and refuses any other option or rule there as administrator-owned. Account, password and session management remain the original SDDM configuration.
+
+An empty password asks for a fingerprint. Any other password skips the fingerprint and goes straight to the original password stack, so a greeter can start fingerprint requests on its own and still accept a typed password. An account with no password cannot log in at SDDM while Touch ID is on, since its empty password is read as a fingerprint request.
+
+The fingerprint is offered only while the user's session bus from an earlier login on this boot is still up (another session, linger or a user manager that outlived a logout), so the first login after each boot always uses the password. It is also never offered while a login keyring may be locked. If the running keyring lists a `login` collection, as on omarchy-mx-mac, that collection must be unlocked. Otherwise, whether the keyring is stopped or running without a `login` collection, the user must have no `login.keyring` file in `~/.local/share/keyrings` or the legacy `~/.gnome2/keyrings`, since a keyring from that file may be locked. Any check that cannot finish refuses.
+
+On omacom/omarchy, which removes `pam_gnome_keyring` from SDDM and uses a passwordless `Default_keyring`, there is no login keyring, so the fingerprint is offered. There Touch ID is a re-login feature: encrypted installs log in automatically once per boot, and a later SDDM screen accepts a fingerprint only while the user's bus survives.
+
+A fingerprint request ends after five seconds or three rejected fingers without trying the empty password. Rejections count toward the account lock and an accepted finger clears the count, as a password login does. The lockout options are copied when Touch ID setup runs, so after a change to the `pam_faillock` options in `system-auth`, run fingerprint setup again to carry them into the SDDM policy.
+
+The helper refuses custom authentication rules, symlinks and edited owned policy rather than overwriting them. The SDDM step is best effort: when the helper refuses, setup says so and fingerprint enrollment goes on with the login screen unchanged. Only a Mac whose owner agreed through the prompt that names the SDDM login screen gets the change. That agreement is recorded in `/etc/omarchy-mac/touchid-sddm`, so a Mac that agreed earlier is not changed unasked. Disabling Touch ID removes that record, removes only its own include and restores the original bytes. An `sddm` file that does not include the policy, a symlink included, never blocks removal. No SDDM restart is needed. Fingerprint login does not unlock a password-encrypted keyring or the LUKS root volume.
+
+If administrator-owned PAM configuration prevents removal of the include, disabling still removes the boot consent and driver options, but reports failure so the remaining PAM policy can be reviewed. It does not unload a driver that is already running.
+
+The earlier J715 port has restored an existing Linux enrollment after a complete shutdown and power-on and completed an SDDM fingerprint login. That login predates the keyring check and still needed a separate keyring unlock. This does not qualify the current upstream kernel or concurrent camera operation. The offline PAM tests exercise libpam itself, including password fallback and denied accounts, but they do not replace hardware checks on the matching kernel. Release this support only after that kernel and the userspace driver are available and qualified together.
 
 ## Video decode in mpv
 
