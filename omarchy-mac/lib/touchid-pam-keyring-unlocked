@@ -1,0 +1,82 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""Succeed only while PAM_USER's session bus is up and no login keyring is locked."""
+
+import os
+from pathlib import Path
+import pwd
+import subprocess
+import sys
+
+RUNTIME = Path("/run/user")
+SECRETS = "org.freedesktop.secrets"
+SERVICE = "/org/freedesktop/secrets"
+LOGIN = "/org/freedesktop/secrets/collection/login"
+# gnome-keyring's files for the login collection: the XDG path, and the legacy
+# one it falls back to when only that directory exists.
+LOGIN_FILES = (".local/share/keyrings/login.keyring", ".gnome2/keyrings/login.keyring")
+
+
+def unlocked(user: str, run=subprocess.run, runtime: Path = RUNTIME) -> bool:
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        return False
+    bus = runtime / str(entry.pw_uid) / "bus"
+    if not bus.is_socket():
+        return False
+    command = ["/usr/bin/setpriv", f"--reuid={entry.pw_uid}", f"--regid={entry.pw_gid}",
+               "--clear-groups", "--reset-env", "/usr/bin/busctl",
+               f"--address=unix:path={bus}", "--timeout=2"]
+
+    def ask(*arguments: str) -> str | None:
+        try:
+            done = run([*command, *arguments], capture_output=True, text=True,
+                       timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    # Asking whether the name has an owner never starts a stopped keyring.
+    owner = ask("call", "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                "org.freedesktop.DBus", "NameHasOwner", "s", SECRETS)
+
+    def no_login_keyring_file() -> bool:
+        # Checked as the user, so root never follows a path the user controls.
+        # Anything but a clean "neither file exists" refuses.
+        expression = [word for name in LOGIN_FILES
+                      for word in ("-a", "!", "-e", str(Path(entry.pw_dir) / name))][1:]
+        try:
+            done = run(["/usr/bin/setpriv", f"--reuid={entry.pw_uid}", f"--regid={entry.pw_gid}",
+                        "--clear-groups", "--reset-env", "/usr/bin/test", *expression],
+                       timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return done.returncode == 0
+
+    if owner == "b false":
+        return no_login_keyring_file()
+    if owner != "b true":
+        return False
+    collections = (ask("get-property", SECRETS, SERVICE,
+                       "org.freedesktop.Secret.Service", "Collections") or "").split()
+    if collections[:1] != ["ao"]:
+        return False
+    if f'"{LOGIN}"' not in collections[2:]:
+        # No login collection, as on omacom/omarchy, has nothing to unlock, unless
+        # a login keyring file exists that the service did not list.
+        return no_login_keyring_file()
+    return ask("get-property", SECRETS, LOGIN,
+               "org.freedesktop.Secret.Collection", "Locked") == "b false"
+
+
+def main() -> int:
+    if subprocess.run(["omarchy-hw-apple-silicon"], check=False).returncode != 0:
+        return 1
+    if unlocked(os.environ.get("PAM_USER", "")):
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

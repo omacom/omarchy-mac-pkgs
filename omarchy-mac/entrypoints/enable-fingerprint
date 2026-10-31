@@ -16,27 +16,25 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   # whatever its status: on a kernel that loads the driver read-only, the
   # options are what lets it reach ready after a restart.
   options=/etc/modprobe.d/omarchy-mac-touchid.conf
-  if [[ ! -e $options ]]; then
-    # Under the Touch ID lock, so a removal running now can't be undone here.
-    lock=/run/omarchy-mac/touchid.lock
-    if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
-      echo "Touch ID's driver options could not be written: its lock, $lock, could not be opened." >&2
-      exit 1
-    elif ! flock -w 300 "$lock_fd"; then
-      echo "Touch ID's driver options could not be written: another Touch ID setup or removal is still running." >&2
-      exit 1
-    fi
-    if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
-      echo "Touch ID was turned off while this ran, so setup goes on without it."
-      exit 0
-    elif [[ ! -e $options ]]; then
-      { mkdir -p -m 0755 "${options%/*}" &&
-        printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-          "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
-        chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
-        { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
-    fi
-    exec {lock_fd}>&-
+  # Options and login policy share the setup/removal lock, so a removal
+  # running now can't be undone here.
+  lock=/run/omarchy-mac/touchid.lock
+  if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
+    echo "Touch ID's driver options could not be written: its lock, $lock, could not be opened." >&2
+    exit 1
+  elif ! flock -w 300 "$lock_fd"; then
+    echo "Touch ID's driver options could not be written: another Touch ID setup or removal is still running." >&2
+    exit 1
+  fi
+  if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
+    echo "Touch ID was turned off while this ran, so setup goes on without it."
+    exit 0
+  elif [[ ! -e $options ]]; then
+    { mkdir -p -m 0755 "${options%/*}" &&
+      printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
+        "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+      chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
+      { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
   fi
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
@@ -44,7 +42,11 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
     echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
     echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
     echo "ready, see journalctl -u omarchy-mac-touchid-activate."
+  elif [[ -e /etc/omarchy-mac/touchid-sddm ]] && ! /usr/lib/omarchy-mac/touchid-sddm enable; then
+    # Only an owner who was told about the login screen gets it, and it never stops setup.
+    echo "Touch ID's SDDM login was left as it is: its PAM configuration is not one this package manages." >&2
   fi
+  exec {lock_fd}>&-
   exit 0
 fi
 # Only a Touch ID that can be set up stops the setup: anywhere else it goes on,
@@ -103,6 +105,10 @@ echo "Turning Touch ID off later removes your fingerprints and stops the driver"
 echo "loading. The key store stays."
 echo
 echo "This applies to every user on this Mac and needs an administrator."
+echo "On a stock SDDM login screen, fingerprints also work when you log in"
+echo "again later in a boot: submit an empty password, then touch the sensor."
+echo "A typed password always works, but an account with no password can no"
+echo "longer log in there. A custom SDDM PAM configuration is kept."
 echo "Saying no leaves Touch ID off. You can turn it on later from"
 echo "Setup > Security > Fingerprint."
 echo

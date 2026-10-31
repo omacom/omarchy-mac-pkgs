@@ -1,0 +1,227 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""Add or remove Touch ID in a stock SDDM PAM stack under the Touch ID lock."""
+
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+PREFIX = "# omarchy-mac Touch ID\n" "auth include omarchy-mac-touchid\n"
+# An empty password asks for Touch ID unless a login keyring is locked; any other
+# password skips to the stock stack. A rejected finger counts for faillock and an
+# accepted one clears the count. Faillock options come from system-auth.
+POLICY_TEMPLATE = """#%PAM-1.0
+auth requisite pam_shells.so
+auth requisite pam_nologin.so
+auth requisite pam_faillock.so preauth{preauth}
+auth [success=ignore default=4] pam_exec.so quiet expose_authtok /usr/lib/omarchy-mac/touchid-pam-empty-password
+auth [success=ignore default=die] pam_exec.so quiet /usr/lib/omarchy-mac/touchid-pam-keyring-unlocked
+auth [success=1 maxtries=ignore default=die] pam_fprintd.so max-tries=3 timeout=5
+auth [default=die] pam_faillock.so authfail{authfail}
+auth [success=done default=die] pam_faillock.so authsucc{authsucc}
+"""
+# Earlier policies this helper wrote, recognised so enable can replace them.
+PREVIOUS_TEMPLATES = (
+    """#%PAM-1.0
+auth requisite pam_shells.so
+auth requisite pam_nologin.so
+auth requisite pam_faillock.so preauth{preauth}
+auth [success=ignore default=3] pam_exec.so quiet expose_authtok /usr/lib/omarchy-mac/touchid-pam-empty-password
+auth [success=ignore default=die] pam_exec.so quiet /usr/lib/omarchy-mac/touchid-pam-keyring-unlocked
+auth [success=done maxtries=ignore default=die] pam_fprintd.so max-tries=3 timeout=5
+auth [default=die] pam_faillock.so authfail{authfail}
+""",
+)
+FAILLOCK_OPTION = re.compile(
+    r"silent|no_log_info|audit|even_deny_root|(deny|unlock_time|fail_interval|root_unlock_time)=\d+")
+
+
+def render_policy(preauth: list[str], authfail: list[str], authsucc: list[str],
+                  template: str = POLICY_TEMPLATE) -> str:
+    return template.format(preauth="".join(f" {option}" for option in preauth),
+                           authfail="".join(f" {option}" for option in authfail),
+                           authsucc="".join(f" {option}" for option in authsucc))
+
+
+POLICY = render_policy([], [], [])
+PREVIOUS_POLICIES = (
+    """#%PAM-1.0
+auth requisite pam_shells.so
+auth requisite pam_nologin.so
+auth required pam_faillock.so preauth
+auth sufficient pam_fprintd.so max-tries=3 timeout=10
+""",
+)
+AUTH = {
+    ("auth", "include", "system-login"),
+    ("-auth", "optional", "pam_gnome_keyring.so"),
+    ("-auth", "optional", "pam_kwallet5.so"),
+    ("-auth", "optional", "pam_kwallet6.so"),
+}
+LOGIN_AUTH = [
+    ("auth", "required", "pam_shells.so"),
+    ("auth", "requisite", "pam_nologin.so"),
+    ("auth", "include", "system-auth"),
+]
+SYSTEM_AUTH = [
+    ("auth", "required", "pam_faillock.so", "preauth"),
+    ("-auth", "[success=2", "default=ignore]", "pam_systemd_home.so"),
+    ("auth", "[success=1", "default=bad]", "pam_unix.so", "try_first_pass", "nullok"),
+    ("auth", "[default=die]", "pam_faillock.so", "authfail"),
+    ("auth", "optional", "pam_permit.so"),
+    ("auth", "required", "pam_env.so"),
+    ("auth", "required", "pam_faillock.so", "authsucc"),
+]
+
+
+class Refused(Exception):
+    """The existing PAM configuration is not one this helper owns."""
+
+
+def read_regular(path: Path) -> str | None:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(mode):
+        raise Refused(f"{path} is not a regular file")
+    with path.open(encoding="utf-8", newline="") as stream:
+        return stream.read()
+
+
+def write_atomic(path: Path, content: str) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def auth_lines(content: str) -> list[tuple[str, ...]]:
+    auth: list[tuple[str, ...]] = []
+    for line in content.splitlines():
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        kind = fields[0].lower()
+        if kind in ("auth", "-auth"):
+            auth.append(tuple(fields))
+        elif kind not in ("account", "-account", "password", "-password", "session", "-session"):
+            raise Refused("unrecognized PAM module type")
+    return auth
+
+
+def faillock_options(entries: list[tuple[str, ...]]) -> tuple[list[tuple[str, ...]], dict[str, list[str]]]:
+    """Strip the lockout options Omarchy adds to system-auth, and return them."""
+    stripped: list[tuple[str, ...]] = []
+    options: dict[str, list[str]] = {}
+    for entry in entries:
+        if (len(entry) > 4 and entry[2] == "pam_faillock.so" and entry[3] in ("preauth", "authfail", "authsucc")
+                and all(FAILLOCK_OPTION.fullmatch(option) for option in entry[4:])):
+            options[entry[3]] = list(entry[4:])
+            entry = entry[:4]
+        stripped.append(entry)
+    return stripped, options
+
+
+def owned_policy(content: str) -> bool:
+    """Whether content is exactly a policy this helper writes, whatever lockout options it carries."""
+    options: dict[str, list[str]] = {}
+    for line in content.splitlines():
+        fields = line.split()
+        if fields[:1] == ["auth"] and "pam_faillock.so" in fields[:-1]:
+            module = fields.index("pam_faillock.so")
+            options[fields[module + 1]] = fields[module + 2:]
+    preauth, authfail, authsucc = (options.get(mode, []) for mode in ("preauth", "authfail", "authsucc"))
+    return (all(FAILLOCK_OPTION.fullmatch(option) for option in preauth + authfail + authsucc)
+            and any(render_policy(preauth, authfail, authsucc, template) == content
+                    for template in (POLICY_TEMPLATE, *PREVIOUS_TEMPLATES)))
+
+
+def read_sddm(path: Path, enable: bool) -> str | None:
+    try:
+        return read_regular(path)
+    except Refused:
+        if enable:
+            raise
+    # Removal only needs to know whether this file includes our policy.
+    try:
+        text = path.read_text(encoding="utf-8", newline="")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError) as error:
+        raise Refused(f"{path} could not be read") from error
+    if "omarchy-mac-touchid" in text:
+        raise Refused(f"{path} is not a regular file")
+    return None
+
+
+def configure(directory: Path, enable: bool) -> None:
+    if not directory.exists():
+        return
+    if not stat.S_ISDIR(directory.lstat().st_mode):
+        raise Refused(f"{directory} is not a regular directory")
+    sddm = directory / "sddm"
+    policy = directory / "omarchy-mac-touchid"
+    original = read_sddm(sddm, enable)
+    existing_policy = read_regular(policy)
+    if existing_policy is not None and existing_policy not in PREVIOUS_POLICIES and not owned_policy(existing_policy):
+        raise Refused(f"{policy} was changed; leaving it alone")
+    if original is None:
+        return
+    active = original.startswith(PREFIX)
+    original = original.removeprefix(PREFIX)
+    if "omarchy-mac-touchid" in original:
+        raise Refused(f"{sddm} has a custom Touch ID entry")
+    if enable:
+        auth = auth_lines(original)
+        if auth.count(("auth", "include", "system-login")) != 1 or any(
+                entry not in AUTH for entry in auth):
+            raise Refused(f"{sddm} is not the stock system-login stack")
+        options: dict[str, list[str]] = {}
+        for name, expected in (("system-login", LOGIN_AUTH), ("system-auth", SYSTEM_AUTH)):
+            content = read_regular(directory / name)
+            entries = None if content is None else auth_lines(content)
+            if entries is not None and name == "system-auth":
+                entries, options = faillock_options(entries)
+            if entries != expected:
+                raise Refused(f"{directory / name} has custom authentication requirements")
+        wanted = render_policy(options.get("preauth", []), options.get("authfail", []),
+                               options.get("authsucc", []))
+        if existing_policy != wanted:
+            write_atomic(policy, wanted)
+        if not active:
+            write_atomic(sddm, PREFIX + original)
+    else:
+        if active:
+            write_atomic(sddm, original)
+        if existing_policy is not None:
+            policy.unlink()
+
+
+def main() -> int:
+    if subprocess.run(["omarchy-hw-apple-silicon"], check=False).returncode != 0:
+        return 0
+    if len(sys.argv) != 2 or sys.argv[1] not in ("enable", "disable"):
+        print("Usage: touchid-sddm enable|disable", file=sys.stderr)
+        return 2
+    directory = Path(os.environ.get("OMARCHY_MAC_TOUCHID_PAM", "/etc/pam.d"))
+    try:
+        configure(directory, sys.argv[1] == "enable")
+    except (OSError, UnicodeError, Refused) as error:
+        print(f"touchid-sddm: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

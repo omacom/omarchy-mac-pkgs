@@ -32,6 +32,7 @@ pass 'the status and load units and the enable and disable entrypoints are stage
 
 fixture=$work/fixture
 tree=$fixture/tree
+export OMARCHY_MAC_TOUCHID_PAM=$fixture/pam
 mkdir -p "$fixture/bin" "$fixture/extractors"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/omarchy-hw-apple-silicon"
 # The stub keeps the driver options it was loaded with, as modprobe reads them.
@@ -124,6 +125,8 @@ image = der(0x30, der(0x16, b"IMG4") + im4p + der(0xA0, seal))
 with open(os.path.join(out, "key.bin"), "wb") as fd:
     fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
                        + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
+with open(os.path.join(out, "j715-msrk.bin"), "wb") as fd:
+    fd.write(bytes(index % 251 for index in range(10848)))
 PY
 python3 -I "$work/factory.py" "$work/factory"
 # Any copy of the sensor key under the fixture other than the one named.
@@ -155,6 +158,7 @@ run() {
     OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
+    OMARCHY_MAC_TOUCHID_PAM=$fixture/pam OMARCHY_MAC_TOUCHID_SDDM_AGREED=$fixture/etc/touchid-sddm \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
     OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} "$ROOT/lib/$1" "${@:2}"
 }
@@ -195,6 +199,32 @@ mkdir -p "$fixture/firmware/updates/apple"
 cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
 [[ $(eligibility) == "available" ]] || fail "a Neo whose sensor key is installed needs nothing else"
 pass 'only a Mac whose setup can finish is available'
+
+# The J715 has no supported automatic FSC2/MSRk extractor. Neither another M4
+# board nor the Neo's key qualifies it, and checking eligibility writes nothing.
+machine apple,j713 apple,t8132 apple,arm-platform
+[[ $(eligibility) == "unsupported:board" ]] || fail 'an unqualified M4 board stays unsupported'
+machine apple,j715 apple,t8132 apple,arm-platform
+[[ $(eligibility) == "unsupported:no-calibration" ]] || fail 'J715 never substitutes the container calibration'
+mkdir -p "$fixture/firmware/vendor/apple"
+truncate -s 130427 "$fixture/firmware/vendor/apple/mesa_calibration.bin"
+cp "$work/factory/key.bin" "$fixture/firmware/vendor/apple/msrk-j700.bin"
+[[ $(eligibility) == "unsupported:no-root-key" ]] || fail "the Neo's key does not qualify J715"
+cp "$work/factory/j715-msrk.bin" "$fixture/firmware/vendor/apple/msrk-j715.bin"
+[[ $(eligibility) == "available" && ! -s $fixture/calls ]] || fail 'a prepared J715 is available without writes'
+echo ready >"$fixture/activation"
+out=$(run touchid-enable 2>&1) || fail 'J715 uses its installed FDR key' "$out"
+! grep -Fxq calibration "$fixture/calls" || fail 'J715 never carves a replacement calibration'
+cmp -s "$fixture/firmware/vendor/apple/msrk-j715.bin" "$work/factory/j715-msrk.bin" ||
+  fail 'J715 keeps the supplied key unchanged'
+[[ -f $fixture/etc/touchid-on ]] || fail 'J715 records boot-time enablement'
+machine apple,j715 apple,t8132 apple,arm-platform
+mkdir -p "$fixture/firmware/vendor/apple"
+truncate -s 130427 "$fixture/firmware/vendor/apple/mesa_calibration.bin"
+printf incomplete >"$fixture/firmware/vendor/apple/msrk-j715.bin"
+! out=$(run touchid-enable 2>&1) && [[ ! -s $fixture/calls && ! -e $fixture/etc/touchid-on ]] ||
+  fail 'an incomplete J715 key fails before loading or enabling the driver' "$out"
+pass 'J715 keeps private factory inputs and refuses missing or incomplete inputs before enabling'
 
 # At boot the status says so for the detector, and never loads the driver.
 machine apple,j414c apple,t6021 apple,arm-platform
@@ -488,7 +518,7 @@ echo not-ready >"$fixture/activation"
 echo ready >"$fixture/activation"
 machine apple,j414c apple,t6021 apple,arm-platform
 touch "$fixture/modprobe-fails"
-! out=$(run touchid-enable 2>&1) && [[ ! -e $fixture/etc/touchid-on && $out == *"driver did not load"* ]] &&
+! out=$(run touchid-enable 2>&1) && [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/touchid-sddm && $out == *"driver did not load"* ]] &&
   ! grep -q 'systemctl start' "$fixture/calls" ||
   fail 'a driver that does not load takes the agreement back and starts nothing' "$out"
 rm "$fixture/modprobe-fails"
@@ -503,6 +533,13 @@ machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/module"
 echo ready >"$fixture/activation"
 run touchid-enable >/dev/null 2>&1 || fail 'a driver already running that writes by default turns on now'
+[[ -e $fixture/etc/touchid-sddm ]] || fail 'turning it on records the agreement to the SDDM login'
+# SDDM's login screen is best effort: a PAM stack this package does not manage never undoes setup.
+mkdir -p "$fixture/pam"
+printf 'auth required pam_deny.so\n' >"$fixture/pam/sddm"
+out=$(run touchid-enable 2>&1) && [[ $out == *"login screen is unchanged"* && -e $fixture/etc/touchid-on && $(<"$fixture/pam/sddm") == 'auth required pam_deny.so' ]] ||
+  fail "a custom SDDM PAM stack is reported, kept, and doesn't fail setup" "$out"
+rm -rf "$fixture/pam"
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/module" "$fixture/etc"
 touch "$fixture/etc/modprobe.conf"
@@ -521,6 +558,7 @@ for name in enable-fingerprint disable-fingerprint; do
   sed -e "s|/run/omarchy-mac/touchid|$fixture/run/touchid|g" -e "s|/var/lib/aurora-sep-keybag.bin|$fixture/keybag|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-sddm|$ROOT/lib/touchid-sddm|g" -e "s|/etc/omarchy-mac/touchid-sddm|$fixture/etc/touchid-sddm|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
@@ -602,11 +640,62 @@ ask blocked '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1'
 without_status available n && ! grep -qE 'With FileVault on|stays off' "$fixture/out" && grep -q "isn't ready yet (no status)" "$fixture/out" &&
   [[ -e $fixture/etc/touchid-on && ! -s $fixture/calls ]] ||
   fail 'an agreed Mac with no status is told to restart, not asked again' "$(<"$fixture/out")"
+# SDDM's login screen reaches only an owner who was told about it, and never stops setup.
+omarchy_pam() {
+  mkdir -p "$fixture/pam"
+  printf '#%%PAM-1.0\nauth include system-login\naccount include system-login\npassword include system-login\nsession include system-login\n' >"$fixture/pam/sddm"
+  printf 'auth required pam_shells.so\nauth requisite pam_nologin.so\nauth include system-auth\naccount required pam_access.so\n' >"$fixture/pam/system-login"
+  printf 'auth required pam_faillock.so preauth silent deny=10 unlock_time=120\n-auth [success=2 default=ignore] pam_systemd_home.so\nauth [success=1 default=bad] pam_unix.so try_first_pass nullok\nauth [default=die] pam_faillock.so authfail deny=10 unlock_time=120\nauth optional pam_permit.so\nauth required pam_env.so\nauth required pam_faillock.so authsucc\n' >"$fixture/pam/system-auth"
+}
+rm -rf "$fixture/pam"
+omarchy_pam
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+rm -f "$fixture/etc/touchid-sddm"
+ask ready '' && [[ ! -e $fixture/pam/omarchy-mac-touchid ]] && ! grep -q 'omarchy-mac-touchid' "$fixture/pam/sddm" ||
+  fail 'a Mac that agreed before the login screen change is not given it unasked' "$(<"$fixture/out")"
+touch "$fixture/etc/touchid-sddm"
+ask ready '' && grep -Fxq 'auth requisite pam_faillock.so preauth silent deny=10 unlock_time=120' "$fixture/pam/omarchy-mac-touchid" &&
+  grep -Fxq 'auth include omarchy-mac-touchid' "$fixture/pam/sddm" ||
+  fail 'an Omarchy Mac that agreed to the login screen change gets it' "$(<"$fixture/out")"
+rm -f "$fixture/pam/omarchy-mac-touchid"
+omarchy_pam
+printf 'auth required pam_deny.so\n' >>"$fixture/pam/sddm"
+ask ready '' && grep -q 'left as it is' "$fixture/out" && [[ ! -e $fixture/pam/omarchy-mac-touchid ]] ||
+  fail 'a custom SDDM stack is reported but never stops the fingerprint setup' "$(<"$fixture/out")"
+rm -rf "$fixture/pam"
+rm -f "$fixture/etc/touchid-sddm"
 rm -f "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 && [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] &&
   grep -q 'key store for Linux stays' "$fixture/out" || fail "turning it off removes the owner's agreement and says the key store stays"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 || fail 'turning it off twice is fine'
+# A PAM file that is not ours never blocks turning Touch ID off; one that still
+# includes our policy is kept and reported, and consent goes either way.
+mkdir -p "$fixture/pam" "$fixture/etc" "$fixture/firmware/updates/apple"
+printf 'administrator PAM\n' >"$fixture/pam/custom"
+ln -s custom "$fixture/pam/sddm"
+touch "$fixture/etc/touchid-on" "$fixture/etc/touchid-sddm" "$fixture/etc/modprobe.conf"
+cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 &&
+  [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/touchid-sddm && ! -e $fixture/etc/modprobe.conf && -L $fixture/pam/sddm && -z $(key_copies) ]] &&
+  [[ $(<"$fixture/pam/custom") == "administrator PAM" ]] ||
+  fail 'a symlinked SDDM file without our policy neither blocks removal nor changes' "$(<"$fixture/out")"
+printf '# omarchy-mac Touch ID\nauth include omarchy-mac-touchid\n' >"$fixture/pam/custom"
+touch "$fixture/etc/touchid-on" "$fixture/etc/touchid-sddm" "$fixture/etc/modprobe.conf"
+cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
+! PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 &&
+  [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/touchid-sddm && ! -e $fixture/etc/modprobe.conf && -L $fixture/pam/sddm && -z $(key_copies) ]] &&
+  grep -q 'review it' "$fixture/out" ||
+  fail 'a symlinked SDDM file that includes our policy is kept and reported while consent is removed' "$(<"$fixture/out")"
+rm "$fixture/pam/sddm" "$fixture/pam/custom"
+printf 'administrator owned policy\n' >"$fixture/pam/omarchy-mac-touchid"
+touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+! PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 &&
+  [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] &&
+  [[ $(<"$fixture/pam/omarchy-mac-touchid") == "administrator owned policy" ]] ||
+  fail 'edited owned PAM policy is preserved while boot consent is removed' "$(<"$fixture/out")"
+rm "$fixture/pam/omarchy-mac-touchid"
 # A Neo's sensor key goes too, since turning Touch ID on again rebuilds it.
 mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
 cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
