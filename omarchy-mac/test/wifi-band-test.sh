@@ -47,6 +47,13 @@ band_enabled "$config" BandModifier2_4GHz && band_enabled "$config" BandModifier
   fail "iwd still joins 2.4 GHz and 5 GHz"
 pass "iwd joins 2.4 GHz and 5 GHz but never 6 GHz on a fresh install"
 
+# iwd never starts a roam: the fullmac firmware owns the association.
+for key in RoamThreshold RoamThreshold5G CriticalRoamThreshold CriticalRoamThreshold5G; do
+  value=$(awk -F= -v key="$key" '/^\[/ { section = $0 } section == "[General]" && $1 == key { print $2 }' "$config")
+  [[ $value == -100 ]] || fail "iwd leaves roaming to the firmware" "$key=$value"
+done
+pass "iwd leaves roaming to the firmware on a fresh install"
+
 mkdir -p "$root/etc/iwd"
 printf '[General]\nAddressRandomization=network\n' >"$root/etc/iwd/main.conf"
 config=$(iwd_config)
