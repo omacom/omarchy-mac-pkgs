@@ -4,6 +4,15 @@
 # since that leaves state in the Secure Enclave that can't be removed.
 omarchy-hw-apple-silicon || exit 0
 
+# The record stays: removing it could strand a key store the enclave holds.
+unfinished() {
+  echo "An earlier Touch ID setup never finished creating its key store:"
+  echo "/var/lib/aurora-sep-keybag.bin records that the Secure Enclave driver"
+  echo "started creating it, not that it finished. The enclave may hold a key"
+  echo "store the driver never named, so the driver won't create another while"
+  echo "that record exists. See omacom/linux-aurora#209."
+}
+
 status=$(cat /run/omarchy-mac/touchid 2>/dev/null)
 recorded_status=${status:-no status}
 # A Mac without a sensor records nothing at boot, and neither does a status
@@ -40,7 +49,11 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   fi
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
-  if [[ $status != "ready" ]]; then
+  if [[ $status != "ready" && $(/usr/lib/omarchy-mac/touchid-eligibility keybag) == "unfinished" ]]; then
+    echo "Touch ID is turned on but can't come up on this Mac, so setup goes on"
+    echo "with any other fingerprint reader."
+    unfinished
+  elif [[ $status != "ready" ]]; then
     echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
     echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
     echo "ready, see journalctl -u omarchy-mac-touchid-activate."
@@ -52,6 +65,12 @@ fi
 case $status in
   available | ready) ;;
   none | "")
+    exit 0
+    ;;
+  unsupported:unfinished-keybag)
+    echo "Touch ID can't be set up on this Mac, so setup goes on with any other"
+    echo "fingerprint reader."
+    unfinished
     exit 0
     ;;
   *)
@@ -72,7 +91,8 @@ fi
 
 echo "Touch ID on Linux uses this Mac's Secure Enclave."
 echo
-if [[ -e /var/lib/aurora-sep-keybag.bin ]]; then
+# A refused creation's record holds no key store.
+if [[ $(/usr/lib/omarchy-mac/touchid-eligibility keybag) == "present" ]]; then
   echo "Turning it on loads the Secure Enclave driver and uses the key store for"
   echo "Linux that an earlier Touch ID setup created on this Mac."
 else

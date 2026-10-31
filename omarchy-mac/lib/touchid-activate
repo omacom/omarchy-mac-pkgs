@@ -55,6 +55,10 @@ for ((attempt = 1; attempt <= attempts && SECONDS < 45; attempt++)); do
   if [[ $touchid == "missing" || $sensor_attach == "missing" || $restore == "missing" || $matching == "missing" ]]; then
     finish not-ready "the driver lacks a diag attribute (touchid $touchid, sensor_attach $sensor_attach, restore $restore, matching $matching)"
   elif [[ $touchid == "failed" ]]; then
+    refusals=$(attribute xart_guard_refusals)
+    if [[ $refusals =~ ^[1-9][0-9]*$ ]]; then
+      finish failed "activation failed: the Secure Enclave's safety check refused a write, and the enclave stays unavailable until this Mac restarts (touchid failed, keybag $(attribute keybag), xart_guard_refusals $refusals)"
+    fi
     finish failed "activation failed (touchid failed)"
   elif [[ $restore == "unproven" ]]; then
     finish unproven "the enrolled fingerprints could not be proven (restore unproven)"
