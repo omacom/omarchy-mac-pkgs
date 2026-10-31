@@ -24,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Every file is in scope and every package meets the contract
@@ -31,6 +32,9 @@ jobs:
 
       - name: Package code decides platforms without the CPU architecture
         run: .github/scripts/check-architecture-gates
+
+      - name: Only a release bump changes omarchy-mac's version
+        run: .github/scripts/check-version-bump
 
       - name: Upstream's copies of the boot drop-ins still match (warning only)
         run: .github/scripts/check-fixture-drift
