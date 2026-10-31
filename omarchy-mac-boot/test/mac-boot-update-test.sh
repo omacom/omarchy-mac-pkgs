@@ -55,7 +55,7 @@ printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="stale"\n' >"$limine_defau
 run || fail "boot update on a Limine Mac succeeds"
 [[ $(cat "$calls") == $'update-grub \nlimine-update \nomarchy-mac-limine-deploy ' ]] ||
   fail "a Limine Mac still refreshes the GRUB image it carries, then rebuilds and deploys Limine" "$(cat "$calls")"
-grep -Fxq 'KERNEL_CMDLINE[default]="root=UUID=root-uuid rw rootflags=subvol=@ rd.luks.name=abc=root quiet splash"' "$limine_default" ||
+grep -Fxq 'KERNEL_CMDLINE[default]+="root=UUID=root-uuid rw rootflags=subvol=@ rd.luks.name=abc=root quiet splash"' "$limine_default" ||
   fail "the Limine command line is re-derived from GRUB's defaults before limine-update" "$(cat "$limine_default")"
 pass "a Limine Mac rebuilds Limine from GRUB's defaults file"
 
