@@ -1,0 +1,10 @@
+# omarchy-mac: keys the MacBook's built-in keyboard lacks. Omarchy binds its
+# screenshots to Print and the keyboard backlight to XF86KbdBrightness, and an
+# Apple Silicon MacBook has neither key. F4 (Spotlight) becomes Print, F5
+# (Dictation) and F6 (Do Not Disturb) dim and brighten the keyboard backlight,
+# with or without Fn. Only the built-in keyboard: SPI on M1, MTP on M2 and later.
+evdev:name:Apple SPI [Kk]eyboard:*
+evdev:name:Apple MTP [Kk]eyboard:*
+ KEYBOARD_KEY_7003d=sysrq
+ KEYBOARD_KEY_7003e=kbdillumdown
+ KEYBOARD_KEY_7003f=kbdillumup

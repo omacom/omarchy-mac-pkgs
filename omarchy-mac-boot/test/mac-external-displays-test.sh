@@ -156,8 +156,8 @@ grep -Fxq 'ACTION=="add", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{DEVTYPE}==
   fail "the Apple display card is held as it appears"
 grep -Fxq 'ACTION=="change", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ENV{SYNTH_ARG_OMARCHYMACDISPLAYS}=="1", ENV{HOTPLUG}="1"' "$RULES" ||
   fail "the release's synthetic change is a hotplug (aquamarine rescans on HOTPLUG=1 only)"
-grep -Fxq 'After=plymouth-quit.service plymouth-quit-wait.service omarchy-provision-owner.service omarchy-drive-recover.service' "$UNIT" ||
-  fail "the release waits for the splash, which first boot holds, and for owner setup or a password reset on tty1"
+grep -Fxq 'After=plymouth-quit.service plymouth-quit-wait.service omarchy-provision-owner.service' "$UNIT" ||
+  fail "the release waits for the splash, which first boot holds, and for owner setup on tty1"
 grep -Fxq 'Before=display-manager.service sddm.service' "$UNIT" || fail "the release runs before the display manager"
 grep -Fxq 'ExecStart=/usr/lib/omarchy/mac-boot/external-displays release' "$UNIT" || fail "the unit runs the release"
 [[ $(readlink "$FILES/usr/lib/systemd/system/multi-user.target.wants/omarchy-mac-external-displays.service") == ../omarchy-mac-external-displays.service ]] ||
