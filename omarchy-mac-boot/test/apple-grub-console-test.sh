@@ -118,3 +118,65 @@ MKINITCPIO_CONF="$test_tmp/missing.conf" run
 grep -Fxq 'GRUB_CMDLINE_LINUX="zswap.enabled=0 rootflags=x-systemd.device-timeout=0"' "$test_tmp/grub" ||
   fail "an unreadable configuration keeps the wait, as every image boots systemd" "$(cat "$test_tmp/grub")"
 pass "the initramfs kind comes from the preset, mkinitcpio.conf and its drop-ins in mkinitcpio's order"
+
+# Aurora uses host mixed-page support; Asahi's muvm Steam path does not.
+cat >"$test_tmp/bin/omarchy-mac-kernel" <<'STUB'
+#!/bin/bash
+printf '%s\n' "${TEST_KERNEL:-linux-aurora}"
+STUB
+chmod +x "$test_tmp/bin/omarchy-mac-kernel"
+printf 'GRUB_VIDEO_BACKEND="efi_gop"\nGRUB_CMDLINE_LINUX="rd.luks.uuid=luks-id rootflags=subvol=@"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n' >"$test_tmp/grub"
+if TEST_UPDATE_FAILURE=7 run; then fail "failed Aurora boot rebuild is reported"; fi
+[[ -e $OMARCHY_GRUB_CONSOLE_PENDING ]] || fail "Aurora rebuild failure stays pending"
+grep -Fxq 'GRUB_CMDLINE_LINUX="rd.luks.uuid=luks-id rootflags=subvol=@,x-systemd.device-timeout=0 user4k=on"' "$test_tmp/grub" ||
+  fail "Aurora enables user4k without losing root or encryption flags"
+TEST_NOT_LIMINE=0 run
+[[ ! -e $OMARCHY_GRUB_CONSOLE_PENDING ]] || fail "successful Aurora retry clears pending state"
+[[ $(tail -n 1 "$TEST_CALLS") == omarchy-mac-boot-update ]] || fail "Aurora retries the active Limine rebuild"
+cp "$test_tmp/grub" "$test_tmp/aurora-configured"
+calls=$(wc -l <"$TEST_CALLS")
+run
+cmp -s "$test_tmp/grub" "$test_tmp/aurora-configured" || fail "Aurora defaults are idempotent"
+[[ $(wc -l <"$TEST_CALLS") == "$calls" ]] || fail "Aurora does not rebuild again when configured"
+pass "Aurora enables user4k for both loaders with retry and idempotence"
+
+printf 'UUID=test-root / btrfs subvol=@ 0 0\n' >"$test_tmp/fstab"
+printf 'KERNEL_CMDLINE[default]=""\n' >"$test_tmp/limine"
+# No host limine-entry-tool drop-ins, and either assignment form the helper writes.
+mkdir -p "$test_tmp/limine-entry-tool.d"
+OMARCHY_LIMINE_DEFAULT="$test_tmp/limine" OMARCHY_FSTAB="$test_tmp/fstab" OMARCHY_LIMINE_DROPINS="$test_tmp/limine-entry-tool.d" \
+  bash "$ROOT/bin/omarchy-mac-limine-cmdline"
+grep -Exq 'KERNEL_CMDLINE\[default\]\+?="root=UUID=test-root rw rootflags=subvol=@,x-systemd.device-timeout=0 rd\.luks\.uuid=luks-id user4k=on quiet splash"' "$test_tmp/limine" ||
+  fail "Limine receives user4k and the existing root/encryption options" "$(cat "$test_tmp/limine")"
+[[ $(grep -o 'user4k=' "$test_tmp/limine" | wc -l) == 1 ]] || fail "Limine carries user4k once"
+pass "the shared GRUB defaults carry user4k into Limine"
+
+# An Omarchy Mac image's first boot: the defaults finalize-root writes.
+printf 'GRUB_VIDEO_BACKEND="efi_gop"\nGRUB_CMDLINE_LINUX="zswap.enabled=0 rootfstype=btrfs"\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=0"\n' >"$test_tmp/grub"
+TEST_NOT_LIMINE=0 run
+grep -Fxq 'GRUB_CMDLINE_LINUX="zswap.enabled=0 rootfstype=btrfs rootflags=x-systemd.device-timeout=0 user4k=on"' "$test_tmp/grub" ||
+  fail "an image's first boot gets user4k with the root wait" "$(cat "$test_tmp/grub")"
+TEST_NOT_LIMINE=0 run
+[[ $(grep -o 'user4k=' "$test_tmp/grub" | wc -l) == 1 ]] || fail "a second setup-boot does not repeat user4k"
+pass "an image's first boot gets user4k once"
+
+for choice in off on 0 1; do
+  for variable in GRUB_CMDLINE_LINUX GRUB_CMDLINE_LINUX_DEFAULT; do
+    printf 'GRUB_VIDEO_BACKEND="efi_gop"\nGRUB_CMDLINE_LINUX="rootflags=subvol=@,x-systemd.device-timeout=0"\n' >"$test_tmp/grub"
+    printf '%s="quiet user4k=%s"\n' "$variable" "$choice" >>"$test_tmp/grub"
+    run
+    grep -q "user4k=$choice" "$test_tmp/grub" || fail "explicit user4k=$choice survives in $variable"
+    [[ $(grep -o 'user4k=' "$test_tmp/grub" | wc -l) == 1 ]] || fail "an explicit user4k choice is not duplicated"
+  done
+done
+pass "explicit user4k choices in either GRUB variable are preserved"
+
+printf 'GRUB_VIDEO_BACKEND="efi_gop"\nGRUB_CMDLINE_LINUX="rootflags=subvol=@,x-systemd.device-timeout=0"\n' >"$test_tmp/grub"
+TEST_KERNEL=linux-asahi run
+! grep -q 'user4k=' "$test_tmp/grub" || fail "Asahi keeps its existing host page policy"
+TEST_KERNEL=unknown run
+! grep -q 'user4k=' "$test_tmp/grub" || fail "an unknown kernel does not acquire Aurora's policy"
+printf 'GRUB_VIDEO_BACKEND="efi_gop"\nGRUB_CMDLINE_LINUX=""\n' >"$test_tmp/grub"
+MKINITCPIO_CONF=$busybox_conf run
+grep -Fxq 'GRUB_CMDLINE_LINUX="user4k=on"' "$test_tmp/grub" || fail "busybox Aurora gets user4k without the systemd root wait"
+pass "user4k is Aurora-specific and works with a busybox initramfs"
