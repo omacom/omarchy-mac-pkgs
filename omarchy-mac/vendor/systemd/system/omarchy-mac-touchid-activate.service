@@ -3,8 +3,8 @@
 # reader before anything has used it (fingerprint-readers names the record).
 [Unit]
 Description=Activate Touch ID
-# Only once Touch ID is turned on (enable-fingerprint's record): a driver
-# something else loaded doesn't count, and its status stays the boot's.
+# Only once the owner has agreed (enable-fingerprint's record): a driver
+# something else loaded is not agreement, and its status stays the boot's.
 ConditionPathExists=/etc/omarchy-mac/touchid-on
 ConditionPathExists=/dev/sep-bio
 # A failed activation stays failed for the rest of the boot, so open the node

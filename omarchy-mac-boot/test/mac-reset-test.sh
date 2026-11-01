@@ -424,8 +424,8 @@ printf 'unexpected' | run reset-commit || fail "commit" "$(cat "$test_tmp/err")"
   fail "an unencrypted factory root boots into the Mac's first boot again"
 pass "an unencrypted reset stages no unlock and writes no key"
 
-# A Neo's Touch ID sensor key is rebuilt from the ESP when its next owner turns
-# Touch ID on, so the factory root is given none, whatever this one had.
+# A Neo's Touch ID sensor key is rebuilt from the ESP when its next owner agrees
+# to turn Touch ID on, so the factory root is given none, whatever this one had.
 fixture
 mkdir -p "$root/var/lib/omarchy-mac" "$root/usr/lib/firmware/updates/apple"
 printf kept >"$root/var/lib/omarchy-mac/msrk-j700.bin"

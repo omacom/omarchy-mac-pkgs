@@ -72,7 +72,7 @@ if ! installed "$calibration" && { compatible apple,t8140 || ! can_extract extra
   echo unsupported:no-calibration
   exit 0
 fi
-# The Neo's sensor key is rebuilt when Touch ID turns on, by touchid-root-key
+# The Neo's sensor key is rebuilt once the owner agrees, by touchid-root-key
 # (Python), from the factory records asahi-installer leaves on the ESP.
 if compatible apple,t8140 && ! installed apple/msrk-j700.bin &&
   { [[ ! -r $esp/asahi/all_firmware.tar.gz ]] || ! command -v "$python" >/dev/null; }; then

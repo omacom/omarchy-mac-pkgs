@@ -1,6 +1,7 @@
 #!/bin/bash
 # omarchy-lifecycle-dispatch enable-fingerprint: Omarchy's fingerprint setup runs
-# this as root before enrolling, to turn Touch ID on where this Mac can use it.
+# this as root before enrolling. It asks the owner before Touch ID is turned on,
+# since that leaves state in the Secure Enclave that can't be removed.
 omarchy-hw-apple-silicon || exit 0
 
 status=$(cat /run/omarchy-mac/touchid 2>/dev/null)
@@ -37,8 +38,8 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
     fi
     exec {lock_fd}>&-
   fi
-  # Touch ID is on already, so it isn't turned on again: one that isn't ready
-  # yet needs a restart, and setup goes on with any other reader.
+  # The owner agreed already, so they are never asked again: a Touch ID that
+  # isn't ready yet needs a restart, and setup goes on with any other reader.
   if [[ $status != "ready" ]]; then
     echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
     echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
@@ -46,13 +47,10 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   fi
   exit 0
 fi
-# Only a Touch ID that can be set up is turned on, and only a failure to turn it
-# on stops the setup: anywhere else it goes on, so a USB reader enrols as it
-# would without Touch ID.
+# Only a Touch ID that can be set up stops the setup: anywhere else it goes on,
+# so a USB reader enrols as it would without Touch ID.
 case $status in
-  available | ready)
-    exec /usr/lib/omarchy-mac/touchid-enable
-    ;;
+  available | ready) ;;
   none | "")
     exit 0
     ;;
@@ -66,3 +64,15 @@ case $status in
     exit 0
     ;;
 esac
+
+echo "Touch ID on Linux is experimental and can be unstable. It shares this Mac's"
+echo "Secure Enclave with macOS, so back up any data on your macOS partition first."
+echo "The Mac manual's Encryption and passwords page has the details."
+echo
+read -r -p "Turn on Touch ID? [y/N] " answer || answer=""
+if [[ $answer == [yY] || $answer == [yY][eE][sS] ]]; then
+  exec /usr/lib/omarchy-mac/touchid-enable
+else
+  echo "Touch ID stays off."
+  exit 1
+fi

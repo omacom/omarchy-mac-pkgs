@@ -20,38 +20,38 @@ grep -Fxq 'ExecStart=/usr/lib/omarchy-mac/touchid-activate' "$unit" && grep -Fxq
 grep -Fxq 'ConditionPathExists=/var/lib/aurora-sep-keybag.bin' "$unit" ||
   fail 'the unit opens /dev/sep-bio only once the kernel has made the keybag'
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$unit" ||
-  fail "the unit opens /dev/sep-bio only once Touch ID is turned on, whatever loaded the driver"
+  fail "the unit opens /dev/sep-bio only once the owner has agreed, whatever loaded the driver"
 grep -Fxq 'Before=fprintd.service' "$unit" || fail 'fprintd starts after the unit, not alongside it'
 ! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'
 ! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the rule pulls it in'
 pass 'the Touch ID rule, unit and script are staged, and the rule alone starts the unit'
 
 # Every condition must hold: with no keybag the unit is skipped, so nothing
-# opens the node and latches a failed activation for the boot, and until Touch
-# ID is turned on nothing opens it at all.
+# opens the node and latches a failed activation for the boot, and without the
+# owner's agreement nothing opens it at all.
 if command -v systemd-analyze >/dev/null && systemd-analyze condition --help >/dev/null 2>&1; then
   conditions=$(grep '^ConditionPathExists=' "$unit")
   node=$work/condition/sep-bio
   keybag=$work/condition/aurora-sep-keybag.bin
-  record=$work/condition/touchid-on
+  agreed=$work/condition/touchid-on
   mkdir -p "$work/condition"
   check() {
     local list=${conditions//\/dev\/sep-bio/$node}
     list=${list//\/var\/lib\/aurora-sep-keybag.bin/$keybag}
-    list=${list//\/etc\/omarchy-mac\/touchid-on/$record}
+    list=${list//\/etc\/omarchy-mac\/touchid-on/$agreed}
     mapfile -t list <<<"$list"
     systemd-analyze condition "${list[@]}" >/dev/null 2>&1
   }
-  touch "$node" "$record"
+  touch "$node" "$agreed"
   ! check || fail 'a Mac with the node but no keybag skips the unit'
   touch "$keybag"
-  check || fail 'a Mac with Touch ID on, the node and the keybag runs the unit'
-  rm "$record"
-  ! check || fail 'a Mac where Touch ID is off skips the unit'
-  touch "$record"
+  check || fail 'an agreed Mac with the node and the keybag runs the unit'
+  rm "$agreed"
+  ! check || fail 'a Mac whose owner has not agreed skips the unit'
+  touch "$agreed"
   rm "$node"
   ! check || fail 'a Mac with a keybag but no node skips the unit'
-  pass 'the unit runs only where Touch ID is on and both the node and the keybag exist'
+  pass 'the unit runs only where the owner agreed and both the node and the keybag exist'
 fi
 
 # The script, run against a fixture node and sysfs, records "ready" only when

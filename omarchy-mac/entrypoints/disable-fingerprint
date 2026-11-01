@@ -1,7 +1,7 @@
 #!/bin/bash
 # omarchy-lifecycle-dispatch disable-fingerprint: Omarchy's fingerprint removal
-# runs this as root once the fingerprints are deleted. Removing Touch ID's
-# record stops the driver loading, and writing, at boot; the key store stays.
+# runs this as root once the fingerprints are deleted. Removing the owner's
+# agreement stops the driver loading, and writing, at boot; the key store stays.
 # A Neo's sensor key goes too: turning Touch ID on again rebuilds it.
 omarchy-hw-apple-silicon || exit 0
 
