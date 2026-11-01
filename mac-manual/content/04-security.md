@@ -28,6 +28,21 @@ As on x86, no other key opens the disk: without the password its data cannot be 
 
 A Mac set up before Omarchy dropped the recovery passphrase keeps it as a second password for the disk. It still unlocks the disk at the prompt, and a password change leaves it as it is, but it no longer offers to set a new password.
 
+## Turning on Touch ID
+
+Touch ID on Linux is experimental and can be unstable. It shares the Secure Enclave with macOS, so back up any data on your macOS partition before you turn it on. Fingerprint setup under _Setup > Security > Fingerprint_ asks first, and saying no leaves Touch ID off. The choice applies to every user on the Mac and needs an administrator.
+
+Turning it on loads the Secure Enclave driver and creates a key store for Linux, or uses the one an earlier setup created. In normal use the enclave advances its anti-replay state, which only moves forward. Linux and macOS share that state: it is one file in the Mac's iBoot System Container, and both systems update it.
+
+If a bug ever writes that shared state wrongly, the enclave stops accepting it and macOS can lose data:
+
+- With FileVault on, macOS can't unlock its disk and won't start, and the startup picker may not open. Getting the Mac back takes a DFU restore, which erases it.
+- With FileVault off, macOS resets its keychain and Touch ID fingerprints and shows a warning.
+
+On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
+
+Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.
+
 ## Resetting the Mac for a new owner
 
 _Setup > Reset Computer_ hands a Mac to its next owner, as described in [Security](https://omarchy.org/manual/security/). It works on Macs installed with the installer app. On a Mac it also re-keys the encryption for the next owner, resets the Limine menu and checks the boot files before it activates the clean system. If a check fails, it rolls back and leaves the current system in place.

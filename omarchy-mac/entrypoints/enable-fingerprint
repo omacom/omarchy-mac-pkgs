@@ -65,46 +65,9 @@ case $status in
     ;;
 esac
 
-neo=0
-if tr '\0' '\n' </proc/device-tree/compatible | grep -Fxq apple,t8140; then
-  neo=1
-fi
-
-echo "Touch ID on Linux uses this Mac's Secure Enclave."
-echo
-if [[ -e /var/lib/aurora-sep-keybag.bin ]]; then
-  echo "Turning it on loads the Secure Enclave driver and uses the key store for"
-  echo "Linux that an earlier Touch ID setup created on this Mac."
-else
-  echo "Turning it on loads the Secure Enclave driver and creates a key store for"
-  echo "Linux on this Mac."
-fi
-echo "In normal use the enclave advances its anti-replay state, which only moves"
-echo "forward. Linux and macOS share that state: it is one file in this Mac's"
-echo "iBoot System Container, and both systems update it."
-echo
-echo "This is experimental, non-Apple support for the Secure Enclave. If a bug"
-echo "in it ever writes that shared state wrongly, the enclave stops accepting"
-echo "it, and macOS can lose data:"
-echo "  - With FileVault on, macOS can't unlock its disk and won't start, and"
-echo "    the startup picker may not open. Getting the Mac back takes a DFU"
-echo "    restore, which erases it."
-echo "  - With FileVault off, macOS resets its keychain and Touch ID"
-echo "    fingerprints and shows a warning."
-echo "Back up anything on macOS you still need before you turn it on."
-echo
-if (( neo )); then
-  echo "On this Mac it also reads the sensor's key from the factory records the"
-  echo "installer left on the boot partition, into a firmware file only root can"
-  echo "read. Turning Touch ID off deletes that file."
-  echo
-fi
-echo "Turning Touch ID off later removes your fingerprints and stops the driver"
-echo "loading. The key store stays."
-echo
-echo "This applies to every user on this Mac and needs an administrator."
-echo "Saying no leaves Touch ID off. You can turn it on later from"
-echo "Setup > Security > Fingerprint."
+echo "Touch ID on Linux is experimental and can be unstable. It shares this Mac's"
+echo "Secure Enclave with macOS, so back up any data on your macOS partition first."
+echo "The Mac manual's Encryption and passwords page has the details."
 echo
 read -r -p "Turn on Touch ID? [y/N] " answer || answer=""
 if [[ $answer == [yY] || $answer == [yY][eE][sS] ]]; then
