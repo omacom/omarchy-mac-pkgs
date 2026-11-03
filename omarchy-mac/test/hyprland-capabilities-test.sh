@@ -27,7 +27,7 @@ rm "$temporary/stage/usr/bin/Hyprland"
 ln -s /bin/true "$temporary/stage/usr/bin/Hyprland"
 bash "$helper" "$temporary/stage"
 [[ $(wc -l < "$CAP_TEST_LOG") -eq 2 ]]
-hook=$temporary/stage/usr/lib/libalpm/hooks/90-omarchy-mac-hyprland-capabilities.hook
+hook=$temporary/stage/usr/share/libalpm/hooks/90-omarchy-mac-hyprland-capabilities.hook
 grep -Fxq 'Target = usr/bin/Hyprland' "$hook"
 grep -Fxq 'When = PostTransaction' "$hook"
 echo 'PASS Hyprland capability hook and setup helper'
