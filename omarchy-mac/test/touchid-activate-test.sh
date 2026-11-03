@@ -209,6 +209,9 @@ pass 'fprintd waits for Touch ID only on a Mac whose Secure Enclave driver has a
 # Verified inside the staged root, whose stub commands stand in for the
 # runtime's platform check, so the result never depends on the host.
 if command -v systemd-analyze >/dev/null; then
+  for target in sysinit basic shutdown local-fs; do
+    printf '[Unit]\nDescription=Fixture target\nDefaultDependencies=no\n' >"$work/root/usr/lib/systemd/system/$target.target"
+  done
   mkdir -p "$work/root/usr/bin"
   for command in omarchy-hw-apple-silicon sh; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"

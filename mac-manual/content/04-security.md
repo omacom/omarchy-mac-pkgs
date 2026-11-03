@@ -48,3 +48,9 @@ Turning Touch ID off later removes your fingerprints and stops the driver loadin
 _Setup > Reset Computer_ hands a Mac to its next owner, as described in [Security](https://omarchy.org/manual/security/). It works on Macs installed with the installer app. On a Mac it also re-keys the encryption for the next owner, resets the Limine menu and checks the boot files before it activates the clean system. If a check fails, it rolls back and leaves the current system in place.
 
 A clean system expects the kernel it was installed with. When the kernel on the boot partition has moved on since, the reset refuses rather than activating a root that kernel cannot boot.
+
+### Reusing an existing J613 identity
+
+For an administrator migrating a working J613 installation, `/usr/lib/omarchy-mac/touchid-enable --existing` records consent and loads the existing bag with provisioning disabled. This is separate from fingerprint setup: do not enrol again. It requires the installed calibration, six existing state records and the ownership journal. It never copies state or carves calibration. An already loaded driver requires a cold boot before adoption. The candidate kernel must support the `trusted_keys` and `filevault_api` options; older kernels refuse those options. Normal first-time setup is unchanged.
+
+Two Linux roots must use the same current SEP records and fprint directory before either can load the driver. Snapshots are not state backups: never replace a current host store with an older root's copy. Mount the authoritative state globally before the load and activation units; a service-only mount namespace does not redirect the kernel's file opens. A missing shared mount must block both activation and fprintd. Do not reset keys or use enrolment to repair a migration.

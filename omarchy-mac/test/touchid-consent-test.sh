@@ -651,7 +651,61 @@ run touchid-status
   fail 'after turning it off, the next boot leaves it off and only offers it again'
 pass 'enable-fingerprint asks before anything turns on, and turning it off lasts'
 
+# Existing-bag adoption uses only synthetic state and stubbed module operations.
+# Fixtures belong to the test runner; stat supplies root ownership for them.
+cat >"$fixture/bin/stat" <<'STUB'
+#!/bin/bash
+if [[ $* == *"%u:%g:%a:%h"* ]]; then
+  value=$(/usr/bin/stat "$@") || exit
+  printf '0:0:%s\n' "${value#*:*:}"
+else
+  exec /usr/bin/stat "$@"
+fi
+STUB
+chmod +x "$fixture/bin/stat"
+existing_fixture() {
+  machine apple,j613 apple,t8122 apple,arm-platform
+  rm -f "$fixture"/aurora-sep-*.bin "$fixture"/apple-sep-catacomb-*.bin
+  mkdir -p "$fixture/firmware/vendor/apple"
+  printf calibration >"$fixture/firmware/vendor/apple/mesa_calibration.bin"
+  for name in aurora-sep-keybag.bin aurora-sep-host-state.bin aurora-sep-refkey.bin \
+    apple-sep-catacomb-master.bin apple-sep-catacomb-owner.bin apple-sep-catacomb-user.bin aurora-sep-xart-owned.bin; do
+    printf synthetic >"$fixture/$name"
+    chmod 0600 "$fixture/$name"
+  done
+  : >"$fixture/aurora-sep-xart-owned.bin"
+  echo ready >"$fixture/activation"
+}
+existing_fixture
+before=$(sha256sum "$fixture"/*.bin)
+run touchid-enable --existing >/dev/null || fail 'an existing J613 bag is adopted'
+[[ $(sha256sum "$fixture"/*.bin) == "$before" ]] || fail 'adoption leaves every state byte unchanged'
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=0 xart_guard=1 trusted_keys=0 filevault_api=0 xarm_trace=1' "$fixture/options-at-load" ||
+  fail 'adoption disables provisioning and optional key APIs with the qualified guard'
+! grep -q calibration "$fixture/calls" || fail 'adoption never carves calibration'
+for refusal in absent empty symlink hardlink writable calibration recovery loaded; do
+  existing_fixture
+  file=$fixture/aurora-sep-host-state.bin
+  case $refusal in
+    absent) rm "$file" ;;
+    empty) : >"$file" ;;
+    symlink) rm "$file"; ln -s aurora-sep-keybag.bin "$file" ;;
+    hardlink) ln "$file" "$fixture/second-link" ;;
+    writable) chmod 0620 "$file" ;;
+    calibration) rm "$fixture/firmware/vendor/apple/mesa_calibration.bin" ;;
+    recovery) touch "$fixture/aurora-sep-refkey-v2.bin" ;;
+    loaded) mkdir "$fixture/module" ;;
+  esac
+  ! run touchid-enable --existing >/dev/null 2>&1 && [[ ! -e $fixture/etc/touchid-on ]] &&
+    ! grep -qE 'modprobe|calibration' "$fixture/calls" || fail "unsafe existing-bag $refusal is refused before consent or load"
+  rm -f "$fixture/second-link"
+done
+pass 'existing-bag adoption never provisions, copies state, carves calibration or retries a loaded module'
+
 if command -v systemd-analyze >/dev/null; then
+  for target in sysinit basic shutdown local-fs; do
+    printf '[Unit]\nDescription=Fixture target\nDefaultDependencies=no\n' >"$work/root/usr/lib/systemd/system/$target.target"
+  done
   mkdir -p "$work/root/usr/bin"
   for command in omarchy-hw-apple-silicon modprobe udevadm; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"
