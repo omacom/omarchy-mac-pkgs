@@ -7,7 +7,7 @@ trap 'rm -rf "$work"' EXIT
 units=$work/root/usr/lib/systemd/system
 unit=$units/omarchy-mac-touchid-statecheck.service
 grep -Fxq 'Type=oneshot' "$unit" && grep -Fxq 'Before=omarchy-mac-touchid-load.service omarchy-mac-touchid-activate.service fprintd.service' "$unit" || fail 'host state admission is a distinct oneshot dependency'
-grep -Fxq 'Requires=omarchy-mac-touchid-statecheck.service' "$units/fprintd.service.d/50-omarchy-mac-touchid.conf" || fail 'fprintd requires host admission'
+grep -Fxq 'Requires=omarchy-mac-touchid-statecheck.service omarchy-mac-touchid-load.service' "$units/fprintd.service.d/50-omarchy-mac-touchid.conf" || fail 'fprintd requires host admission'
 ! grep -Eq '^Exec(Start|StartPre)=' "$units/fprintd.service.d/50-omarchy-mac-touchid.conf" || fail 'fprintd has no admission command inside its sandbox'
 ! grep -Eq '^(ProtectSystem|PrivateTmp|PrivateMounts|RootDirectory)=' "$unit" || fail 'admission sees the global mount namespace'
 for name in load activate; do

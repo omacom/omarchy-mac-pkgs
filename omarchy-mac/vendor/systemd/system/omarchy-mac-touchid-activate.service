@@ -1,9 +1,10 @@
+# Policy admission in the load unit must finish before any first open.
 # Touch ID activates on the first open of /dev/sep-bio. Opening it once when it
 # appears, and recording whether it can enrol and match, lets Omarchy find the
 # reader before anything has used it (fingerprint-readers names the record).
 [Unit]
-Requires=omarchy-mac-touchid-statecheck.service
-After=omarchy-mac-touchid-statecheck.service
+Requires=omarchy-mac-touchid-statecheck.service omarchy-mac-touchid-load.service
+After=omarchy-mac-touchid-statecheck.service omarchy-mac-touchid-load.service
 Description=Activate Touch ID
 # Only once the owner has agreed (enable-fingerprint's record): a driver
 # something else loaded is not agreement, and its status stays the boot's.
