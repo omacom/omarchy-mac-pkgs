@@ -43,7 +43,7 @@ grep -Fxq 'StandardOutput=kmsg' "$UNIT" && grep -Fxq 'StandardError=kmsg' "$UNIT
   fail "the initrd unit logs to the journal and kmsg (serial harness), never the console"
 grep -Fxq 'After=plymouth-start.service' "$UNIT" ||
   fail "the initrd unit starts once the splash it reports progress on is up"
-for binary in chroot grep mv cat mkdir chmod readlink stat sync date sleep; do
+for binary in chroot grep mv cat mkdir chmod readlink stat sync date sleep rm shred; do
   grep -Eq "\b$binary\b" "$INSTALL" || fail "the install hook adds $binary (busybox is not guaranteed)"
 done
 ! grep -Eq 'blockdev|dmsetup' "$INSTALL" || fail "the install hook adds nothing the script does not run"
@@ -1144,6 +1144,20 @@ mount -o subvol=@ /dev/mapper/root "$tmp/mnt-resume2"
 grep -Fq 'phase=configured' "$boot_mnt/omarchy/encrypt.state" || fail "resumed conversion ends configured"
 umount "$tmp/mnt-resume2"
 echo 'ok - rerun after an interruption resumes with --resume-only and keeps data intact'
+
+# A reset can occur after conversion completes but before its journal advances.
+cryptsetup close root
+sed -i 's/^phase=configured$/phase=reencrypting/' "$boot_mnt/omarchy/encrypt.state"
+: >"$tmp/cryptsetup.log"
+OMARCHY_MAC_ENCRYPT_ESP="$esp_mnt" \
+  OMARCHY_MAC_ENCRYPT_BOOT="$boot_mnt" \
+  OMARCHY_MAC_ENCRYPT_SYSTEMD_RUN="$tmp/systemd" \
+  bash "$SCRIPT" >"$case_dir/out" 2>&1 || { cat "$case_dir/out" >&2; fail "completed conversion with stale journal"; }
+! grep -Fq -- '--resume-only' "$tmp/cryptsetup.log" || fail "completed conversion must not resume again"
+! grep -Fq -- '--encrypt' "$tmp/cryptsetup.log" || fail "completed conversion must not encrypt again"
+grep -Fq 'phase=configured' "$boot_mnt/omarchy/encrypt.state" || fail "completed conversion advances stale journal"
+[[ ! -e $boot_mnt/omarchy/luks-header-before-repair ]] || fail "completed conversion removes obsolete recovery header"
+echo 'ok - authenticated completed conversion finishes a stale reencrypting journal without another conversion'
 
 # ── snapshot overlay unit ───────────────────────────────────────────────────
 OVERLAY_UNIT=$FILES/usr/lib/omarchy/initcpio/omarchy-mac-snapshot-overlay.service

@@ -282,6 +282,22 @@ with mock.patch.dict(os.environ, {'OMARCHY_PATH': '/usr/share/omarchy'}):
             assert system.stop_shell() == result, (listings, result)
         assert sum(call[1] == 'kill' for call in calls) == kills, (listings, calls)
         assert all(call[2:4] == ('-p', '/usr/share/omarchy/shell') for call in calls)
+# The commands run under C.UTF-8: under C, Quickshell 0.3.2 prints Qt's
+# locale warning on stdout ahead of its JSON, and the shell read as unknown.
+with tempfile.TemporaryDirectory() as stubs, mock.patch.dict(os.environ, {'OMARCHY_PATH': '/usr/share/omarchy'}):
+    quickshell = Path(stubs, 'quickshell')
+    quickshell.write_text('#!/bin/bash\n'
+                          'if [[ $LC_ALL != *UTF-8* ]]; then\n'
+                          '  printf \'  WARN: Detected locale "C" with character encoding "ANSI_X3.4-1968", which is not UTF-8.\\n\'\n'
+                          'fi\n'
+                          'printf \'[{"id": "k91pxwdnt", "pid": 1640}]\\n\'\n')
+    quickshell.chmod(0o755)
+    with mock.patch.dict(os.environ, {'PATH': stubs + os.pathsep + os.environ['PATH'], 'LC_ALL': 'C', 'LANG': 'C'}):
+        assert w.System.shell_instances(system) == 1, 'a running shell is counted, whatever locale the session has'
+    with mock.patch.dict(os.environ, {'PATH': stubs + os.pathsep + os.environ['PATH']}), \
+            mock.patch.object(w.System, 'run', lambda self, *args, timeout=10, env=None: subprocess.run(
+                args, capture_output=True, text=True, env=dict(os.environ, LC_ALL='C'))):
+        assert w.System.shell_instances(system) is None, 'the stub reproduces the C locale failure'
 # Relocking asks until the new shell reports the lock taken, and gives up
 # after half a minute.
 clock = [0.0]

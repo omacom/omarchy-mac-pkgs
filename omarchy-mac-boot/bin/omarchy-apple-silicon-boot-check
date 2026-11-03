@@ -25,7 +25,7 @@
 set -euo pipefail
 
 root=${OMARCHY_BOOT_CHECK_ROOT:-}
-declare -A bootloaders=([linux-aurora]=m1n1-aurora [linux-asahi]=m1n1)
+declare -A bootloaders=([linux-aurora]="m1n1-aurora aura" [linux-asahi]=m1n1)
 
 fail() {
   echo "Apple Silicon boot check: $*" >&2
@@ -62,7 +62,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Exact installed names: linux-aurora provides linux-asahi.
+# Exact installed names: linux-aurora provides linux-asahi, and aura provides
+# m1n1-aurora on new installs.
 installed=$(pacman -Qq) || fail "cannot list the installed packages"
 is_installed() {
   grep -Fxq -- "$1" <<<"$installed"
@@ -103,12 +104,25 @@ if [[ -z $kernel ]]; then
   fi
 fi
 [[ -n ${bootloaders[$kernel]:-} ]] ||
-  fail "$kernel is not a kernel this check knows; it checks linux-aurora with m1n1-aurora and linux-asahi with m1n1"
-bootloader=${bootloaders[$kernel]}
-for package in "$kernel" "$bootloader"; do
-  is_installed "$package" || fail "$kernel boots with $bootloader, but $package is not installed"
+  fail "$kernel is not a kernel this check knows; it checks linux-aurora with m1n1-aurora or aura and linux-asahi with m1n1"
+read -ra supported_bootloaders <<<"${bootloaders[$kernel]}"
+bootloader_description=${bootloaders[$kernel]// / or }
+is_installed "$kernel" || fail "$kernel boots with $bootloader_description, but $kernel is not installed"
+installed_bootloaders=()
+for candidate in "${supported_bootloaders[@]}"; do
+  ! is_installed "$candidate" || installed_bootloaders+=("$candidate")
 done
-rivals=(linux-aurora m1n1-aurora linux-asahi m1n1)
+if (( ${#installed_bootloaders[@]} == 0 )); then
+  if (( ${#supported_bootloaders[@]} > 1 )); then
+    fail "$kernel boots with $bootloader_description, but neither is installed"
+  else
+    fail "$kernel boots with $bootloader_description, but $bootloader_description is not installed"
+  fi
+elif (( ${#installed_bootloaders[@]} > 1 )); then
+  fail "$kernel has more than one bootloader provider installed: ${installed_bootloaders[*]}"
+fi
+bootloader=${installed_bootloaders[0]}
+rivals=(linux-aurora m1n1-aurora aura linux-asahi m1n1)
 (( ! boot_chain )) || rivals=()
 for package in "${rivals[@]}"; do
   [[ $package == "$kernel" || $package == "$bootloader" ]] || ! is_installed "$package" ||

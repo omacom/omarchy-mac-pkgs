@@ -424,6 +424,19 @@ printf 'unexpected' | run reset-commit || fail "commit" "$(cat "$test_tmp/err")"
   fail "an unencrypted factory root boots into the Mac's first boot again"
 pass "an unencrypted reset stages no unlock and writes no key"
 
+# A Neo's Touch ID sensor key is rebuilt from the ESP when its next owner agrees
+# to turn Touch ID on, so the factory root is given none, whatever this one had.
+fixture
+mkdir -p "$root/var/lib/omarchy-mac" "$root/usr/lib/firmware/updates/apple"
+printf kept >"$root/var/lib/omarchy-mac/msrk-j700.bin"
+printf installed >"$root/usr/lib/firmware/updates/apple/msrk-j700.bin"
+run reset-prepare "$next" "$root/dev/luks" || fail "prepare" "$(cat "$test_tmp/err")"
+[[ -z $(find "$next" -name 'msrk-j700.bin*' -print -quit) ]] ||
+  fail "the factory root is given no sensor key" "$(find "$next" -name 'msrk-j700.bin*')"
+run reset-rollback || fail "rollback" "$(cat "$test_tmp/err")"
+rm -rf "${root:?}/var/lib/omarchy-mac" "${root:?}/usr/lib/firmware/updates"
+pass "a factory reset gives the factory root no sensor key"
+
 # A key the Boot partition cannot keep is reported, with no leftovers.
 fixture
 run reset-prepare "$next" "$root/dev/luks" || fail "prepare" "$(cat "$test_tmp/err")"

@@ -123,7 +123,7 @@ say() { echo "==> $*"; }
 [[ $(uname -m) == aarch64 ]] || fail "this harness boots aarch64 guests on an aarch64 KVM host"
 [[ -r /dev/kvm ]] || fail "/dev/kvm is not readable"
 for tool in qemu-system-aarch64 fdtput socat sgdisk mkfs.vfat losetup btrfs cryptsetup bsdtar sha256sum gpg curl awk sed \
-    mount umount chroot lsinitcpio python3 base64 truncate stat dd cp blkid tee realpath udevadm; do
+    mount umount chroot lsinitcpio python3 base64 truncate stat dd cp blkid tee realpath udevadm mcopy mmd; do
   command -v "$tool" >/dev/null || fail "missing tool: $tool"
 done
 sudo -n true 2>/dev/null || fail "passwordless sudo is required (losetup, cryptsetup, mounts, chroot)"
@@ -305,6 +305,15 @@ umount_last() {
   unset 'mounts[-1]'
 }
 
+# The ESP is FAT, written and read with mtools rather than mounted, so the host
+# kernel needs no FAT driver (CI runners' kernels may lack one). esp_read
+# copies a disk's whole ESP into a directory the checks then read.
+esp() { sudo -n env MTOOLS_SKIP_CHECK=1 "$@"; }
+esp_read() {
+  sudo -n rm -rf "$2" && mkdir -p "$2" || fail "esp_read: could not clear $2"
+  esp mcopy -s -n -i "$1" '::/*' "$2/" || fail "mcopy from the ESP on $1"
+}
+
 # Opens a LUKS partition with a passphrase file; sets OPENED to the mapper.
 open_luks() {
   local name=omarchy-vm-$run_id-${#mappers[@]}
@@ -441,7 +450,13 @@ fetch_uefi() {
 # QEMU's own virt device tree, with an Apple root compatible and model, so the
 # image's detectors see a Mac. Dumped with the guest's machine options; with
 # ACPI off, the firmware hands this tree to the kernel.
-machine=virt,accel=kvm,gic-version=host,acpi=off
+# MSIs through a GICv2m, not an ITS. Nested on Apple silicon (Namespace's
+# Apple-backed Linux runners) the host's virtual GIC has no LPIs, so the LPIs
+# an emulated ITS raises never reach the guest and its xHCI and virtio devices
+# hang; QEMU's own HVF support leaves the ITS out with Apple's GIC too. A GICv2m
+# raises ordinary SPIs, works on every host, and keeps one interrupt per virtio
+# queue: small reads and writes ran 50-65% faster than with no MSI controller.
+machine=${OMARCHY_VM_MACHINE:-virt,accel=kvm,gic-version=3,msi=gicv2m,acpi=off}
 make_apple_dtb() {
   qemu-system-aarch64 -M "$machine,dumpdtb=$work/apple.dtb" -cpu host -m "$vm_memory_mb" -smp "$vm_cpus" \
     -display none >/dev/null 2>&1 || fail "could not dump QEMU's virt device tree"
@@ -461,14 +476,15 @@ make_disk() {
   local dev
   attach -P "$disk"; dev=$ATTACHED
   sudo -n mkfs.vfat -F 32 -i "${ESP_UUID/-/}" -n OMARCHY_EFI "${dev}p1" >/dev/null || fail "mkfs.vfat"
-  mkdir -p "$work/esp-mnt"
-  mount_tracked "${dev}p1" "$work/esp-mnt"
-  sudo -n cp -r "$work/payload/esp/." "$work/esp-mnt/"
-  sudo -n mkdir -p "$work/esp-mnt/omarchy"
+  local entries
+  shopt -s nullglob; entries=("$work/payload/esp"/* "$work/payload/esp"/.[!.]*); shopt -u nullglob
+  esp mcopy -s -i "${dev}p1" "${entries[@]}" ::/ || fail "mcopy the payload's ESP tree onto ${dev}p1"
+  esp mdir -i "${dev}p1" ::/omarchy >/dev/null 2>&1 || esp mmd -i "${dev}p1" ::/omarchy || fail "mmd ::/omarchy"
   if [[ -n $install_conf ]]; then
-    printf '%s' "$install_conf" | sudo -n tee "$work/esp-mnt/omarchy/install.conf" >/dev/null
+    printf '%s' "$install_conf" >"$work/install.conf"
+    esp mcopy -i "${dev}p1" "$work/install.conf" ::/omarchy/install.conf || fail "mcopy install.conf onto the ESP"
+    rm -f "$work/install.conf"
   fi
-  umount_last
   detach_last
   # Straight into the disk file at each partition's offset: the loop device's
   # extra page cache made this several times slower.
@@ -491,10 +507,8 @@ copy_disk() {
 disk_cmdline() {
   local dev cmdline
   attach -P -r "$1"; dev=$ATTACHED
-  mkdir -p "$work/mnt"
-  mount_tracked -o ro "${dev}p1" "$work/mnt"
-  cmdline=$(limine_cmdline "$work/mnt/limine.conf")
-  umount_last
+  esp_read "${dev}p1" "$work/esp-copy"
+  cmdline=$(limine_cmdline "$work/esp-copy/limine.conf")
   detach_last
   [[ $cmdline == *root=* ]] || fail "${1##*/}: the first Limine kernel entry has no root= command line"
   DISK_CMDLINE=$cmdline
@@ -603,8 +617,18 @@ owner_setup() {
   serial_type "$owner_password"
   serial_expect 'Confirm> ' "$what: password confirmation" 60
   serial_type "$owner_password"
+  # Omarchy since omacom/omarchy#16288 asks for the git identity after first
+  # login instead; older images still ask for it here.
+  serial_expect 'Full name> |Hostname> ' "$what: owner setup prompt Full name> or Hostname> " 120
+  if [[ $serial_match == 'Full name> ' ]]; then
+    serial_send $'\r'
+    serial_expect 'Email address> ' "$what: owner setup prompt Email address> " 120
+    serial_send $'\r'
+    serial_expect 'Hostname> ' "$what: owner setup prompt Hostname> " 120
+  fi
+  serial_send $'\r'
   local prompt
-  for prompt in 'Full name> ' 'Email address> ' 'Hostname> ' 'Timezone' 'Does this look right\?'; do
+  for prompt in 'Timezone' 'Does this look right\?'; do
     serial_expect "$prompt" "$what: owner setup prompt $prompt" 120
     serial_send $'\r'
   done
@@ -807,8 +831,7 @@ scenario_first_boot() {
     ok "first-boot: every deferred hardware step completed${first_boot_offline:+ with no network device}"
   fi
   sudo -n grep -qx 'encrypt=0' "$work/mnt/var/lib/omarchy/mac-first-boot/install.conf" || fail "first-boot: install.conf was not persisted"
-  mkdir -p "$work/esp"
-  mount_tracked -o ro "${dev}p1" "$work/esp"
+  esp_read "${dev}p1" "$work/esp"
   sudo -n test ! -e "$work/esp/omarchy/install.conf" || fail "first-boot: install.conf is still on the ESP"
   sudo -n grep -Fq 'boot():/EFI/Linux/omarchy_' "$work/esp/limine.conf" || fail "first-boot: limine.conf boots no Omarchy UKI"
   local machine_id
@@ -821,7 +844,6 @@ scenario_first_boot() {
   check_snapshots first-boot
   check_regdom first-boot
   skip "first-boot: default audio sink: N/A in a VM (no Apple audio device, so no card profile to fall back from); hardware validation checks it"
-  umount_last
   umount_root "${dev}p3"
   mkdir -p "$work/boot"
   mount_tracked -o ro "${dev}p2" "$work/boot"
@@ -876,12 +898,10 @@ scenario_conversion() {
   sudo -n test ! -e "$work/mnt/var/lib/omarchy/provisioning/luks-key" || fail "conversion: the provisioning copy of the temporary key remains"
   sudo -n grep -q "^root UUID=$luks none luks" "$work/mnt/etc/crypttab" || fail "conversion: /etc/crypttab does not name the LUKS root"
   ! sudo -n grep -q 'rd.luks.key=' "$work/mnt/etc/default/grub" || fail "conversion: /etc/default/grub still names the temporary key"
-  mkdir -p "$work/esp"
-  mount_tracked -o ro "${dev}p1" "$work/esp"
+  esp_read "${dev}p1" "$work/esp"
   cmdline=$(limine_cmdline "$work/esp/limine.conf")
   [[ $cmdline == *"rd.luks.name=$luks=root"* ]] || fail "conversion: Limine's command line does not unlock $luks: $cmdline"
   [[ $cmdline != *rd.luks.key=* ]] || fail "conversion: Limine's command line still names the temporary key: $cmdline"
-  umount_last
   umount_root "${dev}p3"
   detach_last
   ok "conversion: encrypt.state finished, temporary key files gone, crypttab set, Limine unlocks $luks with no key file"
@@ -1045,11 +1065,9 @@ scenario_update() {
 snapshot_cmdline() {
   local dev
   attach -P -r "$1"; dev=$ATTACHED
-  mkdir -p "$work/mnt"
-  mount_tracked -o ro "${dev}p1" "$work/mnt"
-  sudo -n cat "$work/mnt/limine.conf" >"$evidence_dir/$2-limine.conf"
-  SNAP_CMDLINE=$(sudo -n awk '/^[[:space:]]*cmdline:.*\.snapshots\/[0-9]+\/snapshot/ { sub(/^[[:space:]]*cmdline:[[:space:]]*/, ""); print; exit }' "$work/mnt/limine.conf")
-  umount_last
+  esp_read "${dev}p1" "$work/esp-copy"
+  sudo -n cat "$work/esp-copy/limine.conf" >"$evidence_dir/$2-limine.conf"
+  SNAP_CMDLINE=$(sudo -n awk '/^[[:space:]]*cmdline:.*\.snapshots\/[0-9]+\/snapshot/ { sub(/^[[:space:]]*cmdline:[[:space:]]*/, ""); print; exit }' "$work/esp-copy/limine.conf")
   detach_last
 }
 

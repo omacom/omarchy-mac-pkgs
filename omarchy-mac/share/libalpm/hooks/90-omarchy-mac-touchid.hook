@@ -1,0 +1,19 @@
+# Record Touch ID's status and activate it when an install or update brings
+# its rule. The boot-time status unit hasn't run on the update that first
+# installs it, and /dev/sep-bio already exists, so the add event that starts
+# the activation has passed: without both, the post-update fingerprint check
+# would see neither "available" nor "ready" until a reboot.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules
+
+[Action]
+# Without the owner's agreement nothing is activated, only the status recorded.
+Description = Checking Touch ID...
+When = PostTransaction
+# Skipped in a chroot or an unbooted root (offline provisioning, image builds,
+# pacman --root, which runs hooks chrooted), as systemd's own hooks are. Never
+# fails the transaction: a unit that fails says why in its journal.
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-status.service; systemctl --quiet start omarchy-mac-touchid-activate.service; true; }'

@@ -20,7 +20,7 @@ Each scenario is named and runs on its own (`--scenario NAME`, repeatable or com
 
 ## Run it
 
-Run on an aarch64 Linux host with `/dev/kvm`, passwordless sudo (loop devices, cryptsetup, mounts, the chroot) and `qemu-system-aarch64`, `dtc` (`fdtput`), `socat`, `gptfdisk`, `dosfstools`, `btrfs-progs`, `cryptsetup`, `mkinitcpio` (for `lsinitcpio`), `libarchive` (`bsdtar`), `gnupg`, `curl` and `python3`:
+Run on an aarch64 Linux host with `/dev/kvm`, passwordless sudo (loop devices, cryptsetup, mounts, the chroot) and `qemu-system-aarch64`, `dtc` (`fdtput`), `socat`, `gptfdisk`, `dosfstools`, `mtools`, `btrfs-progs`, `cryptsetup`, `mkinitcpio` (for `lsinitcpio`), `libarchive` (`bsdtar`), `gnupg`, `curl` and `python3`:
 
 ```bash
 tools/acceptance/mac-image/run --image /var/tmp/omarchy-images/<set>/image

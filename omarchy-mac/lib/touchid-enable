@@ -1,0 +1,182 @@
+#!/bin/bash
+# Turns Touch ID on once the owner has agreed: carves this Mac's calibration
+# (and on the Neo installs its sensor root key) if they are missing, records the
+# agreement so the driver loads at every boot, and loads it now.
+
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
+extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
+module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+# Set once this script has loaded the driver this boot, so a retry after a
+# failure doesn't take that driver for one loaded without the options.
+loaded=${status_file%/*}/touchid-loaded
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+node_path=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
+keybag=${OMARCHY_MAC_TOUCHID_KEYBAG:-/var/lib/aurora-sep-keybag.bin}
+esp=${OMARCHY_MAC_TOUCHID_ESP:-/boot/efi}
+container=${OMARCHY_MAC_TOUCHID_CONTAINER:-/dev/disk/by-partlabel/iBootSystemContainer}
+python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
+lock_wait=${OMARCHY_MAC_TOUCHID_LOCK_WAIT:-300}
+omarchy-hw-apple-silicon || exit 0
+
+# Once this run records the agreement, a failure takes it back, so a Touch ID
+# that never came up doesn't load at every boot and is offered again after a
+# restart. A record from an earlier agreement stays.
+recorded=0
+rebuilt=0
+fail() {
+  if (( recorded )); then
+    rm -f "$agreed" "$options"
+  fi
+  if (( rebuilt )); then
+    rm -f "$firmware/updates/apple/msrk-j700.bin"
+  fi
+  echo "Touch ID was not turned on: $1" >&2
+  exit 1
+}
+
+installed() {
+  local directory
+  for directory in "$firmware" "$firmware/vendor" "$firmware/updates"; do
+    if [[ -f $directory/$1 ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# A sensor key counts only once it checks out whole. A broken one in the updates
+# directory is rebuilt, and goes if that fails; one anywhere else would shadow
+# or outlive a rebuild there.
+root_key_installed() {
+  local directory key found=1 checked
+  for directory in "$firmware" "$firmware/vendor" "$firmware/updates"; do
+    key=$directory/apple/msrk-j700.bin
+    if [[ ! -e $key ]]; then
+      continue
+    elif ! command -v "$python" >/dev/null; then
+      fail "this Mac's sensor key at $key can't be checked without Python"
+    fi
+    checked=0
+    "$python" -I "$helpers/touchid-root-key" --check "$key" >/dev/null 2>&1 || checked=$?
+    if (( checked == 0 )); then
+      found=0
+    elif (( checked != 3 )); then
+      fail "this Mac's sensor key at $key could not be checked"
+    elif [[ $directory == "$firmware/updates" ]]; then
+      echo "The sensor key at $key is not whole, so it is read again."
+      return 1
+    else
+      fail "the sensor key at $key is not whole; remove it, then turn Touch ID on again"
+    fi
+  done
+  return $found
+}
+
+# One setup or removal at a time: two would share the sensor key's temporary
+# copy, and one could install the other's unfinished key.
+lock=${status_file%/*}/touchid.lock
+if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
+  fail "its lock, $lock, could not be opened"
+elif ! flock -w "$lock_wait" "$lock_fd"; then
+  fail "another Touch ID setup or removal is still running; try again once it finishes"
+fi
+
+eligibility=$("$helpers/touchid-eligibility")
+[[ $eligibility == "available" ]] || fail "this Mac can't use it yet ($eligibility)"
+
+# Factory data from this Mac's own iBoot System Container, never another's.
+sensor=$("$helpers/touchid-eligibility" sensor)
+calibration=apple/mesa_calibration.bin
+if [[ -r $sensor/firmware-name ]]; then
+  calibration=$(tr -d '\0' <"$sensor/firmware-name")
+fi
+if ! installed "$calibration"; then
+  echo "Copying this Mac's Touch ID calibration..."
+  mkdir -p -m 0755 "$firmware/updates/${calibration%/*}"
+  # A partial carve never takes the calibration's name, which a retry would
+  # take for an installed one.
+  carved=$firmware/updates/$calibration
+  "$extractors/extract-mesa-calibration" -o "$carved.new" >/dev/null ||
+    { rm -f "$carved.new"; fail "this Mac's calibration could not be read"; }
+  chmod 0644 "$carved.new" && mv -f "$carved.new" "$carved" || { rm -f "$carved.new"; fail "this Mac's calibration could not be installed"; }
+fi
+if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 && ! root_key_installed; then
+  # Rebuilt only now, from the factory records asahi-installer leaves on the
+  # ESP and checked against this Mac's iBoot System Container; root-only, and
+  # it takes its name only once whole. Turning Touch ID off deletes it.
+  echo "Reading this Mac's Touch ID sensor key..."
+  mkdir -p -m 0755 "$firmware/updates/apple"
+  # No whole key was installed, so whatever takes its name from here is this run's:
+  # a failure, even one the extractor reports after its rename, takes it back
+  # with the agreement.
+  rebuilt=1
+  "$python" -I "$helpers/touchid-root-key" --archive "$esp/asahi/all_firmware.tar.gz" --container "$container" \
+    -o "$firmware/updates/apple/msrk-j700.bin" || fail "this Mac's sensor key could not be read"
+fi
+
+# The record is the agreement: omarchy-mac-touchid-load.service loads the
+# driver at every boot while it exists, and disable-fingerprint removes it.
+[[ -e $agreed ]] || recorded=1
+{ mkdir -p -m 0755 "${agreed%/*}" &&
+  printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." >"$agreed" &&
+  chmod 0644 "$agreed"; } || fail "the owner's agreement could not be recorded in $agreed"
+# The driver's options say so too. Today's kernels write by default, so this
+# changes nothing yet; a kernel that loads apple_sep read-only by default
+# (omacom/linux-aurora#180) writes only with it. A driver already running
+# keeps the options it was loaded with until the next boot.
+preloaded=0
+if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
+  preloaded=1
+fi
+# A write that fails partway never replaces the options, since a file without
+# them would load a read-only driver at every boot.
+{ mkdir -p -m 0755 "${options%/*}" &&
+  printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
+    "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+  chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
+  { rm -f "$options.new" 2>/dev/null; fail "the driver's options could not be written to $options"; }
+mkdir -p -m 0755 "${loaded%/*}"
+touch "$loaded"
+modprobe apple-sep || fail "the Secure Enclave driver did not load"
+
+# The node and keybag appear a few seconds after the driver binds. Their add
+# event starts the activation; starting it here too waits for its answer.
+echo "Starting Touch ID..."
+for ((attempt = 0; attempt < 200; attempt++)); do
+  if [[ -e $node_path && -e $keybag ]]; then
+    break
+  fi
+  sleep 0.1
+done
+systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
+if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
+  # An fprintd that started without the reader found none and kept no
+  # allowance for its node, so it starts again with both.
+  systemctl try-restart fprintd.service 2>/dev/null
+  echo "Touch ID is on."
+  exit 0
+elif (( preloaded )); then
+  # It was loaded before it could be told to write, so the agreement stands and
+  # takes effect when it loads again.
+  echo "Touch ID turns on when this Mac restarts: its driver was already running without permission to write. Restart, then set up the fingerprint again." >&2
+  exit 1
+fi
+# A driver that came up wrong stays so until a restart: the status says it failed.
+# Without the node or keybag the activation never ran; only the kernel log says why.
+missing=""
+[[ -e $node_path ]] || missing="$node_path"
+[[ -e $keybag ]] || missing="${missing:+$missing and }$keybag"
+reason=$(cat "$status_file" 2>/dev/null)
+if [[ -n $missing || -z $reason || $reason == "available" ]]; then
+  mkdir -p -m 0755 "${status_file%/*}" && printf '%s\n' failed >"$status_file.new" &&
+    chmod 0644 "$status_file.new" && mv -f "$status_file.new" "$status_file"
+fi
+if [[ -n $missing ]]; then
+  fail "the Secure Enclave driver loaded but $missing never appeared; see journalctl -k for apple_sep. The driver stays loaded until this Mac restarts; restart before trying again"
+fi
+[[ -n $reason && $reason != "available" ]] || reason="the activation recorded nothing"
+fail "it did not become ready ($reason); see journalctl -u omarchy-mac-touchid-activate. The driver stays loaded until this Mac restarts; restart before trying again"

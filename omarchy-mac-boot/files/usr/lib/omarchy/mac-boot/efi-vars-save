@@ -1,0 +1,55 @@
+#!/bin/bash
+# Called by omarchy-mac-efi-vars.service as the Mac shuts down. U-Boot keeps
+# EFI variables the OS sets at runtime in RAM: RTStorageVolatile names its
+# variable file on the ESP and VarToFile holds that file's new contents, and
+# the OS must write them there (U-Boot's EFI_RT_VOLATILE_STORE). Without this,
+# a one-shot boot menu request (systemctl reboot --boot-loader-menu) and
+# efibootmgr changes are lost at reset.
+
+set -uo pipefail
+
+efivars=${OMARCHY_EFIVARS:-/sys/firmware/efi/efivars}
+guid=b2ac5fc9-92b7-4acd-aeac-11e818c3130c
+name_var=$efivars/RTStorageVolatile-$guid
+store_var=$efivars/VarToFile-$guid
+
+fail() {
+  echo "efi-vars-save: $*; runtime EFI variable changes are not saved" >&2
+  exit 1
+}
+
+# Firmware that stores variables itself, or a U-Boot without the runtime
+# store, sets neither variable.
+[[ -e $name_var ]] || exit 0
+[[ -e $store_var ]] || fail "U-Boot names a variable file but sets no VarToFile"
+
+# efivarfs prefixes each value with its 4-byte attributes.
+name=$(tail -c +5 "$name_var" | tr -d '\0') || fail "cannot read RTStorageVolatile"
+name=${name#/}
+[[ $name =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ && /$name/ != */../* ]] ||
+  fail "U-Boot names an unusable variable file '$name'"
+
+esp=$(omarchy-mac-esp) || fail "the ESP is not mounted"
+target=$esp/$name
+[[ -d $(dirname "$target") && ! -L $target ]] || fail "$target is not a file U-Boot can read"
+
+work=$(mktemp) || fail "cannot create a work file"
+trap 'rm -f "$work"' EXIT
+tail -c +5 "$store_var" >"$work" || fail "cannot read VarToFile"
+
+# struct efi_var_file: reserved u64, magic "UbEfiVa\x01", length u32 (LE).
+size=$(stat -c %s "$work")
+magic=$(od -An -tx1 -j8 -N8 "$work" | tr -d ' \n')
+length=$(od -An -tu4 -j16 -N4 --endian=little "$work" | tr -d ' ')
+[[ $magic == 5562456669566101 && $length == "$size" ]] ||
+  fail "VarToFile is not a U-Boot variable store (magic $magic, length $length, size $size)"
+
+cmp -s "$work" "$target" && exit 0
+
+# Staged beside the file and synced before the rename, so a reset mid-write
+# leaves U-Boot the old store or the new one, never half of either.
+install -m600 "$work" "$target.new" && sync -f "$target.new" ||
+  { rm -f "$target.new"; fail "cannot stage $target.new"; }
+mv -f "$target.new" "$target" || { rm -f "$target.new"; fail "cannot replace $target"; }
+sync -f "$target" || true
+echo "Saved runtime EFI variables to $target"

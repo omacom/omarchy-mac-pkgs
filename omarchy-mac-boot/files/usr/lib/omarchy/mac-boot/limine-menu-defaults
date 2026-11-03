@@ -1,0 +1,24 @@
+#!/bin/bash
+# Usage: limine-menu-defaults MENU TEMPLATE
+# Mac Limine activations used to write timeout: 3 over the boot timeout in
+# Omarchy's menu template (omarchy-settings' default/limine/limine.conf). That
+# exact line is this package's: it takes the template's timeout, and the
+# template's quiet: line where the menu has none. Every other menu is left to
+# Omarchy's own migrations, which treat any other timeout as the owner's.
+
+set -uo pipefail
+
+menu=${1:?Usage: limine-menu-defaults MENU TEMPLATE}
+template=${2:?Usage: limine-menu-defaults MENU TEMPLATE}
+[[ -f $menu && -f $template ]] || exit 0
+grep -Fxq 'timeout: 3' "$menu" || exit 0
+
+timeout=$(grep -m1 -E '^timeout: [0-9]+$' "$template")
+quiet=$(grep -m1 -E '^quiet: (yes|no)$' "$template")
+[[ -n $timeout ]] || exit 0
+
+if [[ -n $quiet ]] && ! grep -Eqi '^[[:space:]]*quiet:' "$menu"; then
+  sed -i "0,/^timeout: 3\$/{/^timeout: 3\$/a $quiet
+}" "$menu" || exit 1
+fi
+sed -i "s/^timeout: 3\$/$timeout/" "$menu" || exit 1

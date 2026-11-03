@@ -19,8 +19,12 @@ sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader('mic', str(root / 'bin/omarchy-audio-asahi-mic-map'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+# The host's model and sound cards stay out of it.
+m.MODEL = Path('/nonexistent/model'); m.ASOUND_CARDS = Path('/nonexistent/cards'); m.WIREPLUMBER_CONF = Path('/nonexistent/conf.d')
 DSP = 'effect_output.j414-mic'
-VIRTUAL = 'module-null-sink', 'media.class=Audio/Source/Virtual sink_name=omarchy_asahi_mic channels=2 sink_properties=' + m.OWNER + '=existing'
+EXISTING = 'module-remap-source', 'source_name=omarchy_asahi_mic master=' + DSP + ' channels=2 source_properties=' + m.OWNER + '=existing'
+# The virtual source 0.1.2 mapped into, under the same name.
+VIRTUAL_MODULE = dict(index='39', name='module-null-sink', argument='media.class=Audio/Source/Virtual sink_name=omarchy_asahi_mic channels=2 sink_properties=' + m.OWNER + '=virtual')
 LEGACY_MODULE = dict(index='41', name='module-null-sink', argument='sink_name=omarchy_asahi_mic channels=2 sink_properties=device.description=AsahiMicrophone ' + m.OWNER + '=old')
 def obj(name, value=27525, mute=True):
     return dict(name=name, volume={'front-left': {'value': value}, 'front-right': {'value': value}}, mute=mute)
@@ -28,7 +32,7 @@ class Audio:
     def __init__(self, existing=False, default=DSP):
         self.calls = []; self.default = default; self.existing = existing
         self.mapping = obj(m.MAPPING)
-        self.module = dict(index='40', name=VIRTUAL[0], argument=VIRTUAL[1]) if existing else None
+        self.module = dict(index='40', name=EXISTING[0], argument=EXISTING[1]) if existing else None
         self.legacy = None
         self.linked = {}; self.missing = None; self.fail_link = None; self.fail_module = False
         self.fail_query = False; self.fail_graph = False; self.concurrent = False
@@ -37,7 +41,13 @@ class Audio:
         self.notices = []; self.feeds = {m.MAPPING}; self.routes = 0; self.route_choice = None
         self.stamp = None; self.restarts = 0; self.link_error = 'link rejected after partial creation'
         self.cards = [dict(name='alsa_card.platform-sound', active_profile='HiFi')]
+        self.dsp_ports = ['capture_AUX0']; self.capture_ports = ['input_FL', 'input_FR']; self.has_array = True
+        # WirePlumber links the DSP's mono port to the remap source's left side
+        # this many graph queries after the module loads (None: never).
+        self.wireplumber_links = None; self.loaded_at = None; self.queries = 0
     def restart_session_manager(self, reason): self.restarts += 1; return 0
+    def array(self): return self.has_array
+    def updating(self): return getattr(self, 'busy', False)
     def objects(self, kind):
         if self.fail_query: raise RuntimeError('live Pulse query failed')
         if kind == 'sources':
@@ -50,15 +60,20 @@ class Audio:
         return [module for module in (self.module, LEGACY_MODULE if self.legacy else None) if module]
     def graph(self):
         if self.fail_graph: raise RuntimeError('live graph query failed')
+        self.queries += 1
+        if (self.existing and self.wireplumber_links is not None and self.loaded_at is not None
+                and self.queries - self.loaded_at >= self.wireplumber_links and not any(input_ == 21 for input_, _ in self.linked.values())):
+            self.next_id += 1; self.linked[self.next_id] = (21, None)
         nodes = [dict(id=1, type='PipeWire:Interface:Node', info={'props': {'node.name': DSP}})]
-        ports = [(11, 1, 'capture_AUX0')]
+        ports = [(11 + index, 1, name) for index, name in enumerate(self.dsp_ports)]
         if self.existing:
             nodes.append(dict(id=2, type='PipeWire:Interface:Node', info={'props': {'node.name': m.MAPPING}}))
-            ports += [(21, 2, 'input_FL'), (22, 2, 'input_FR')]
+            nodes.append(dict(id=3, type='PipeWire:Interface:Node', info={'props': {'node.name': m.CAPTURE}}))
+            ports += [(21 + index, 3, name) for index, name in enumerate(self.capture_ports)] + [(23, 2, 'capture_FL'), (24, 2, 'capture_FR')]
         for id_, node, name in ports:
             if name != self.missing: nodes.append(dict(id=id_, type='PipeWire:Interface:Port', info={'props': {'node.id': node, 'port.name': name}}))
         for id_, (input_, owner) in self.linked.items():
-            nodes.append(dict(id=id_, type='PipeWire:Interface:Link', info={'output-port-id': 11, 'input-port-id': input_, 'state': 'paused', 'props': {m.OWNER: owner}}))
+            nodes.append(dict(id=id_, type='PipeWire:Interface:Link', info={'output-port-id': 11, 'input-port-id': input_, 'state': 'paused', 'props': {m.OWNER: owner} if owner else {}}))
         if self.concurrent and len(self.linked) == 2: self.default = 'usb-mic'
         return nodes
     def pause(self): pass
@@ -75,7 +90,10 @@ class Audio:
         self.calls.append(args)
         if args[0] == 'pw-link':
             if args[1] == '-d': self.linked.pop(int(args[2])); return ''
-            input_ = int(args[-1]); self.next_id += 1
+            input_ = int(args[-1])
+            if any(other == input_ for other, _ in self.linked.values()):
+                raise RuntimeError('pw-link -L: failed to link ports: File exists')
+            self.next_id += 1
             self.linked[self.next_id] = (input_, json.loads(args[4])[m.OWNER])
             if self.fail_link == input_: raise RuntimeError(self.link_error)
             return ''
@@ -84,9 +102,9 @@ class Audio:
         if command == 'get-default-source': return self.default
         if command == 'load-module':
             if self.fail_module: raise RuntimeError('module failed')
-            self.module = dict(index='42', name='module-null-sink', argument=' '.join(args[3:]))
-            assert args[2] == 'module-null-sink' and 'media.class=Audio/Source/Virtual' in args[3:], args
-            self.existing = True
+            self.module = dict(index='42', name='module-remap-source', argument=' '.join(args[3:]))
+            assert args[2] == 'module-remap-source' and 'master=' + DSP in args[3:] and 'channel_map=front-left,front-right' in args[3:], args
+            self.existing = True; self.loaded_at = self.queries
             if self.auto_input: self.default = m.MAPPING
             self.mapping = obj(m.MAPPING, 65536, False)
             return '42'
@@ -296,11 +314,63 @@ with tempfile.TemporaryDirectory() as temporary:
     except RuntimeError as error: assert 'does not own' in str(error), error
     else: raise AssertionError('a foreign sink must not be replaced')
     assert not any(call[1] == 'unload-module' for call in audio.calls if call[0] == 'pactl')
-    audio = Audio(True); audio.module = dict(index='40', name='module-null-sink', argument='sink_name=omarchy_asahi_mic media.class=Audio/Source/Virtual')
+    for foreign in (dict(index='40', name='module-remap-source', argument='source_name=omarchy_asahi_mic master=' + DSP),
+                    dict(index='40', name='module-null-sink', argument='sink_name=omarchy_asahi_mic media.class=Audio/Source/Virtual')):
+        audio = Audio(True); audio.module = foreign
+        try: m.reconcile(audio, state())
+        except RuntimeError as error: assert 'does not own' in str(error), error
+        else: raise AssertionError('a foreign source must not be mapped into or replaced')
+        assert not audio.linked and not any(call[1] == 'unload-module' for call in audio.calls if call[0] == 'pactl')
+    # 0.1.2 mapped into a virtual source of the same name, which the shell
+    # gives no level meter. On upgrade it is replaced by the typed source,
+    # keeping its selection and its gain.
+    for selected, expected in ((m.MAPPING, m.MAPPING), (DSP, m.MAPPING), ('usb-mic', 'usb-mic')):
+        audio = Audio(True, selected); audio.module = dict(VIRTUAL_MODULE)
+        # PipeWire falls back to a monitor when the default source goes.
+        audio.initial_input = 'headphones.monitor'
+        audio.linked = {90: (21, 'virtual'), 91: (22, 'virtual')}
+        audio.mapping = obj(m.MAPPING, 52429, False)
+        saved = state(); saved.write_text(json.dumps({'source': {'volume': [65536, 65536], 'mute': False}}))
+        m.reconcile(audio, saved)
+        assert ('pactl', 'unload-module', '39') in audio.calls, audio.calls
+        assert audio.module['name'] == 'module-remap-source' and m.owned(audio.module)
+        assert audio.default == expected, (selected, audio.default)
+        assert m.gain(audio.mapping) == {'volume': [52429, 52429], 'mute': False}, 'the 0.1.2 gain carries over'
+        assert json.loads(saved.read_text()) == {'source': {'volume': [52429, 52429], 'mute': False}}
+        assert sum(1 for call in audio.calls if call[:2] == ('pactl', 'load-module')) == 1, 'one MacBook Microphone'
+    # With the array missing the 0.1.2 source stays until it returns.
+    audio = Audio(True, m.MAPPING); audio.module = dict(VIRTUAL_MODULE); audio.no_dsp = True
     try: m.reconcile(audio, state())
-    except RuntimeError as error: assert 'does not own' in str(error), error
-    else: raise AssertionError('a foreign source must not be mapped into')
-    assert not audio.linked
+    except m.Deferred: pass
+    assert audio.module == VIRTUAL_MODULE and audio.default == m.MAPPING
+    # WirePlumber links the mono port to the left side (the remap source's
+    # target): the mapper waits for that link, links only the right side, and
+    # takes WirePlumber's link made at the same moment as its own.
+    for delay in (0, 3):
+        audio = Audio(); audio.wireplumber_links = delay
+        m.reconcile(audio, state())
+        assert [call[-1] for call in audio.calls if call[0] == 'pw-link'] == ['22'], audio.calls
+        assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING
+    class Racing(Audio):
+        def run(self, *args):
+            if args[0] == 'pw-link' and args[-1] == '21' and not any(input_ == 21 for input_, _ in self.linked.values()):
+                self.next_id += 1; self.linked[self.next_id] = (21, None)
+            return super().run(*args)
+    audio = Racing()
+    m.reconcile(audio, state())
+    assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING, 'a link WirePlumber made first is no failure'
+    # A link WirePlumber left failed holds the ports: it is replaced, not
+    # taken for a working one.
+    class Stuck(Audio):
+        def graph(self):
+            graph = super().graph()
+            for item in graph:
+                if item.get('id') == 80: item['info']['state'] = 'error'
+            return graph
+    audio = Stuck(); audio.linked = {80: (21, None)}
+    m.reconcile(audio, state())
+    assert ('pw-link', '-d', '80') in audio.calls and 80 not in audio.linked, audio.calls
+    assert sorted(input_ for input_, _ in audio.linked.values()) == [21, 22] and audio.default == m.MAPPING
     legacy_state = state(); legacy_state.write_text(json.dumps({'sink': {'volume': [65536, 65536], 'mute': False}, 'monitor': {'volume': [32768, 32768], 'mute': False}}))
     audio = Audio(); m.reconcile(audio, legacy_state)
     assert m.gain(audio.mapping) == {'volume': [32768, 32768], 'mute': False}, 'legacy saved gain carries over'
@@ -526,8 +596,9 @@ with tempfile.TemporaryDirectory() as temporary:
     # The watcher sleeps on pactl events instead of polling: device events wake
     # it once they settle, application and stream events never do, a steady
     # stream cannot starve repair, and a lost subscription still yields one.
-    def feed(script):
-        return m.Subscription(command=['bash', '-c', script], quiet=0.1, settle=1.0, backstop=0.6, retry=0.05)
+    def feed(script, command=None, **options):
+        sub = m.Subscription(command=command or ['bash', '-c', script], **dict(dict(quiet=0.1, settle=1.0, backstop=0.6, retry=0.05), **options))
+        sub.start(); sub.last_full = time.monotonic(); return sub
     def timed(sub):
         start = time.monotonic(); sub.wait(); elapsed = time.monotonic() - start; sub.stop(); return elapsed
     elapsed = timed(feed("echo \"Event 'new' on source #7\"; sleep 3"))
@@ -564,13 +635,137 @@ with tempfile.TemporaryDirectory() as temporary:
     try: m.supervise(saving, wait=lambda: next(answers))
     except KeyboardInterrupt: pass
     assert saves == [False, True, False], saves
-    elapsed = timed(feed("for i in $(seq 20); do echo \"Event 'new' on sink #1\"; sleep 0.05; done; sleep 3"))
+    # Events keep coming well inside the quiet interval for three times the
+    # settle cap, so only the cap ends the wait, however slow the machine's
+    # timers. The cap counts from the first event, so timing starts at one.
+    emitter = ("import time\n"
+               "for _ in range(60):\n"
+               "    print(\"Event 'new' on sink #1\", flush=True); time.sleep(0.05)\n"
+               "time.sleep(3)\n")
+    steady = feed(None, command=[sys.executable, '-u', '-c', emitter], quiet=0.5)
+    m.select.select([steady.process.stdout], [], [], 10); steady.last_full = time.monotonic()
+    elapsed = timed(steady)
     assert 0.9 <= elapsed < 1.5, ('a steady event stream must repair at the settle cap', elapsed)
     sub = feed("sleep 3"); start = time.monotonic(); sub.wait(0.2); elapsed = time.monotonic() - start; sub.stop()
     assert 0.2 <= elapsed < 0.5, ('a pending lost-array notice shortens the wait', elapsed)
     sub = feed('exit 0'); elapsed = timed(sub)
     assert elapsed < 0.5 and sub.process is None, 'a lost subscription must yield a repair and resubscribe later'
     assert timed(m.Subscription(command=['/nonexistent/pactl'], retry=0.05)) < 0.5, 'a missing subscriber must degrade to a paced retry'
+    # A device that appears while nothing listens (the DSP at login, or after
+    # pipewire-pulse restarts) is mapped: the supervisor subscribes before its
+    # first pass, and every resubscription is followed by a pass at once.
+    sub = m.Subscription(command=['bash', '-c', "sleep 3; echo \"Event 'new' on source #7\""], backstop=60.0, retry=0.05)
+    start = time.monotonic(); result = sub.wait(); elapsed = time.monotonic() - start
+    assert result is False and elapsed < 0.5 and sub.process is not None, ('a new subscription is followed by a pass', result, elapsed)
+    sub.stop()
+    order = []
+    class Recorded:
+        def __init__(self, **options): order.append(('subscription', options.get('stale')))
+        def start(self): order.append('subscribe'); return True
+        def wait(self, limit=None): raise KeyboardInterrupt()
+        def stop(self): order.append('stop')
+    with mock.patch.object(m, 'Subscription', Recorded):
+        try: m.supervise(lambda save=False: order.append('pass'))
+        except KeyboardInterrupt: pass
+    assert order == [('subscription', None), 'subscribe', 'pass', 'stop'], order
+    # A replaced program is noticed while events keep arriving, and only then.
+    looks = []
+    def stale():
+        looks.append(time.monotonic()); return len(looks) >= 2
+    sub = feed("while true; do echo \"Event 'change' on source #5\"; sleep 0.05; done", backstop=60.0, stale=stale, poll=0.2)
+    m.mapping_index['value'] = '5'
+    results = []; start = time.monotonic()
+    while time.monotonic() - start < 2:
+        results.append(sub.wait())
+        if results[-1] == m.RELOAD: break
+    sub.stop(); m.mapping_index['value'] = None
+    assert results[-1] == m.RELOAD and len(looks) == 2 and time.monotonic() - start < 1.5, (results, looks)
+    sub = feed('sleep 3', backstop=0.5, stale=lambda: False, poll=0.1)
+    assert sub.wait() is False, 'an unchanged program never stops the wait'
+    sub.stop()
+    # The poll runs across waits: events that end each wait sooner than the
+    # poll interval never postpone it, nor does a subscriber that keeps dying.
+    looks = []
+    sub = feed("while true; do echo \"Event 'new' on sink #1\"; sleep 0.3; done", quiet=0.05, settle=0.1, backstop=60.0, stale=stale, poll=0.5)
+    results = []; start = time.monotonic()
+    while time.monotonic() - start < 3:
+        results.append(sub.wait())
+        if results[-1] == m.RELOAD: break
+    sub.stop()
+    assert results[-1] == m.RELOAD and False in results and time.monotonic() - start < 2.0, (results, looks)
+    looks = []
+    sub = m.Subscription(command=['bash', '-c', 'exit 0'], retry=0.05, stale=stale, poll=0.3)
+    results = []; start = time.monotonic()
+    while time.monotonic() - start < 3:
+        results.append(sub.wait())
+        if results[-1] == m.RELOAD: break
+    sub.stop()
+    assert results[-1] == m.RELOAD and time.monotonic() - start < 2.0, (results, looks)
+    # A moment after subscribing the watcher looks once more, for a device
+    # that appeared before pactl had registered its subscription.
+    sub = feed('sleep 5', backstop=60.0)
+    start = time.monotonic(); result = sub.wait(); elapsed = time.monotonic() - start
+    assert result is False and 0.8 <= elapsed < 1.5, ('a pass follows a moment after subscribing', elapsed)
+    start = time.monotonic(); sub.wait(0.3); assert time.monotonic() - start >= 0.3, 'only once'
+    sub.stop()
+    # On RELOAD the supervisor stops its subscriber and runs the new program;
+    # if that cannot run, the old code carries on with a full pass.
+    events = []
+    class Replaced:
+        def replaced(self): return False
+        def run(self): events.append('run')
+    class Watched:
+        def __init__(self, **options): pass
+        def start(self): return True
+        def wait(self, limit=None):
+            if len(events) > 3: raise KeyboardInterrupt()
+            return m.RELOAD
+        def stop(self): events.append('stop')
+    passes = []
+    with mock.patch.object(m, 'Subscription', Watched):
+        try: m.supervise(lambda save=False: passes.append(save), program=Replaced())
+        except KeyboardInterrupt: pass
+    assert events[:4] == ['stop', 'run', 'stop', 'run'] and passes[:3] == [False, False, False], (events, passes)
+# The watcher's program counts as replaced once a different file is in place,
+# unchanged since the previous look, and no pacman transaction is running (a
+# lock no pacman holds is stale). A missing or unrunnable file is never run,
+# and one that fails to run is tried again later, backing off.
+with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary); path = directory / 'omarchy-audio-asahi-mic-map'; lock = directory / 'db.lck'
+    pacman = [True]
+    def put(text, mode=0o755):
+        new = directory / 'new'; new.write_text(text); new.chmod(mode); os.replace(new, path)
+    def watched(): return m.Program(path, lock=lock, running=lambda: pacman[0])
+    put('old')
+    program = watched()
+    assert not program.replaced() and not program.replaced(), 'the started program is current'
+    put('new')
+    assert not program.replaced(), 'a file just written may still be changing'
+    assert program.replaced(), 'a replaced file unchanged since the previous look is run'
+    program = watched()
+    put('newer'); lock.touch()
+    assert not program.replaced() and not program.replaced() and not program.replaced(), 'not while pacman holds its lock'
+    pacman[0] = False
+    assert program.replaced(), 'a lock no pacman holds is stale'
+    lock.unlink()
+    program = watched()
+    path.unlink()
+    assert not program.replaced() and not program.replaced(), 'a removed program is not run'
+    put('not executable', 0o644)
+    assert not program.replaced() and not program.replaced(), 'an unrunnable program is not run'
+    clock = [1000.0]
+    with mock.patch.object(m.os, 'execv', side_effect=OSError('Text file busy')), mock.patch.object(m.time, 'monotonic', lambda: clock[0]):
+        program = watched(); put('busy')
+        program.replaced(); assert program.replaced()
+        program.run()
+        assert not program.replaced(), 'a program that would not run waits out a back-off'
+        clock[0] += 2.0
+        assert program.replaced(), 'and is then tried again'
+        program.run(); clock[0] += 2.0
+        assert not program.replaced(), 'the back-off grows'
+        clock[0] += 2.0
+        assert program.replaced()
+assert m.Program(Path('/nonexistent')).lock == m.PACMAN_LOCK
 # The live probe reads float samples from the mapping through parec: any
 # non-zero sample, however quiet, is signal; zeros (either sign) are digital
 # silence; a recorder that yields nothing is unknown.
@@ -609,10 +804,10 @@ with tempfile.TemporaryDirectory() as temporary:
             audio = Audio()
             m.reconcile(audio, Path(temporary) / 'state.json')
         load = next(call for call in audio.calls if call[:2] == ('pactl', 'load-module'))
-        properties = next(arg for arg in load if arg.startswith('sink_properties='))
-        assert properties.startswith("sink_properties='device.description=\"" + name + "\" ") and properties.endswith("'"), properties
-        assert 'AsahiMicrophone' not in properties and m.OWNER + '=' in properties
-        assert m.owned(audio.module, 'Audio/Source/Virtual'), 'the quoted name must not hide the mapping from its owner'
+        properties = next(arg for arg in load if arg.startswith('source_properties='))
+        assert properties.startswith("source_properties='device.description=\"" + name + "\" ") and properties.endswith("'"), properties
+        assert 'AsahiMicrophone' not in properties and m.OWNER + '=' in properties and 'media.class' not in properties
+        assert m.owned(audio.module), 'the quoted name must not hide the mapping from its owner'
 # WirePlumber's stale hidden ids (#1028, seen after a re-login) make pw-link
 # fail with EPERM: the mapper restarts WirePlumber so the next event relinks,
 # at most once per interval however often the links keep failing. Other link
@@ -688,8 +883,190 @@ for code in (0, 75, 76, 1):
         args = call.call_args.args[0]
         assert args[:3] == ['systemd-run', '--user', '--wait'] and '--unit=omarchy-audio-repair-%d' % os.getpid() in args, args
         assert args[-5:] == ['omarchy-audio-watchdog', '--repair', 'wireplumber', '--reason', 'links refused'], args
+# asahi-audio ab1b469 names the DSP's mono port MONO instead of AUX0: either
+# one is mapped, and so is a capture side PipeWire negotiated down to one MONO
+# port; a DSP or capture side that offers both shapes is never mapped.
+with tempfile.TemporaryDirectory() as temporary:
+    for dsp_ports, capture_ports, links in ((['capture_MONO'], ['input_FL', 'input_FR'], [21, 22]),
+                                            (['capture_MONO'], ['input_MONO'], [21]),
+                                            (['capture_AUX0'], ['input_FL', 'input_FR'], [21, 22])):
+        audio = Audio(); audio.dsp_ports = dsp_ports; audio.capture_ports = capture_ports
+        m.reconcile(audio, Path(temporary) / 'mono.json')
+        assert audio.default == m.MAPPING and sorted(input_ for input_, _ in audio.linked.values()) == links, (dsp_ports, capture_ports, audio.linked)
+    for dsp_ports, capture_ports in ((['capture_AUX0', 'capture_MONO'], ['input_FL', 'input_FR']),
+                                     (['capture_AUX0', 'capture_AUX0', 'capture_MONO'], ['input_FL', 'input_FR']),
+                                     (['capture_AUX0'], ['input_FL', 'input_FR', 'input_MONO']),
+                                     (['capture_AUX0'], ['input_FL', 'input_FR', 'input_MONO', 'input_MONO']),
+                                     (['capture_MONO'], ['input_MONO', 'input_FL', 'input_FL', 'input_FR', 'input_FR']),
+                                     (['capture_MONO'], ['input_MONO', 'input_MONO']),
+                                     (['capture_AUX0'], ['input_FL'])):
+        audio = Audio(); audio.dsp_ports = dsp_ports; audio.capture_ports = capture_ports
+        try: m.reconcile(audio, Path(temporary) / 'both.json')
+        except RuntimeError as error: assert 'must be ready' in str(error), error
+        else: raise AssertionError('an ambiguous microphone graph was mapped: %r %r' % (dsp_ports, capture_ports))
+        assert audio.default == DSP and not audio.existing
+print('ok - the DSP microphone is mapped from its AUX0 or MONO port, onto stereo or negotiated MONO capture')
+
+# The array is an Apple HPAI card (M1, M2), or the AOP card on J700, that
+# asahi-audio's rules build a DSP microphone for; a Mac mini's or a USB card
+# is none, nor is an array card the rules do not name, or unreadable files.
+with tempfile.TemporaryDirectory() as temporary:
+    cards = Path(temporary) / 'cards'; conf = Path(temporary) / 'conf.d'; conf.mkdir()
+    (conf / '99-asahi.conf').write_text('{ api.alsa.path = "hw:AppleJ416HPAI,0" }\n{ api.alsa.path = "hw:AppleJ700AOP,1" }\n')
+    with mock.patch.object(m, 'ASOUND_CARDS', cards), mock.patch.object(m, 'WIREPLUMBER_CONF', conf):
+        assert not m.Audio().array(), 'a missing cards file is no array'
+        for text, expected in ((' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n 1 [AppleJ416      ]: macaudio - MacBook Pro J416\n', True),
+                               (' 0 [AppleJ700AOP   ]: t8140_aop_audio - MacBook Neo J700 AOP\n', True),
+                               (' 0 [AppleJ274HPAI  ]: aop_audio - Mac mini J274 HPAI\n', False),
+                               (' 0 [AppleJ274      ]: macaudio - Mac mini J274\n 1 [Device         ]: USB-Audio - USB Audio Device\n', False)):
+            cards.write_text(text)
+            assert m.Audio().array() is expected, text
+        cards.write_text(' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n')
+        with mock.patch.object(m, 'WIREPLUMBER_CONF', Path(temporary) / 'absent'):
+            assert not m.Audio().array(), 'without asahi-audio rules there is no DSP microphone to expect'
+
+# An update that adds what the DSP graph lacked (triforce-lv2) brings no audio
+# event: once the update ends, a missing DSP with an array present restarts
+# WirePlumber once, through the watchdog, whatever the repair interval.
+def reset():
+    m.installed.update(pending=False, retry_at=None, record=None, signature=None); m.recheck['at'] = None
+    m.outage.update(since=None, notified=False, repaired=False)
+with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary)
+    lv2 = directory / 'lv2'; (lv2 / 'lsp-plugins.lv2').mkdir(parents=True)
+    os.utime(lv2 / 'lsp-plugins.lv2', ns=(10**18, 10**18)); os.utime(lv2, ns=(10**18, 10**18))
+    lock = directory / 'db.lck'; pacman = [False]
+    record = directory / 'run/omarchy-asahi-mic.installed'
+    def watcher(): return m.Installed(record, paths=(lv2, directory / 'absent'), lock=lock, running=lambda: pacman[0])
+    # A first start (no record: the first run after an update, or a login)
+    # looks once, FIRST_LOOK later; a DSP present by then needs nothing.
+    reset()
+    with mock.patch.object(m.time, 'monotonic', return_value=500.0):
+        watched = watcher()
+        assert m.installed['pending'] and m.installed['retry_at'] == 530.0 and m.outage_due() == 30.0, 'a first start looks once, later'
+        audio = Audio(); m.reconcile(audio, directory / 'first.json')
+        assert audio.restarts == 0 and not m.installed['pending'] and not json.loads(record.read_text())['pending'], 'a present DSP ends the first look'
+    assert record.exists() and not watched.changed() and not m.installed['pending'], 'an unchanged tree is no update'
+    lock.touch(); pacman[0] = True
+    (lv2 / 'triforce.lv2').mkdir()
+    assert not watched.changed() and not m.installed['pending'], 'nothing happens while pacman holds the database'
+    pacman[0] = False
+    assert watched.changed() and m.installed['pending'] and not watched.changed(), 'a finished update wakes one pass'
+    # A watcher that reloads before the pending repair ran keeps it.
+    retry = m.installed['retry_at']
+    reset(); reloaded = watcher()
+    assert m.installed['pending'] and m.installed['retry_at'] == retry and not reloaded.changed(), 'a reloaded watcher keeps the pending repair, and the change is not seen twice'
+    m.record_installed(False)
+    reset(); watcher()
+    assert not m.installed['pending'], 'a repair that ran is not run again after a reload'
+    os.utime(lv2 / 'lsp-plugins.lv2', ns=(2 * 10**18, 2 * 10**18))
+    assert watcher().changed(), 'a changed plugin bundle counts too'
+    record.write_text('not json'); reset()
+    assert not watcher().changed() and m.installed['pending'] and m.installed['retry_at'] is not None, 'a damaged record starts from the current tree, with a first look'
+    m.record_installed(False)
+    with mock.patch.object(Path, 'iterdir', side_effect=PermissionError('denied')):
+        assert watched.signature() is None and not watched.changed(), 'an unreadable directory changes nothing'
+    reset()
+    def pass_(audio):
+        try: m.reconcile(audio, directory / 'state.json')
+        except m.Deferred: pass
+    stamp = directory / 'repaired'; stamp.write_text(repr(time.monotonic()))
+    audio = Audio(); audio.no_dsp = True; audio.stamp = stamp
+    m.installed['pending'] = True; pass_(audio)
+    assert audio.restarts == 1 and not m.installed['pending'] and not audio.notices, 'the update restarts WirePlumber once, inside the interval'
+    pass_(audio)
+    assert audio.restarts == 1, 'and only once'
+    for name, setup in (('a Mac without a microphone array', lambda audio: setattr(audio, 'has_array', False)),
+                        ('a card the user switched off', lambda audio: audio.cards[0].update(active_profile='off'))):
+        reset(); audio = Audio(); audio.no_dsp = True; setup(audio)
+        m.installed['pending'] = True; pass_(audio)
+        assert audio.restarts == 0 and not m.installed['pending'], name + ' is left alone'
+    reset(); audio = Audio()
+    m.installed['pending'] = True; m.reconcile(audio, directory / 'present.json')
+    assert audio.restarts == 0 and not m.installed['pending'], 'a present DSP needs no restart'
+    class Scripted(Audio):
+        def __init__(self, codes, **options): super().__init__(**options); self.codes = list(codes)
+        def restart_session_manager(self, reason): self.restarts += 1; return self.codes.pop(0)
+    # A deferred restart keeps the repair pending, is asked again in half a
+    # minute and not sooner, and keeps an overdue outage from restarting too.
+    reset(); m.installed['record'] = record
+    audio = Scripted([m.DEFERRED, 0], existing=True); audio.no_dsp = True; audio.stamp = directory / 'outage'
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0):
+        pass_(audio)
+    m.record_installed(True)
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE):
+        pass_(audio)
+        assert audio.restarts == 1 and m.installed['pending'] and not audio.notices, 'one deferred restart, no outage repair in the same pass'
+        assert json.loads(record.read_text())['pending'], 'the pending repair is recorded'
+        assert m.outage_due() == 30.0, m.outage_due()
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE + 10):
+        pass_(audio)
+        assert audio.restarts == 1 and not audio.notices, 'an event before the retry asks nothing and keeps the notice back'
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE + 30):
+        pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'] and m.outage['repaired'] and not audio.notices, 'the retry restarts once and counts as the outage repair'
+        assert not json.loads(record.read_text())['pending']
+    reset()
+    # The update that brought the missing plugin also replaced the mapper: its
+    # first run has no record, finds the DSP missing and restarts once, later.
+    reset(); record.unlink()
+    audio = Audio(); audio.no_dsp = True
+    with mock.patch.object(m.time, 'monotonic', return_value=700.0):
+        watcher(); pass_(audio)
+        assert audio.restarts == 0 and m.installed['pending'], 'not at once: WirePlumber may still be starting'
+    with mock.patch.object(m.time, 'monotonic', return_value=730.0):
+        pass_(audio)
+        assert audio.restarts == 1 and not m.installed['pending'], 'one restart once the first look is due'
+    # A new runtime directory (the next login) looks once again, by design:
+    # a microphone still missing 30 s into a session gets one restart.
+    reset(); record.unlink()
+    with mock.patch.object(m.time, 'monotonic', return_value=900.0):
+        watcher(); pass_(audio)
+    with mock.patch.object(m.time, 'monotonic', return_value=930.0):
+        pass_(audio); pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'], 'once per session start'
+    reset()
+    # A pending repair waits for a later pacman transaction to end, and a
+    # deferred one keeps its retry time across a reload of the watcher.
+    reset(); m.installed.update(record=record, signature='')
+    audio = Scripted([m.DEFERRED, 0]); audio.no_dsp = True; audio.busy = True
+    m.record_installed(True)
+    with mock.patch.object(m.time, 'monotonic', return_value=100.0):
+        pass_(audio)
+        assert audio.restarts == 0 and m.installed['pending'] and m.outage_due() == 5.0, 'no restart while pacman runs'
+    audio.busy = False
+    with mock.patch.object(m.time, 'monotonic', return_value=103.0):
+        pass_(audio)
+        assert audio.restarts == 0, 'nor before the retry time'
+    with mock.patch.object(m.time, 'monotonic', return_value=105.0):
+        pass_(audio)
+        assert audio.restarts == 1 and m.installed['pending'] and json.loads(record.read_text())['retry_at'] == 135.0
+    reset()
+    with mock.patch.object(m.time, 'monotonic', return_value=106.0):
+        watcher()
+        assert m.installed['pending'] and m.installed['retry_at'] == 135.0 and m.outage_due() == 29.0, 'a reloaded watcher keeps the retry time'
+        pass_(audio)
+        assert audio.restarts == 1, 'an early event after a reload asks nothing'
+        (lv2 / 'another.lv2').mkdir()
+        assert watcher().changed() and m.installed['retry_at'] == 135.0, 'a later change keeps the deferred retry time'
+        pass_(audio)
+        assert audio.restarts == 1, 'and asks nothing before it'
+    with mock.patch.object(m.time, 'monotonic', return_value=135.0):
+        pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'] and not json.loads(record.read_text())['pending']
+    reset()
+    # The watcher asks changed() on its poll schedule and runs a full pass.
+    calls = []
+    def changed(): calls.append(1); return len(calls) == 2
+    sub = m.Subscription(command=['sleep', '30'], backstop=600.0, changed=changed, poll=0.05)
+    sub.start(); sub.confirm = None
+    assert sub.wait() is False and len(calls) == 2, 'a changed install wakes a full pass'
+    sub.stop()
+print('ok - an update that changes the audio plugins restarts WirePlumber once when the DSP microphone is missing')
 unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit
 print('ok - transactional Asahi mapping preserves choices/gain, rolls back failures and recovers lifecycle loss')
+print('ok - the mapping is a typed stereo remap source that replaces the 0.1.2 virtual source on upgrade')
+print('ok - the watcher subscribes before each pass, so a late DSP is mapped, and runs its program once an upgrade replaced it')
 PY

@@ -37,10 +37,11 @@ Systemd-initrd counterpart of the asahi hook's early/late runscripts: unpacks
 the vendor firmware from the ESP before cryptsetup-pre.target so the internal
 keyboard and MTP trackpad work at the sd-encrypt passphrase prompt, then the
 original omarchy-vendorfw.service copies it onto /lib/firmware/vendor of the
-unlocked sysroot after sysroot.mount. The early unit is After/Wants the image
-ESP device (4F4D-5801) with JobTimeoutSec so a missing ESP cannot hang the
-job forever. If the ESP or vendorfw/firmware.cpio is absent it logs loudly,
-records /run/omarchy-vendorfw-initrd.status=missing, and still exits 0 so
+unlocked sysroot after sysroot.mount. The early helper polls for the ESP the
+device tree names, which the late unit mounts, then the image ESP
+(4F4D-5801), so a migrated Mac's own ESP works too; JobTimeoutSec bounds the
+wait. If the ESP or vendorfw/firmware.cpio is absent it logs loudly, records
+/run/omarchy-vendorfw-initrd.status=missing, and still exits 0 so
 the passphrase prompt is never blocked (keyboard needs no firmware). The
 early unit is WantedBy initrd-root-device.target and sysinit.target;
 systemd-cryptsetup@.service Wants/After it so the passphrase prompt pulls

@@ -52,6 +52,7 @@ Omarchy keeps no Mac code of its own. It knows which platform it runs on and giv
 - Open them against `main`. Each needs an approval from someone other than its author, resolved review threads and passing CI.
 - Keep a pull request to one change. A change to what the runtime reads from a package (the platform root, lifecycle entrypoints, setup commands) comes with an integration test in `test/integration/`.
 - Boot-critical changes need cold-boot evidence from a test Mac before they are released.
+- A change that makes the runtime show the owner a one-time prompt, such as the fingerprint-setup offer, is released only after everything that prompt leads to is published to the repositories Macs update from.
 - Anything Apple-specific must stay behind the platform detector. A change to installed systems handles the systems it finds, in the package's own setup; moving Macs from the earlier projects is the standalone migration's job.
 
 ## Issues

@@ -13,3 +13,17 @@ uboot-asahi
 asahi-*
 avd-fw
 libva-v4l2_request-avd
+alsa-ucm-conf-aurora
+aura
+aurora-audio
+aurora-bless
+mesa-aurora
+mil-hwx-compiler
+omarchy-ane
+omarchy-ane-dkms
+omarchy-aurora-firmware
+omarchy-mlx
+omarchy-mlx-vulkan
+speakerguardd
+uboot-aurora
+vulkan-aurora

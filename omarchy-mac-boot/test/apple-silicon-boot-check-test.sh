@@ -382,6 +382,12 @@ grep -Eq "^mount --bind -o ro $esp $root/run/omarchy-esp\.[A-Za-z0-9]{6}\$" "$ca
 [[ ! -e $root/run/m1n1.conf ]] || fail "/run/m1n1.conf is not rewritten"
 run_check linux-aurora
 expect_pass "linux-aurora, named"
+sed -i 's/^m1n1-aurora$/aura/' "$test_tmp/files/installed"
+mv "$test_tmp/files/m1n1-aurora" "$test_tmp/files/aura"
+run_check
+expect_pass "linux-aurora with aura, detected"
+run_check linux-aurora
+expect_pass "linux-aurora with aura, named"
 
 # An encrypted root during the first-boot window: the systemd initramfs
 # carries sd-encrypt as the cryptsetup generator and binary, never as a
@@ -464,7 +470,7 @@ expect_pass "linux-asahi, named"
 printf 'the previous kernel\n' >"$root/boot/vmlinuz-linux-asahi"
 run_check
 expect_fail "a stale linux-asahi kernel" "/boot/vmlinuz-linux-asahi is not the 6.14.8-asahi1-1-ARCH kernel linux-asahi installed"
-pass "linux-aurora with m1n1-aurora and linux-asahi with m1n1 are both checked, named or detected"
+pass "linux-aurora with either m1n1-aurora or aura and linux-asahi with m1n1 are checked, named or detected"
 
 system linux-aurora
 run_check linux-asahi
@@ -481,7 +487,12 @@ run_check
 expect_fail "no known kernel installed" "cannot tell which kernel boots: neither linux-aurora nor linux-asahi installed"
 printf 'linux-aurora\nm1n1\n' >"$test_tmp/files/installed"
 run_check
-expect_fail "linux-aurora with the Asahi m1n1" "linux-aurora boots with m1n1-aurora, but m1n1-aurora is not installed"
+expect_fail "linux-aurora with the Asahi m1n1" "linux-aurora boots with m1n1-aurora or aura, but neither is installed"
+system linux-aurora
+printf 'aura\n' >>"$test_tmp/files/installed"
+cp "$test_tmp/files/m1n1-aurora" "$test_tmp/files/aura"
+run_check
+expect_fail "linux-aurora with both bootloader providers" "more than one bootloader provider installed: m1n1-aurora aura"
 pass "a missing, unknown, ambiguous or mismatched kernel and bootloader pair fails"
 
 # The ESP is only ever read through a read-only mount.

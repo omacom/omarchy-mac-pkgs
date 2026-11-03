@@ -37,6 +37,8 @@ There is one kernel, `linux-aurora`, built in omarchy-pkgs from a pinned commit 
 The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcpio hooks, and `omarchy-mac-boot` adds Apple fragments on top, in order, rather than overwriting it. The fragments only apply on an Apple Silicon Mac:
 
 - `MODULES` entries for the Apple keyboard and trackpad drivers, added only when the running kernel really has them as modules, so a kernel that builds a driver in does not break a later `mkinitcpio -P`;
+- `apple_pmp`, the power management coprocessor's driver, on the same terms, so an encrypted root does not wait 20 seconds for it before the passphrase prompt;
+- `pwm-apple` and a udev rule, so the keyboard backlight is on at the passphrase prompt;
 - a vendor firmware service that copies Apple firmware onto the root, and a second copy before `cryptsetup-pre.target` on encrypted Macs, so Wi-Fi and input work at the passphrase prompt;
 - a Plymouth drop-in, so the passphrase prompt is graphical;
 - the `kmod-static-nodes` ordering fix that btrfs roots need on Apple hardware.
@@ -44,6 +46,10 @@ The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcp
 ## Encryption
 
 The conversion runs in the initramfs before `sysroot.mount`. It shrinks the file system, re-encrypts it in place, then regenerates the boot entries and the initramfs with `sd-encrypt`. The splash shows its progress on the Omarchy theme's bar with one status line under it, and first-boot setup carries the same bar on to the end. The Mac's initramfs copy of the theme carries an addendum for this, which the installed theme leaves alone; on every Mac boot it also centres Plymouth's status messages under the bar instead of the top-left corner. The next boot unlocks the volume with the owner's password. The unit requires a pending marker written by the installer and refuses to run without it, so a Mac installed without encryption is never touched. [Encryption and passwords]({{page:security}}) covers what the owner sees.
+
+After an interrupted conversion, the initramfs authenticates the saved key, preserves the pre-repair LUKS2 header on Boot, and runs cryptsetup's crash recovery before resuming. If conversion finished before its journal could advance, it authenticates the completed volume and finishes the boot setup without starting another conversion. The pre-repair header is forensic evidence only: it must never be restored automatically after encrypted data has moved. It and any interrupted temporary copies are shredded and removed after the completed-conversion state is safely recorded, before owner setup replaces the temporary key. A retry removes a stale staging name before creating its replacement.
+
+Conversion stages, command exit status and non-progress diagnostics are retained in the bounded, root-only `/boot/omarchy/encrypt.log`. Logging failures never interrupt conversion. An unexpected hardware reset may leave only the last completed stage; the log does not prove what caused that reset.
 
 ## Boot verification
 

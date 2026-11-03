@@ -96,6 +96,11 @@ globs_regex() {
   fi
 }
 
+# omarchy-pkgs tags every Apple Silicon package with this group; each one must be
+# named in mac-only, which stays the only list the other checks read.
+apple_group=omarchy-platform-apple-silicon
+mac_only_regex=$(globs_regex "${mac_only[@]}")
+
 # Fetch the database and files database from the same server. The pair can
 # still disagree (Arch Linux ARM's lists a few packages in one only), so the
 # name-version entries of the files database are kept for the ownership check.
@@ -121,7 +126,7 @@ fetch_repo() {
   return 1
 }
 
-# One line per sync package: repo, name, version, provides, depends, conflicts. Arch Linux
+# One line per sync package: repo, name, version, provides, depends, conflicts, groups. Arch Linux
 # ARM still serves the older layout with dependency fields in a separate
 # depends file, so fields are collected per package directory.
 index_repo() {
@@ -141,10 +146,11 @@ index_repo() {
         else if (key == "%PROVIDES%") provides[entry] = provides[entry] (provides[entry] == "" ? "" : " ") line
         else if (key == "%DEPENDS%") depends[entry] = depends[entry] (depends[entry] == "" ? "" : " ") line
         else if (key == "%CONFLICTS%") conflicts[entry] = conflicts[entry] (conflicts[entry] == "" ? "" : " ") line
+        else if (key == "%GROUPS%") groups[entry] = groups[entry] (groups[entry] == "" ? "" : " ") line
       }
       close($0)
     }
-    END { for (e in name) print repo "\t" name[e] "\t" version[e] "\t" provides[e] "\t" depends[e] "\t" conflicts[e] }' | sort -t $'\t' -k2,2
+    END { for (e in name) print repo "\t" name[e] "\t" version[e] "\t" provides[e] "\t" depends[e] "\t" conflicts[e] "\t" groups[e] }' | sort -t $'\t' -k2,2
   rm -rf "$tree"
 }
 
@@ -207,6 +213,15 @@ check_platform() {
     failed "$platform: forbidden repositories configured: ${bad[*]}"
   else
     ok "$platform: repositories ${repos[*]}"
+  fi
+
+  if (( ${#forbidden_packages[@]} > 0 )); then
+    mapfile -t bad < <(re=$mac_only_regex group=$apple_group awk -F '\t' '$2 !~ ENVIRON["re"] { n = split($7, g, " "); for (i = 1; i <= n; i++) if (g[i] == ENVIRON["group"]) { print $1 "/" $2; break } }' "$pwork/index")
+    if (( ${#bad[@]} > 0 )); then
+      failed "$platform: $apple_group packages missing from mac-only" "$(printf '%s\n' "${bad[@]}")"
+    else
+      ok "$platform: every $apple_group package is named in mac-only"
+    fi
   fi
 
   local wanted=() list entry

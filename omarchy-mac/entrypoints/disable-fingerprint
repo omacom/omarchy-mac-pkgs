@@ -1,0 +1,28 @@
+#!/bin/bash
+# omarchy-lifecycle-dispatch disable-fingerprint: Omarchy's fingerprint removal
+# runs this as root once the fingerprints are deleted. Removing the owner's
+# agreement stops the driver loading, and writing, at boot; the key store stays.
+# A Neo's sensor key goes too: turning Touch ID on again rebuilds it.
+omarchy-hw-apple-silicon || exit 0
+
+# Waits for a Touch ID setup still running, which could otherwise install its
+# sensor key after this removes it.
+lock=/run/omarchy-mac/touchid.lock
+if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
+  echo "Touch ID could not be turned off: its lock, $lock, could not be opened." >&2
+  exit 1
+elif ! flock -w 300 "$lock_fd"; then
+  echo "Touch ID could not be turned off: another Touch ID setup is still running. Try again once it finishes." >&2
+  exit 1
+fi
+
+key=/usr/lib/firmware/updates/apple/msrk-j700.bin
+if [[ -e /etc/omarchy-mac/touchid-on || -e /etc/modprobe.d/omarchy-mac-touchid.conf || -e $key || -e $key.new ]]; then
+  # A record left behind, on a read-only root say, loads the driver again.
+  if ! rm -f /etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf "$key" "$key.new"; then
+    echo "Touch ID could not be turned off: remove /etc/omarchy-mac/touchid-on, /etc/modprobe.d/omarchy-mac-touchid.conf and $key" >&2
+    exit 1
+  fi
+  echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
+fi
+exit 0

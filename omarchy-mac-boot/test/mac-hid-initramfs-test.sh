@@ -34,12 +34,9 @@ grep -Fq 'After=sysroot.mount' "$late_unit" ||
   fail "the late unit still waits for sysroot.mount"
 grep -Fq 'Before=cryptsetup-pre.target' "$early_unit" ||
   fail "the early unit is ordered Before=cryptsetup-pre.target"
-grep -Fq 'dev-disk-by\x2duuid-4F4D\x2d5801.device' "$early_unit" ||
-  fail "the early unit orders After/Wants the image ESP device"
-grep -E '^After=' "$early_unit" | grep -Fq 'dev-disk-by\x2duuid-4F4D\x2d5801.device' ||
-  fail "the early unit is After the ESP device unit"
-grep -E '^Wants=' "$early_unit" | grep -Fq 'dev-disk-by\x2duuid-4F4D\x2d5801.device' ||
-  fail "the early unit Wants the ESP device unit"
+if grep -E '^(After|Wants|Requires|BindsTo)=' "$early_unit" | grep -Fq 'dev-disk-by'; then
+  fail "the early unit must not wait on one ESP device: a migrated Mac keeps its own ESP"
+fi
 grep -Eq '^JobTimeoutSec=' "$early_unit" ||
   fail "the early unit sets JobTimeoutSec so a missing ESP cannot hang forever"
 grep -Fq 'DefaultDependencies=no' "$early_unit" ||
@@ -444,6 +441,11 @@ if [ "\$1" = -U ] && [ "\$2" = 4F4D-5801 ] && [ -e /dev/disk/by-uuid/4F4D-5801 ]
   printf '%s\n' /dev/disk/by-uuid/4F4D-5801
   exit 0
 fi
+if [ "\$1" = -l ] && [ "\$2" = -t ] && [ -f "$tmp/blkid-partuuid" ] &&
+  [ "\$3" = "PARTUUID=\$(cat "$tmp/blkid-partuuid")" ]; then
+  printf '%s\n' /dev/fixture-esp
+  exit 0
+fi
 exit 1
 SH
 cat >"$tmp/helper-bin/udevadm" <<'SH'
@@ -452,6 +454,8 @@ exit 0
 SH
 chmod +x "$tmp/helper-bin"/{mount,umount,cpio,blkid,udevadm}
 
+# The host's device tree must not leak in; the partuuid case sets its own.
+export OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/no-device-tree
 mkdir -p /dev/disk/by-uuid /lib/firmware /vendorfw/keep
 printf 'sentinel\n' >/vendorfw/keep/already-there.bin
 ln -sfn /vendorfw /lib/firmware/vendor
@@ -500,6 +504,62 @@ wait
 echo 'ok - delayed ESP appearance still stages vendor firmware'
 
 reset_helper
+rm -f /dev/disk/by-uuid/4F4D-5801
+esp_partuuid=5e1f0c2a-0d6b-4c3e-9a7f-1b2c3d4e5f60
+printf '%s\0' "$esp_partuuid" >"$tmp/device-tree-esp"
+mkdir -p /dev/disk/by-partuuid
+touch "/dev/disk/by-partuuid/$esp_partuuid"
+OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PATH" \
+  /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh >"$tmp/partuuid.out" 2>"$tmp/partuuid.err" ||
+  fail "an ESP named only by the device tree must not fail the helper" "$(cat "$tmp/partuuid.err")"
+grep -Fq "dev=/dev/disk/by-partuuid/$esp_partuuid" /run/omarchy-vendorfw-initrd.staged ||
+  fail "a migrated Mac's own ESP, named by the device tree, stages vendor firmware" "$(cat "$tmp/partuuid.err")"
+[[ ! -e /run/omarchy-vendorfw-initrd.status ]] ||
+  fail "an ESP found by the device tree must not record status=missing"
+rm -f "/dev/disk/by-partuuid/$esp_partuuid"
+echo 'ok - a migrated ESP that is not the image ESP is found through the device tree'
+
+reset_helper
+touch /dev/disk/by-uuid/4F4D-5801 "/dev/disk/by-partuuid/$esp_partuuid"
+OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PATH" \
+  /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh >"$tmp/twoesp.out" 2>"$tmp/twoesp.err" ||
+  fail "two ESPs must not fail the helper" "$(cat "$tmp/twoesp.err")"
+grep -Fq "dev=/dev/disk/by-partuuid/$esp_partuuid" /run/omarchy-vendorfw-initrd.staged ||
+  fail "with an image ESP also present, the device tree's ESP wins, as the late unit mounts it" \
+    "$(cat /run/omarchy-vendorfw-initrd.staged)"
+rm -f /dev/disk/by-uuid/4F4D-5801 "/dev/disk/by-partuuid/$esp_partuuid"
+echo 'ok - the device tree ESP wins over a second image ESP'
+
+reset_helper
+printf '%s\n' "$esp_partuuid" >"$tmp/blkid-partuuid"
+OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PATH" \
+  /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh >"$tmp/blkid.out" 2>"$tmp/blkid.err" ||
+  fail "an ESP blkid finds by PARTUUID must not fail the helper" "$(cat "$tmp/blkid.err")"
+grep -Fq 'dev=/dev/fixture-esp' /run/omarchy-vendorfw-initrd.staged ||
+  fail "blkid finds the device tree's ESP before udev makes the link" "$(cat "$tmp/blkid.err")"
+rm -f "$tmp/blkid-partuuid"
+echo 'ok - blkid finds the device tree ESP by PARTUUID without a by-partuuid link'
+
+# The link comes up on the 60th poll: past the old 5 s, inside the new budget.
+reset_helper
+cat >"$tmp/helper-bin/sleep" <<SH
+#!/bin/sh
+count=\$((\$(cat "$tmp/sleep-count" 2>/dev/null || echo 0) + 1))
+printf '%s\\n' "\$count" >"$tmp/sleep-count"
+[ "\$count" -lt 60 ] || touch "/dev/disk/by-partuuid/$esp_partuuid"
+exit 0
+SH
+chmod +x "$tmp/helper-bin/sleep"
+OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PATH" \
+  /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh >"$tmp/slow.out" 2>"$tmp/slow.err" ||
+  fail "a slow ESP must not fail the helper" "$(cat "$tmp/slow.err")"
+grep -Fq "dev=/dev/disk/by-partuuid/$esp_partuuid" /run/omarchy-vendorfw-initrd.staged 2>/dev/null ||
+  fail "an ESP that appears after 60 polls still stages vendor firmware" "$(cat "$tmp/slow.err")"
+rm -f "$tmp/helper-bin/sleep" "$tmp/sleep-count" "/dev/disk/by-partuuid/$esp_partuuid"
+echo 'ok - an ESP that appears six seconds in still stages vendor firmware'
+
+reset_helper
+touch /dev/disk/by-uuid/4F4D-5801
 rm -f "$esp/vendorfw/firmware.cpio"
 PATH="$tmp/helper-bin:$PATH" /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh \
   >"$tmp/nocpio.out" 2>"$tmp/nocpio.err" ||
@@ -524,5 +584,10 @@ PATH="$tmp/helper-bin:$PATH" /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.s
   fail "a missing ESP records status=missing" "$(cat "$tmp/noesp.err")"
 grep -Fq '4F4D-5801' "$tmp/noesp.err" ||
   fail "a missing ESP logs a specific error" "$(cat "$tmp/noesp.err")"
+OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PATH" \
+  /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh >"$tmp/noesp-dt.out" 2>"$tmp/noesp-dt.err" ||
+  fail "a missing device tree ESP must still exit 0" "$(cat "$tmp/noesp-dt.err")"
+grep -Fq "$esp_partuuid" "$tmp/noesp-dt.err" ||
+  fail "a missing ESP names the device tree's PARTUUID" "$(cat "$tmp/noesp-dt.err")"
 echo 'ok - missing ESP records status=missing and exits 0'
 echo 'ok - omarchy-mac-hid-initramfs'
