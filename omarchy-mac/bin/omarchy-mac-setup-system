@@ -13,7 +13,6 @@ omarchy-hw-apple-silicon || exit 0
 # Pacman reads hooks before a transaction: initial installation also needs setup.
 "$root/usr/lib/omarchy-mac/hyprland-capabilities" "$root"
 
-
 # The Intel Mac Broadcom quirk breaks Apple Silicon Wi-Fi, but a runtime without
 # its Apple guard (migration 1786391100) appended it here. Only its exact line
 # goes, with the comment block and blank line that migration wrote right above
