@@ -179,7 +179,7 @@ dropin=$work/root/usr/lib/systemd/system/fprintd.service.d/50-omarchy-mac-touchi
 wait_unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-wait.service
 [[ -f $dropin && -f $wait_unit ]] || fail 'the fprintd drop-in and the wait unit are staged'
 grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
-  grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service' "$dropin" ||
+  grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service omarchy-mac-touchid-statecheck.service' "$dropin" ||
   fail 'fprintd starts after the wait and the activation'
 ! grep -qE '^(DeviceAllow|DevicePolicy|ExecStartPre)=' "$dropin" ||
   fail "the drop-in leaves fprintd's devices to libfprint-git, which owns the allowance"

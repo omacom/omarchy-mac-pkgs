@@ -154,6 +154,7 @@ run() {
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
     OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
+    OMARCHY_MAC_TOUCHID_STATECHECK=$fixture/no-statecheck OMARCHY_MAC_TOUCHID_DRIVER=$fixture/apple_sep OMARCHY_MAC_TOUCHID_POLICY_LOG=$fixture/no-kernel-log \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
     OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} "$ROOT/lib/$1" "${@:2}"
@@ -655,7 +656,7 @@ pass 'enable-fingerprint asks before anything turns on, and turning it off lasts
 # Fixtures belong to the test runner; stat supplies root ownership for them.
 cat >"$fixture/bin/stat" <<'STUB'
 #!/bin/bash
-if [[ $* == *"%u:%g:%a:%h"* ]]; then
+if [[ $* == *"%u:%g:%a"* ]]; then
   value=$(/usr/bin/stat "$@") || exit
   printf '0:0:%s\n' "${value#*:*:}"
 else

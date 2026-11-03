@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Report selected policy from passive diagnostics; never read saved SEP state."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+
+EXPECTED = dict(xart_writes='1', provision_keybag='0', xart_guard='1',
+                trusted_keys='0', filevault_api='0', xarm_trace='1')
+SAFE_KEYS = set(EXPECTED) | {'refkey_v2', 'identity_override', 'identity_source'}
+
+
+def configured(path):
+    values = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text().splitlines():
+        words = shlex.split(line, comments=True)
+        if len(words) < 2 or words[0] != 'options' or words[1].replace('-', '_') != 'apple_sep':
+            continue
+        for word in words[2:]:
+            key, sep, value = word.partition('=')
+            if sep and key in EXPECTED:
+                values[key] = value if value in ('-1', '0', '1', '2') else 'invalid'
+            elif sep and key in ('refkey_v2', 'os_uuid_hi', 'os_uuid_lo'):
+                try:
+                    enabled = int(value, 0) != 0
+                except ValueError:
+                    enabled = True
+                name = 'refkey_v2' if key == 'refkey_v2' else 'identity_override'
+                values[name] = str(int(enabled or values.get(name) == '1'))
+    return values
+
+
+def readback(driver, log):
+    active, source = {}, {}
+    diagnostics = [p for p in driver.glob('*/diag') if p.is_dir()]
+    if len(diagnostics) == 1:
+        diag = diagnostics[0]
+        policy = diag / 'policy'
+        if policy.is_file():
+            for word in policy.read_text().split():
+                key, sep, value = word.partition('=')
+                if sep and key in SAFE_KEYS:
+                    if (key == 'identity_source' and value in ('dt', 'override', 'missing', 'pending')) or (key != 'identity_source' and value.isdecimal()):
+                        active[key], source[key] = value, 'diag/policy'
+        for key, name in (('xart_writes', 'xart'), ('xart_guard', 'xart_guard')):
+            path = diag / name
+            if path.is_file() and key not in active:
+                value = path.read_text().strip()
+                if name == 'xart' and value in ('enabled', 'disabled'):
+                    value = str(int(value == 'enabled'))
+                if value.isdecimal():
+                    active[key], source[key] = value, 'diag/' + name
+    # Only decision labels are retained; no UUID values or raw log are output.
+    for line in log.splitlines():
+        if 'apple_sep' not in line and 'apple-sep' not in line:
+            continue
+        if 'writes ENABLED' in line:
+            value = ('xart_writes', '1')
+        elif 'writes disabled' in line:
+            value = ('xart_writes', '0')
+        elif (match := re.search(r'xART guard level ([0-9]+)', line)):
+            value = ('xart_guard', match[1])
+        elif 'using /chosen/apfs-preboot-uuid' in line:
+            value = ('identity_source', 'dt')
+        elif 'using explicit OS UUID' in line:
+            value = ('identity_source', 'override')
+        elif '/chosen/apfs-preboot-uuid is unavailable' in line:
+            value = ('identity_source', 'missing')
+        else:
+            continue
+        key, item = value
+        if source.get(key) not in ('diag/policy', 'diag/xart', 'diag/xart_guard'):
+            active[key], source[key] = item, 'current-boot kernel decision'
+    return active, source
+
+
+def report(options, driver, log, existing=False):
+    intended = configured(options)
+    existing = existing or intended.get('provision_keybag') == '0'
+    active, source = readback(driver, log)
+    mismatches, warnings = [], []
+    if existing:
+        for key, expected in EXPECTED.items():
+            if intended.get(key) != expected:
+                mismatches.append('configured ' + key + ' differs from existing-state policy')
+            observed = active.get(key)
+            if observed is not None and observed != expected:
+                mismatches.append('active ' + key + ' contradicts existing-state policy')
+        for key in ('refkey_v2', 'identity_override'):
+            if intended.get(key, '0') != '0' or active.get(key, '0') != '0':
+                mismatches.append(key + ' is enabled')
+        if active.get('identity_source') in ('override', 'missing'):
+            mismatches.append('active identity source is not the device tree')
+        missing = [key for key in EXPECTED if key not in active]
+        if missing:
+            warnings.append('Driver does not expose all selected fields: ' + ', '.join(missing) + '; configured values are not active readback')
+        if active.get('identity_source') in (None, 'pending'):
+            warnings.append('Device-tree identity decision is not yet observable')
+    status = 'mismatch' if mismatches else ('partially-observed' if existing and warnings else 'verified' if existing else 'observed')
+    return dict(status=status, existing=existing, configured=intended, active=active,
+                sources=source, mismatches=mismatches, warnings=warnings)
+
+
+def main():
+    if subprocess.run(['omarchy-hw-apple-silicon'], check=False).returncode != 0:
+        return 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--existing', action='store_true')
+    parser.add_argument('--options', type=Path, default=Path(os.environ.get('OMARCHY_MAC_TOUCHID_OPTIONS', '/etc/modprobe.d/omarchy-mac-touchid.conf')))
+    parser.add_argument('--driver', type=Path, default=Path(os.environ.get('OMARCHY_MAC_TOUCHID_DRIVER', '/sys/bus/platform/drivers/apple_sep')))
+    parser.add_argument('--kernel-log', type=Path, default=os.environ.get('OMARCHY_MAC_TOUCHID_POLICY_LOG'))
+    args = parser.parse_args()
+    if args.kernel_log:
+        log = args.kernel_log.read_text() if args.kernel_log.is_file() else ''
+    else:
+        try:
+            result = subprocess.run(['journalctl', '-k', '-b', '--no-pager', '-o', 'cat'], capture_output=True, text=True, timeout=5)
+            log = result.stdout if result.returncode == 0 else ''
+        except (OSError, subprocess.TimeoutExpired):
+            log = ''
+    value = report(args.options, args.driver, log, args.existing)
+    print(json.dumps(value, sort_keys=True))
+    return int(value['status'] == 'mismatch')
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

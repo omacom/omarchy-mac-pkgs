@@ -1,0 +1,10 @@
+# Do not move this check into fprintd's private/read-only mount namespace.
+[Unit]
+Description=Check administrator Touch ID state admission
+Before=omarchy-mac-touchid-load.service omarchy-mac-touchid-activate.service fprintd.service
+RequiresMountsFor=/var/lib/fprint
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStart=/usr/lib/omarchy-mac/touchid-statecheck

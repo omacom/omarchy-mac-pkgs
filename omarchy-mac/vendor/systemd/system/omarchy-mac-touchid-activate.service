@@ -2,6 +2,8 @@
 # appears, and recording whether it can enrol and match, lets Omarchy find the
 # reader before anything has used it (fingerprint-readers names the record).
 [Unit]
+Requires=omarchy-mac-touchid-statecheck.service
+After=omarchy-mac-touchid-statecheck.service
 Description=Activate Touch ID
 # Only once the owner has agreed (enable-fingerprint's record): a driver
 # something else loaded is not agreement, and its status stays the boot's.
@@ -15,6 +17,7 @@ Before=fprintd.service
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStartPre=/usr/lib/omarchy-mac/touchid-statecheck
 ExecStart=/usr/lib/omarchy-mac/touchid-activate
 # The script waits up to 45 s for the attach's later retry; this bounds a
 # blocked open, which would otherwise hold up the pacman hook.

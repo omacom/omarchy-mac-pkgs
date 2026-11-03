@@ -145,6 +145,8 @@ if (( ! existing )) && tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 
     -o "$firmware/updates/apple/msrk-j700.bin" || fail "this Mac's sensor key could not be read"
 fi
 
+"$helpers/touchid-statecheck" || fail "the global state mounts were not admitted"
+
 # The record is the agreement: omarchy-mac-touchid-load.service loads the
 # driver at every boot while it exists, and disable-fingerprint removes it.
 [[ -e $agreed ]] || recorded=1
@@ -183,6 +185,9 @@ for ((attempt = 0; attempt < 200; attempt++)); do
   fi
   sleep 0.1
 done
+if (( existing )); then
+  "$helpers/touchid-policy" --existing || fail "the driver reports a different existing-state policy; restart after correcting it"
+fi
 systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
 if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   # An fprintd that started without the reader found none and kept no
