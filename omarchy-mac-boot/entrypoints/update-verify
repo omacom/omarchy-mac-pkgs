@@ -7,7 +7,10 @@
 # settings, m1n1 stage 2 with that kernel's device trees and U-Boot on the
 # system ESP, and on a Limine Mac the loader, menu and UKI on that same ESP.
 # The installed kernel may be newer than the running one until that reboot.
-# Nothing here rebuilds a boot file.
+# Nothing here rebuilds a boot file, except once after a snapshot restore across
+# a boot update, which keeps the ESP that booted it and leaves a marker on the
+# boot partition: its boot files can stay newer than every installed package, so
+# no package transaction would ever rebuild them.
 #
 # A Mac whose owner boots a chain this package does not build, such as a
 # kernel or m1n1 built by hand, names it in /etc/omarchy-mac-boot/owner-boot-chain.
@@ -18,8 +21,21 @@
 set -uo pipefail
 
 owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-chain
+rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
 
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
+# The marker stays until the check below passes, so a rebuild that does not
+# converge is tried again by the next update. A Mac whose owner manages its boot
+# chain never rebuilds here, so the marker means nothing there.
+if sudo test -f "$rollback_marker"; then
+  if [[ -f $owner_boot_chain ]]; then
+    sudo rm -f "$rollback_marker"
+  elif ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
+    echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
+    sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update ||
+      echo "The rebuild did not finish; the check below says what is left" >&2
+  fi
+fi
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
   if [[ -f $owner_boot_chain ]]; then
     chain=$(grep -m 1 -v '^[[:space:]]*$' "$owner_boot_chain")
@@ -42,4 +58,6 @@ MESSAGE
   fi
 elif [[ -f $owner_boot_chain ]]; then
   echo "Boot files verified; /etc/omarchy-mac-boot/owner-boot-chain is present, so a failed check would only warn."
+else
+  sudo rm -f "$rollback_marker"
 fi
