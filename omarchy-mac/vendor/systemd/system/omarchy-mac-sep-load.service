@@ -1,0 +1,22 @@
+# On M1-family Macs the built-in microphones sit on the Secure Enclave's data
+# path and record only a filter transient and zeros until it boots. The
+# installed kernel's module has no alias (omacom/linux-aurora#141), so nothing
+# loads it; #180 makes it load on its own, which makes this unit redundant.
+# xart_writes=0 provision_keybag=0 is read-only: the anti-replay store shared
+# with macOS is never written, and Touch ID stays off. As the Touch ID load,
+# it waits for the iBoot System Container's link, which the driver opens as it
+# probes, in the service, so a Mac that skips the unit never waits.
+[Unit]
+Description=Boot the Secure Enclave read-only for the microphone
+# Once the owner has turned Touch ID on, its load owns the driver and its options.
+ConditionPathExists=!/etc/omarchy-mac/touchid-on
+After=local-fs.target omarchy-mac-touchid-status.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecCondition=/usr/lib/omarchy-mac/sep-for-microphone
+ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer
+ExecStart=/usr/bin/modprobe apple-sep xart_writes=0 provision_keybag=0
+TimeoutStartSec=30s
