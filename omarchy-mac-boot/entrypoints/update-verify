@@ -7,7 +7,10 @@
 # settings, m1n1 stage 2 with that kernel's device trees and U-Boot on the
 # system ESP, and on a Limine Mac the loader, menu and UKI on that same ESP.
 # The installed kernel may be newer than the running one until that reboot.
-# Nothing here rebuilds a boot file.
+# Nothing here rebuilds a boot file, except once after a snapshot restore across
+# a boot update, which keeps the ESP that booted it and leaves a marker on the
+# boot partition: its boot files can stay newer than every installed package, so
+# no package transaction would ever rebuild them.
 #
 # A Mac whose owner boots a chain this package does not build, such as a
 # kernel or m1n1 built by hand, names it in /etc/omarchy-mac-boot/owner-boot-chain.
@@ -18,8 +21,19 @@
 set -uo pipefail
 
 owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-chain
+rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
 
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
+if sudo test -f "$rollback_marker"; then
+  if OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
+    sudo rm -f "$rollback_marker"
+  elif [[ ! -f $owner_boot_chain ]]; then
+    echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
+    if sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update; then
+      sudo rm -f "$rollback_marker"
+    fi
+  fi
+fi
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
   if [[ -f $owner_boot_chain ]]; then
     chain=$(grep -m 1 -v '^[[:space:]]*$' "$owner_boot_chain")
