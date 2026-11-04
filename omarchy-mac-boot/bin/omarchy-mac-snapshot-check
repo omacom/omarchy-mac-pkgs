@@ -449,7 +449,7 @@ restored_mismatch() {
 # ESP's boot firmware. Limine boots the UKI: these two are for the tools that
 # read /boot. The old pair comes back when anything fails. A failure prints why.
 sync_boot_files() {
-  local restored=$1 kernel esp uki image initramfs new_image new_initramfs reason had_marker=0
+  local restored=$1 kernel esp uki image initramfs new_image new_initramfs reason had_marker=0 put_back=1
   if ! kernel=$(omarchy-mac-kernel 2>/dev/null); then
     echo "Cannot tell which Apple kernel is installed."
     return 1
@@ -485,11 +485,13 @@ sync_boot_files() {
     sync "$boot_dir" 2>/dev/null
     return 0
   fi
-  if ! mv "$image.previous" "$image" || ! mv "$initramfs.previous" "$initramfs"; then
+  # Each one is tried, and the marker stays unless both came back.
+  mv "$image.previous" "$image" || put_back=0
+  mv "$initramfs.previous" "$initramfs" || put_back=0
+  (( put_back )) ||
     reason+=$'\n'"The previous kernel and initramfs could not be put back: see $image.previous and $initramfs.previous."
-  fi
   rm -f "$new_image" "$new_initramfs"
-  (( had_marker )) || rm -f "$rollback_marker"
+  (( had_marker || ! put_back )) || rm -f "$rollback_marker"
   sync "$boot_dir" 2>/dev/null
   printf '%s\n' "$reason"
   return 1

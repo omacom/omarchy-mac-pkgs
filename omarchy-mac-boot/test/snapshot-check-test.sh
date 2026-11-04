@@ -626,3 +626,20 @@ expect_undo "a rollback that cannot keep the current kernel" "Cannot keep the cu
 boot_unchanged "a rollback that cannot keep the current kernel"
 pass "a failed backup copy never replaces the good kernel and initramfs"
 
+# Putting /boot back tries both files, and a failure keeps the marker.
+rollback_mac
+printf 'stale\n' >>"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+mkdir -p "$tmp/failing-mv"
+real_mv=$(command -v mv)
+cat >"$tmp/failing-mv/mv" <<SH
+#!/bin/bash
+[[ \$1 != *vmlinuz-linux-aurora.previous ]] || exit 1
+exec $real_mv "\$@"
+SH
+chmod +x "$tmp/failing-mv/mv"
+TEST_PATH_FIRST=$tmp/failing-mv TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback that cannot put the kernel back" "could not be put back"
+[[ $(cat "$mac_root/boot/initramfs-linux-aurora.img") == "next initramfs" ]] || fail "the initramfs comes back when the kernel cannot"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an incomplete recovery keeps the marker"
+pass "a recovery that cannot put the kernel back still restores the initramfs, and keeps the marker"
+
