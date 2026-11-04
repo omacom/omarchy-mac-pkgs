@@ -399,3 +399,27 @@ expect_refused "a rollback rebuild that fails" "m1n1/boot.bin"
 [[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed rebuild keeps the marker for the next update"
 pass "update-verify refuses when the rollback rebuild fails, and tries again next time"
 
+# A rebuild whose commands succeed but leave the check failing keeps the marker.
+limine_mac
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_refused "a rebuild that does not converge" "m1n1/boot.bin"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a rebuild that does not converge keeps the marker"
+pass "update-verify keeps the marker until the check passes"
+
+# An owner-managed boot chain never rebuilds here, and drops the marker.
+limine_mac
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+printf 'hand-built chain\n' >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+[[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an owner-managed chain rebuilds nothing and drops the marker"
+pass "update-verify leaves an owner-managed boot chain to its owner"
+

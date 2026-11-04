@@ -400,7 +400,6 @@ restored_mismatch() {
     carries_boot_kernel "$restored" "The restored root" 2>&1 || return 0
     image=$boot_dir/vmlinuz-$kernel
   fi
-  (( undoing )) || {
   # The boot check held the booted root's crypttab and root mount against the
   # Limine command line; a root from before encryption differs here.
   if [[ -e $root/etc/crypttab || -e $restored/etc/crypttab ]] && ! cmp -s "$root/etc/crypttab" "$restored/etc/crypttab"; then
@@ -411,6 +410,7 @@ restored_mismatch() {
     echo "The restored root mounts / differently from the root the Limine command line boots."
     return 0
   fi
+  (( undoing )) || {
   if ! diff -rq "$root/usr/lib/modules/$boot_kver/dtbs" "$restored/usr/lib/modules/$boot_kver/dtbs" >/dev/null 2>&1; then
     echo "The restored root's $boot_kver device trees are not the ones in m1n1 on the ESP."
     return 0
@@ -449,7 +449,7 @@ restored_mismatch() {
 # ESP's boot firmware. Limine boots the UKI: these two are for the tools that
 # read /boot. The old pair comes back when anything fails. A failure prints why.
 sync_boot_files() {
-  local restored=$1 kernel esp uki image initramfs new_image new_initramfs reason
+  local restored=$1 kernel esp uki image initramfs new_image new_initramfs reason had_marker=0
   if ! kernel=$(omarchy-mac-kernel 2>/dev/null); then
     echo "Cannot tell which Apple kernel is installed."
     return 1
@@ -467,8 +467,16 @@ sync_boot_files() {
     echo "Cannot stage the restored kernel and initramfs on the boot partition."
     return 1
   fi
-  if ! : >"$rollback_marker" || ! cp -p "$image" "$image.previous" || ! cp -p "$initramfs" "$initramfs.previous" ||
-    ! mv "$new_image" "$image" || ! mv "$new_initramfs" "$initramfs"; then
+  # Nothing on /boot has moved until both complete copies of the old pair exist.
+  if ! cp -p "$image" "$image.previous" || ! cp -p "$initramfs" "$initramfs.previous" ||
+    ! sync "$image.previous" "$initramfs.previous"; then
+    rm -f "$image.previous" "$initramfs.previous" "$new_image" "$new_initramfs"
+    echo "Cannot keep the current kernel and initramfs while the boot partition changes."
+    return 1
+  fi
+  # A marker from an earlier rollback stays: its ESP still needs the rebuild.
+  [[ -e $rollback_marker ]] && had_marker=1
+  if ! : >"$rollback_marker" || ! mv "$new_image" "$image" || ! mv "$new_initramfs" "$initramfs"; then
     reason="Cannot put the restored kernel and initramfs on the boot partition."
   elif ! reason=$(OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then
     reason=${reason:-omarchy-apple-silicon-boot-check failed}
@@ -477,9 +485,11 @@ sync_boot_files() {
     sync "$boot_dir" 2>/dev/null
     return 0
   fi
-  [[ ! -f $image.previous ]] || mv "$image.previous" "$image"
-  [[ ! -f $initramfs.previous ]] || mv "$initramfs.previous" "$initramfs"
-  rm -f "$new_image" "$new_initramfs" "$rollback_marker"
+  if ! mv "$image.previous" "$image" || ! mv "$initramfs.previous" "$initramfs"; then
+    reason+=$'\n'"The previous kernel and initramfs could not be put back: see $image.previous and $initramfs.previous."
+  fi
+  rm -f "$new_image" "$new_initramfs"
+  (( had_marker )) || rm -f "$rollback_marker"
   sync "$boot_dir" 2>/dev/null
   printf '%s\n' "$reason"
   return 1

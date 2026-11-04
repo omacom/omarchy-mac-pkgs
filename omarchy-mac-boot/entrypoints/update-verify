@@ -24,14 +24,16 @@ owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-ch
 rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
 
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
+# The marker stays until the check below passes, so a rebuild that does not
+# converge is tried again by the next update. A Mac whose owner manages its boot
+# chain never rebuilds here, so the marker means nothing there.
 if sudo test -f "$rollback_marker"; then
-  if OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
+  if [[ -f $owner_boot_chain ]]; then
     sudo rm -f "$rollback_marker"
-  elif [[ ! -f $owner_boot_chain ]]; then
+  elif ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
     echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
-    if sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update; then
-      sudo rm -f "$rollback_marker"
-    fi
+    sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update ||
+      echo "The rebuild did not finish; the check below says what is left" >&2
   fi
 fi
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
@@ -56,4 +58,6 @@ MESSAGE
   fi
 elif [[ -f $owner_boot_chain ]]; then
   echo "Boot files verified; /etc/omarchy-mac-boot/owner-boot-chain is present, so a failed check would only warn."
+else
+  sudo rm -f "$rollback_marker"
 fi
