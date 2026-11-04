@@ -32,7 +32,7 @@ A Mac set up before Omarchy dropped the recovery passphrase keeps it as a second
 
 Touch ID on Linux is experimental and can be unstable. It shares the Secure Enclave with macOS, so back up any data on your macOS partition before you turn it on. Fingerprint setup under _Setup > Security > Fingerprint_ asks first, and saying no leaves Touch ID off. The choice applies to every user on the Mac and needs an administrator.
 
-Turning it on loads the Secure Enclave driver and creates a key store for Linux, or uses the one an earlier setup created. In normal use the enclave advances its anti-replay state, which only moves forward. Linux and macOS share that state: it is one file in the Mac's iBoot System Container, and both systems update it.
+Turning it on loads the Secure Enclave driver and creates a key store for Linux, or uses the one an earlier setup created. On M1, M1 Pro and M1 Max Macs the driver already runs at every boot for the microphone, read-only, which writes nothing shared; see [Hardware support]({{page:hardware}}). In normal use the enclave advances its anti-replay state, which only moves forward. Linux and macOS share that state: it is one file in the Mac's iBoot System Container, and both systems update it.
 
 If a bug ever writes that shared state wrongly, the enclave stops accepting it and macOS can lose data:
 
