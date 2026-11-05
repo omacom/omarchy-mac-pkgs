@@ -1,6 +1,6 @@
 # Omarchy Mac packages
 
-**Want Omarchy on your Mac?** Use the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer). This repository holds the packages it installs. It is not an installer, and it is not a copy of Omarchy.
+**Want Omarchy on your Mac?** Use the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), or `brew install omacom/mac/omarchy`. This repository holds the packages it installs. It is not an installer, and it is not a copy of Omarchy.
 
 This is the home of the Apple Silicon add-on packages for [Omarchy](https://github.com/omacom/omarchy), the tooling that releases and qualifies them, and the Mac manual. The desktop on a Mac is Omarchy's own; these packages add what the hardware needs on top of it.
 
