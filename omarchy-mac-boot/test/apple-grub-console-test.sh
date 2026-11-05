@@ -110,7 +110,11 @@ MKINITCPIO_CONF="$test_tmp/stock.conf" run
 grep -Fxq 'GRUB_CMDLINE_LINUX="zswap.enabled=0"' "$test_tmp/grub" || fail "100-local.conf applies after 91-test.conf" "$(cat "$test_tmp/grub")"
 rm "$OMARCHY_MKINITCPIO_CONF_DIR/100-local.conf"
 mkdir -p "$OMARCHY_MKINITCPIO_PRESET_DIR"
-printf 'PRESETS=(default)\nALL_config=%s\n' "$busybox_conf" >"$OMARCHY_MKINITCPIO_PRESET_DIR/linux-asahi.preset"
+# Presets are Bash: quote paths, and exercise a space even in CI checkouts
+# whose own paths contain none.
+preset_config="$test_tmp/preset config.conf"
+cp "$busybox_conf" "$preset_config"
+printf 'PRESETS=(default)\nALL_config=%q\n' "$preset_config" >"$OMARCHY_MKINITCPIO_PRESET_DIR/linux-asahi.preset"
 MKINITCPIO_CONF="$test_tmp/stock.conf" run
 grep -Fxq 'GRUB_CMDLINE_LINUX="zswap.enabled=0"' "$test_tmp/grub" || fail "the preset's configuration, without drop-ins, decides" "$(cat "$test_tmp/grub")"
 rm -rf "$OMARCHY_MKINITCPIO_CONF_DIR" "$OMARCHY_MKINITCPIO_PRESET_DIR"

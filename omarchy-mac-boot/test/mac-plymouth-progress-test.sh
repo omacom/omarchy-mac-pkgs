@@ -36,12 +36,14 @@ echo 'ok - the addendum drives the bar from system-update and centres messages'
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# A copy of the hook that reads the addendum from this tree, with mkinitcpio's
-# add_* helpers stubbed out.
-sed "s|/usr/lib/omarchy/initcpio/omarchy-mac-plymouth.script|$ADDENDUM|" "$INSTALL" >"$tmp/hook"
+# Pass the staged addendum as a quoted variable, with a space in its filename
+# even when the checkout path has none. Stub mkinitcpio's add_* helpers below.
+test_addendum="$tmp/plymouth addendum.script"
+cp "$ADDENDUM" "$test_addendum"
+sed 's|/usr/lib/omarchy/initcpio/omarchy-mac-plymouth.script|"$TEST_PLYMOUTH_ADDENDUM"|' "$INSTALL" >"$tmp/hook"
 
 run_build() {
-  BUILDROOT=$1 bash -c '
+  TEST_PLYMOUTH_ADDENDUM="$test_addendum" BUILDROOT=$1 bash -c '
     add_module() { :; }
     add_all_modules() { :; }
     add_binary() { :; }
