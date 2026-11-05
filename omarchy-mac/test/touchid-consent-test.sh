@@ -652,6 +652,7 @@ run touchid-status
 pass 'enable-fingerprint asks before anything turns on, and turning it off lasts'
 
 if command -v systemd-analyze >/dev/null; then
+  stub_systemd_boot_targets "$work/root"
   mkdir -p "$work/root/usr/bin"
   for command in omarchy-hw-apple-silicon modprobe udevadm; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"
