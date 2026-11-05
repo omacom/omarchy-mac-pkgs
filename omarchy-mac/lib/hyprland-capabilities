@@ -1,0 +1,11 @@
+#!/bin/bash
+# Restore the compositor's GPU queue authorization after binary replacement.
+set -euo pipefail
+omarchy-hw-platform >/dev/null
+omarchy-hw-apple-silicon || exit 0
+root=${1:-}
+[[ -z $root || $root == /* && $root != "/" ]] || exit 2
+binary=$root/usr/bin/Hyprland
+if [[ -f $binary && ! -L $binary ]]; then
+  setcap cap_sys_nice=ep "$binary"
+fi

@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/bin/Hyprland
+Target = usr/lib/omarchy-mac/hyprland-capabilities
+
+[Action]
+Description = Restoring Hyprland GPU priority authorization...
+When = PostTransaction
+Exec = /usr/lib/omarchy-mac/hyprland-capabilities
