@@ -9,7 +9,7 @@ Omarchy runs on Apple Silicon Macs next to macOS. It is the same [Omarchy](https
 Everything that is not Mac-specific is upstream Omarchy, so the [Omarchy manual](https://omarchy.org/manual/) applies unchanged. This manual covers only what is different on a Mac.
 
 <div class="note warn" markdown="1">
-This stack is still being qualified and has no public release yet. Mac packages land on Omarchy's `edge` channel first and reach `rc` and `stable` only after cold-boot qualification on a MacBook Pro 14" M1 Pro and a 16" M2 Max. Read these pages as what the first release installs. [Status]({{page:status}}) says what is left.
+Omarchy 4.5 is the first public release of this stack, on the `stable` channel. Mac packages land on Omarchy's `edge` channel first and reach `rc` and `stable` only after cold-boot qualification on a MacBook Pro 14" M1 Pro and a 16" M2 Max. [Install]({{page:install}}) says how to get it. [Status]({{page:status}}) says what is left.
 </div>
 
 ## What a Mac runs
