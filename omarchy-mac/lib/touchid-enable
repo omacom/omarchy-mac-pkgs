@@ -7,6 +7,7 @@ tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
 extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
 agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+sddm_agreed=${OMARCHY_MAC_TOUCHID_SDDM_AGREED:-/etc/omarchy-mac/touchid-sddm}
 options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
 module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
@@ -21,6 +22,10 @@ container=${OMARCHY_MAC_TOUCHID_CONTAINER:-/dev/disk/by-partlabel/iBootSystemCon
 python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
 lock_wait=${OMARCHY_MAC_TOUCHID_LOCK_WAIT:-300}
 omarchy-hw-apple-silicon || exit 0
+j715=0
+if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8132; then
+  j715=1
+fi
 
 # Once this run records the agreement, a failure takes it back, so a Touch ID
 # that never came up doesn't load at every boot and is offered again after a
@@ -29,7 +34,7 @@ recorded=0
 rebuilt=0
 fail() {
   if (( recorded )); then
-    rm -f "$agreed" "$options"
+    rm -f "$agreed" "$sddm_agreed" "$options"
   fi
   if (( rebuilt )); then
     rm -f "$firmware/updates/apple/msrk-j700.bin"
@@ -87,6 +92,18 @@ fi
 
 eligibility=$("$helpers/touchid-eligibility")
 [[ $eligibility == "available" ]] || fail "this Mac can't use it yet ($eligibility)"
+if (( j715 )); then
+  found=0
+  for directory in "$firmware" "$firmware/vendor" "$firmware/updates"; do
+    key=$directory/apple/msrk-j715.bin
+    if [[ -e $key ]]; then
+      [[ -f $key && -r $key && $(wc -c <"$key") == 10848 ]] ||
+        fail "this Mac's FDR sensor key at $key must be a readable 10848-byte body"
+      found=1
+    fi
+  done
+  (( found )) || fail "this Mac's own FDR sensor key must be installed before enabling Touch ID"
+fi
 
 # Factory data from this Mac's own iBoot System Container, never another's.
 sensor=$("$helpers/touchid-eligibility" sensor)
@@ -124,6 +141,9 @@ fi
 { mkdir -p -m 0755 "${agreed%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." >"$agreed" &&
   chmod 0644 "$agreed"; } || fail "the owner's agreement could not be recorded in $agreed"
+# The prompt told the owner that SDDM's login screen takes fingerprints too.
+{ printf '%s\n' "# The owner agreed to Touch ID at SDDM's login; omarchy-mac's disable-fingerprint removes this." >"$sddm_agreed" &&
+  chmod 0644 "$sddm_agreed"; } || fail "the owner's agreement to the SDDM login could not be recorded in $sddm_agreed"
 # The driver's options say so too. Today's kernels write by default, so this
 # changes nothing yet; a kernel that loads apple_sep read-only by default
 # (omacom/linux-aurora#180) writes only with it. A driver already running
@@ -157,6 +177,9 @@ if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   # An fprintd that started without the reader found none and kept no
   # allowance for its node, so it starts again with both.
   systemctl try-restart fprintd.service 2>/dev/null
+  if ! "$python" -I "$helpers/touchid-sddm" enable; then
+    echo "Touch ID is on, but SDDM's PAM configuration is not one this package manages, so its login screen is unchanged." >&2
+  fi
   echo "Touch ID is on."
   exit 0
 elif (( preloaded )); then

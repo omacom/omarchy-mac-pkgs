@@ -16,13 +16,18 @@ elif ! flock -w 300 "$lock_fd"; then
   exit 1
 fi
 
+pam_status=0
+if ! /usr/lib/omarchy-mac/touchid-sddm disable; then
+  pam_status=1
+  echo "Touch ID's SDDM policy could not be removed; an administrator must review it." >&2
+fi
 key=/usr/lib/firmware/updates/apple/msrk-j700.bin
-if [[ -e /etc/omarchy-mac/touchid-on || -e /etc/modprobe.d/omarchy-mac-touchid.conf || -e $key || -e $key.new ]]; then
+if [[ -e /etc/omarchy-mac/touchid-on || -e /etc/omarchy-mac/touchid-sddm || -e /etc/modprobe.d/omarchy-mac-touchid.conf || -e $key || -e $key.new ]]; then
   # A record left behind, on a read-only root say, loads the driver again.
-  if ! rm -f /etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf "$key" "$key.new"; then
-    echo "Touch ID could not be turned off: remove /etc/omarchy-mac/touchid-on, /etc/modprobe.d/omarchy-mac-touchid.conf and $key" >&2
+  if ! rm -f /etc/omarchy-mac/touchid-on /etc/omarchy-mac/touchid-sddm /etc/modprobe.d/omarchy-mac-touchid.conf "$key" "$key.new"; then
+    echo "Touch ID could not be turned off: remove /etc/omarchy-mac/touchid-on, /etc/omarchy-mac/touchid-sddm, /etc/modprobe.d/omarchy-mac-touchid.conf and $key" >&2
     exit 1
   fi
   echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
 fi
-exit 0
+exit "$pam_status"
