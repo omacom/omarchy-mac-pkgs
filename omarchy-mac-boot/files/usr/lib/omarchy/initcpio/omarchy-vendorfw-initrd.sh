@@ -109,6 +109,18 @@ cp -r "$src"/. "$dest"/
 } >"$record"
 
 if command -v udevadm >/dev/null 2>&1; then
-    udevadm trigger --action=add --subsystem-match=hid --subsystem-match=input --subsystem-match=spi --subsystem-match=platform || true
-    udevadm settle --timeout=10 || true
+    # Replay the keyboard and trackpad side and wait for those events only.
+    # A global "udevadm settle" also waits for events this helper never
+    # queued, such as a display driver still probing (its firmware startup
+    # takes 6.6 s on an M4 MacBook Pro), and the passphrase prompt waits for
+    # this unit. Bounded like the settle it replaces.
+    bound=
+    if command -v timeout >/dev/null 2>&1; then
+        bound="timeout 10"
+    fi
+    $bound udevadm trigger --settle --action=add --subsystem-match=hid --subsystem-match=input --subsystem-match=spi || true
+    # Platform devices are replayed afterwards and not waited for: udevd
+    # holds an event while one for the same device, a parent or a child is
+    # still running, so this replay can sit behind such a probe.
+    udevadm trigger --action=add --subsystem-match=platform || true
 fi
