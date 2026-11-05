@@ -27,10 +27,10 @@ brew install omacom/mac/omarchy
 
 This installs the app into `/Applications` and opens it. Homebrew prints a deprecation warning about `postflight`, which is expected. `brew upgrade omarchy` updates the app. `brew uninstall --zap omarchy` removes the app, its helper and its support files, but not Omarchy itself: use **Remove Omarchy** in the app for that.
 
-Without Homebrew, download `Omarchy-Mac-Installer-<version>.dmg` and its `.dmg.sha256` from the newest `Omarchy Installer <version>` release on the [releases page](https://github.com/omacom/omarchy-mac-installer/releases). Every installer release is marked pre-release; ignore the `catalog-*` and `engine-*` releases. Check the download from the folder that holds both files:
+Without Homebrew, download [`Omarchy-Mac-Installer-2.3.15.dmg`](https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.15/Omarchy-Mac-Installer-2.3.15.dmg) and its [`.dmg.sha256`](https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.15/Omarchy-Mac-Installer-2.3.15.dmg.sha256) from the [2.3.15 release](https://github.com/omacom/omarchy-mac-installer/releases/tag/v2.3.15), or a newer `Omarchy Installer <version>` release if the [releases page](https://github.com/omacom/omarchy-mac-installer/releases) has one. Every installer release is marked pre-release; ignore the `catalog-*` and `engine-*` releases. Check the download from the folder that holds both files:
 
 ```bash
-shasum -a 256 -c Omarchy-Mac-Installer-<version>.dmg.sha256
+shasum -a 256 -c Omarchy-Mac-Installer-2.3.15.dmg.sha256
 ```
 
 Then open the disk image and drag **Omarchy Installer** to `/Applications`. The app is signed and notarized; to check it, Gatekeeper must report `Notarized Developer ID`:
