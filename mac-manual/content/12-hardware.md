@@ -80,7 +80,7 @@ Anything marked work in progress there, Thunderbolt device support among them, i
 
 ### Experimental J514C login
 
-The 14-inch M3 Max J514C bring-up remains outside the supported release. On a tester's separately opted-in J514C/T6031 install, the login manager waits for the native display and GPU before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait does not enable hardware acceleration or change the kernel's bring-up setting.
+The 14-inch M3 Max J514C bring-up remains outside the supported release. On a J514C/T6031 install, the login manager waits for the native display and GPU before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
 
 ## Reporting a problem
 

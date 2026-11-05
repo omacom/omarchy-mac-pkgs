@@ -33,19 +33,16 @@ waiting() {
   (( status == 124 )) || fail "$1" "status=$status"
 }
 compatibility apple,j514c apple,t6031
-parameter asahi.g15_j514c_bringup=1
+parameter
 APPLE=0 timeout 2 "$helper" || fail 'other platforms never enter the J514C wait'
-parameter asahi.g15_j514c_bringup=0
-timeout 2 "$helper" || fail 'non-opted-in J514C starts without a native wait'
-parameter asahi.g15_j514c_bringup=1 asahi.g15_j514c_bringup=0
-timeout 2 "$helper" || fail 'the last bring-up parameter wins'
-parameter asahi.g15_j514c_bringup=1
+waiting 'J514C waits for native graphics without an enable parameter'
+parameter
 compatibility apple,j514c apple,t6034
 timeout 2 "$helper" || fail 'J514C name on another SoC never enters native wait'
 compatibility apple,j516c apple,t6031
 timeout 2 "$helper" || fail 'another T6031 board never enters native wait'
 compatibility apple,j514c apple,t6031
-pass 'exact board, SoC, platform and effective opt-in gates'
+pass 'exact board, SoC and platform gates; no enable parameter'
 
 driver card0 simpledrm
 driver renderD128 asahi-g15

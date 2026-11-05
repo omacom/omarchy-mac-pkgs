@@ -1,6 +1,6 @@
 #!/bin/bash
 # Let Apple's native display replace simpledrm before the greeter opens its VT.
-# Keep the existing 10 s wait on other Macs; opted-in J514C also needs its GPU.
+# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU.
 # A timeout never fails the greeter.
 omarchy-hw-apple-silicon || exit 0
 proc=/proc
@@ -27,15 +27,7 @@ native_ready() {
   [[ $native_display == "true" && $native_gpu == "true" ]]
 }
 
-bringup=0
-if [[ -r $proc/cmdline ]]; then
-  read -r -a parameters <"$proc/cmdline"
-  for parameter in "${parameters[@]}"; do
-    [[ $parameter == asahi.g15_j514c_bringup=* ]] && bringup=${parameter#*=}
-  done
-fi
-if [[ $bringup == "1" ]] &&
-  grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
+if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
   grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null; then
   started=$SECONDS
   deadline=$((SECONDS + 30))
