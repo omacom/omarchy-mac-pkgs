@@ -3,6 +3,13 @@
 # (and on the Neo installs its sensor root key) if they are missing, records the
 # agreement so the driver loads at every boot, and loads it now.
 
+existing=0
+case ${1:-} in
+  "") ;;
+  --existing) existing=1 ;;
+  *) echo "Usage: touchid-enable [--existing]" >&2; exit 1 ;;
+esac
+
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
 extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
@@ -88,11 +95,31 @@ fi
 eligibility=$("$helpers/touchid-eligibility")
 [[ $eligibility == "available" ]] || fail "this Mac can't use it yet ($eligibility)"
 
+# Adoption never carves calibration or creates an identity. Check metadata,
+# leaving the driver's readers to validate the existing records.
+if (( existing )); then
+  tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j613 || fail "existing-bag adoption is qualified only for J613"
+  [[ ! -d $module ]] || fail "restart before adopting an existing bag"
+  state_directory=${keybag%/*}
+  for name in aurora-sep-keybag.bin aurora-sep-host-state.bin aurora-sep-refkey.bin \
+    apple-sep-catacomb-master.bin apple-sep-catacomb-owner.bin apple-sep-catacomb-user.bin aurora-sep-xart-owned.bin; do
+    file=$state_directory/$name
+    [[ -f $file && ! -L $file && $(stat -c '%u:%g:%a:%h' -- "$file") == "0:0:600:1" ]] ||
+      fail "existing state is missing or unsafe: $name"
+    [[ $name == "aurora-sep-xart-owned.bin" || -s $file ]] || fail "existing state is empty: $name"
+  done
+  [[ ! -e $state_directory/aurora-sep-refkey-v2.bin && ! -L $state_directory/aurora-sep-refkey-v2.bin ]] ||
+    fail "recovery-slot state needs separate qualification"
+fi
+
 # Factory data from this Mac's own iBoot System Container, never another's.
 sensor=$("$helpers/touchid-eligibility" sensor)
 calibration=apple/mesa_calibration.bin
 if [[ -r $sensor/firmware-name ]]; then
   calibration=$(tr -d '\0' <"$sensor/firmware-name")
+fi
+if (( existing )) && ! installed "$calibration"; then
+  fail "existing calibration is missing; adoption never carves it"
 fi
 if ! installed "$calibration"; then
   echo "Copying this Mac's Touch ID calibration..."
@@ -104,7 +131,7 @@ if ! installed "$calibration"; then
     { rm -f "$carved.new"; fail "this Mac's calibration could not be read"; }
   chmod 0644 "$carved.new" && mv -f "$carved.new" "$carved" || { rm -f "$carved.new"; fail "this Mac's calibration could not be installed"; }
 fi
-if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 && ! root_key_installed; then
+if (( ! existing )) && tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 && ! root_key_installed; then
   # Rebuilt only now, from the factory records asahi-installer leaves on the
   # ESP and checked against this Mac's iBoot System Container; root-only, and
   # it takes its name only once whole. Turning Touch ID off deletes it.
@@ -117,6 +144,8 @@ if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140 && ! root_key_instal
   "$python" -I "$helpers/touchid-root-key" --archive "$esp/asahi/all_firmware.tar.gz" --container "$container" \
     -o "$firmware/updates/apple/msrk-j700.bin" || fail "this Mac's sensor key could not be read"
 fi
+
+"$helpers/touchid-statecheck" || fail "the global state mounts were not admitted"
 
 # The record is the agreement: omarchy-mac-touchid-load.service loads the
 # driver at every boot while it exists, and disable-fingerprint removes it.
@@ -134,9 +163,13 @@ if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
 fi
 # A write that fails partway never replaces the options, since a file without
 # them would load a read-only driver at every boot.
+driver_options="options apple_sep xart_writes=1 provision_keybag=1"
+if (( existing )); then
+  driver_options="options apple_sep xart_writes=1 provision_keybag=0 xart_guard=1 trusted_keys=0 filevault_api=0 xarm_trace=1"
+fi
 { mkdir -p -m 0755 "${options%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-    "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+    "$driver_options" >"$options.new" &&
   chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
   { rm -f "$options.new" 2>/dev/null; fail "the driver's options could not be written to $options"; }
 mkdir -p -m 0755 "${loaded%/*}"
@@ -152,6 +185,9 @@ for ((attempt = 0; attempt < 200; attempt++)); do
   fi
   sleep 0.1
 done
+if (( existing )); then
+  "$helpers/touchid-policy" --existing || fail "the driver reports a different existing-state policy; restart after correcting it"
+fi
 systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
 if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   # An fprintd that started without the reader found none and kept no

@@ -6,6 +6,8 @@
 # boot would wait on the partition, agreed or not, and a machine without one
 # would hold the greeter until the device timed out.
 [Unit]
+Requires=omarchy-mac-touchid-statecheck.service
+After=omarchy-mac-touchid-statecheck.service
 Description=Load the Touch ID driver
 ConditionPathExists=/etc/omarchy-mac/touchid-on
 After=local-fs.target
@@ -14,6 +16,8 @@ Before=display-manager.service fprintd.service
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStartPre=/usr/lib/omarchy-mac/touchid-statecheck
 ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer
 ExecStart=/usr/bin/modprobe apple-sep
+ExecStartPost=/usr/lib/omarchy-mac/touchid-policy
 TimeoutStartSec=30s

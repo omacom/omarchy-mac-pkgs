@@ -179,7 +179,7 @@ dropin=$work/root/usr/lib/systemd/system/fprintd.service.d/50-omarchy-mac-touchi
 wait_unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-wait.service
 [[ -f $dropin && -f $wait_unit ]] || fail 'the fprintd drop-in and the wait unit are staged'
 grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
-  grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service' "$dropin" ||
+  grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service omarchy-mac-touchid-statecheck.service' "$dropin" ||
   fail 'fprintd starts after the wait and the activation'
 ! grep -qE '^(DeviceAllow|DevicePolicy|ExecStartPre)=' "$dropin" ||
   fail "the drop-in leaves fprintd's devices to libfprint-git, which owns the allowance"
@@ -209,6 +209,9 @@ pass 'fprintd waits for Touch ID only on a Mac whose Secure Enclave driver has a
 # Verified inside the staged root, whose stub commands stand in for the
 # runtime's platform check, so the result never depends on the host.
 if command -v systemd-analyze >/dev/null; then
+  for target in sysinit basic shutdown local-fs; do
+    printf '[Unit]\nDescription=Fixture target\nDefaultDependencies=no\n' >"$work/root/usr/lib/systemd/system/$target.target"
+  done
   mkdir -p "$work/root/usr/bin"
   for command in omarchy-hw-apple-silicon sh; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"

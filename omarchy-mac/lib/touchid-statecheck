@@ -1,0 +1,19 @@
+#!/bin/bash
+# Optional administrator admission, always run before entering a daemon sandbox.
+set -euo pipefail
+omarchy-hw-apple-silicon || exit 0
+check=${OMARCHY_MAC_TOUCHID_STATECHECK:-/etc/omarchy-mac/touchid-statecheck}
+if [[ ! -e $check && ! -L $check ]]; then
+  exit 0
+fi
+if [[ ! -f $check || -L $check || ! -x $check ]]; then
+  echo "Touch ID state admission is not an executable regular file: $check" >&2
+  exit 1
+fi
+metadata=$(stat -c '%u:%g:%a' -- "$check")
+IFS=: read -r owner group mode <<<"$metadata"
+if [[ $owner != 0 || $group != 0 ]] || (( (8#$mode & 8#022) != 0 )); then
+  echo "Touch ID state admission must be root-owned and not group/world-writable: $check" >&2
+  exit 1
+fi
+exec "$check"
