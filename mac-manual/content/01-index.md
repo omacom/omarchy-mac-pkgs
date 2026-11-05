@@ -21,7 +21,7 @@ This stack is still being qualified and has no public release yet. Mac packages 
 | Kernel | `linux-aurora`, built from [aurora-silicon/linux](https://github.com/aurora-silicon/linux), with `m1n1-aurora` and `uboot-asahi` |
 | Boot | m1n1, then U-Boot, then Limine, with your snapshots in the boot menu |
 | Packages | Signed packages only: Omarchy's own `[omarchy]` repository for aarch64, Arch Linux ARM and the Asahi repositories |
-| Installer | The macOS app from [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer) |
+| Installer | The macOS app from [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer), or `brew install omacom/mac/omarchy` |
 
 ## Where to start
 
