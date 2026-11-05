@@ -1,0 +1,11 @@
+# A battery already present receives no add event when this rule is installed.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/udev/rules.d/94-omarchy-mac-battery-charge-limit.rules
+
+[Action]
+Description = Restoring the saved Apple battery charge limit...
+When = PostTransaction
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { /usr/lib/omarchy-mac/battery-charge-limit-restore; true; }'
