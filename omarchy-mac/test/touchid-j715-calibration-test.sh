@@ -120,12 +120,46 @@ truncate -s 130427 "$fixture/firmware/vendor/apple/private-fsc2.bin"
 [[ $("$ROOT/lib/touchid-eligibility") == "available" ]] || fail 'device-tree firmware-name is honored'
 pass 'device-tree firmware-name selects the calibration'
 
+# Every present J715 key must be whole, even with good copies elsewhere.
+for directory in "$fixture/firmware" "$fixture/firmware/vendor" "$fixture/firmware/updates"; do
+  for invalid in 0 10847 10849 directory dangling-link; do
+    machine
+    truncate -s 130427 "$fixture/firmware/apple/mesa_calibration.bin"
+    for candidate in "$fixture/firmware" "$fixture/firmware/vendor" "$fixture/firmware/updates"; do
+      truncate -s 10848 "$candidate/apple/msrk-j715.bin"
+    done
+    key=$directory/apple/msrk-j715.bin
+    rm "$key"
+    case $invalid in
+      directory) mkdir "$key" ;;
+      dangling-link) ln -s missing "$key" ;;
+      *) truncate -s "$invalid" "$key" ;;
+    esac
+    rejected "shadowed ${directory#"$fixture/firmware"}/$invalid J715 key" unsupported:invalid-root-key
+  done
+  machine
+  truncate -s 130427 "$fixture/firmware/apple/mesa_calibration.bin"
+  rm "$fixture/firmware/apple/msrk-j715.bin"
+  truncate -s 10848 "$directory/apple/msrk-j715.bin"
+  [[ $("$ROOT/lib/touchid-eligibility") == "available" ]] || fail 'a whole J715 key remains eligible'
+  pass "${directory#"$fixture/firmware"} whole J715 key remains eligible"
+  mv "$directory/apple/msrk-j715.bin" "$directory/apple/private-msrk.bin"
+  ln -s private-msrk.bin "$directory/apple/msrk-j715.bin"
+  [[ $("$ROOT/lib/touchid-eligibility") == "available" ]] || fail 'a readable J715 key symlink remains eligible'
+  pass "${directory#"$fixture/firmware"} readable J715 key symlink remains eligible"
+done
+machine
+truncate -s 130427 "$fixture/firmware/apple/mesa_calibration.bin"
+rm "$fixture/firmware/apple/msrk-j715.bin"
+rejected 'missing J715 key' unsupported:no-root-key
+
 for board in 'apple,j414c apple,t6021' 'apple,j700 apple,t8140'; do
   read -r model chip <<<"$board"
   machine "$model" "$chip"
   printf legacy >"$fixture/firmware/apple/mesa_calibration.bin"
+  truncate -s 0 "$fixture/firmware/apple/msrk-j715.bin"
   truncate -s 1 "$fixture/firmware/apple/msrk-j700.bin"
   [[ $("$ROOT/lib/touchid-eligibility") == "available" ]] || fail 'other boards keep their calibration rules'
 done
 pass 'other boards keep their calibration rules'
-(( failures == 0 )) || fail "$failures calibration regressions"
+(( failures == 0 )) || fail "$failures calibration/key regressions"

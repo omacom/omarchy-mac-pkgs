@@ -5,10 +5,12 @@
 import os
 from pathlib import Path
 import pwd
+import stat
 import subprocess
 import sys
 
 RUNTIME = Path("/run/user")
+LOGINS = Path("/run/omarchy-mac/touchid-logins")
 SECRETS = "org.freedesktop.secrets"
 SERVICE = "/org/freedesktop/secrets"
 LOGIN = "/org/freedesktop/secrets/collection/login"
@@ -17,16 +19,62 @@ LOGIN = "/org/freedesktop/secrets/collection/login"
 LOGIN_FILES = (".local/share/keyrings/login.keyring", ".gnome2/keyrings/login.keyring")
 
 
+def prior_login(uid: int) -> bool:
+    """Trust only a marker in the privileged PAM helper's boot-local directory."""
+    try:
+        directory = LOGINS.lstat()
+        marker = (LOGINS / str(uid)).lstat()
+    except OSError:
+        return False
+    return (stat.S_ISDIR(directory.st_mode) and stat.S_ISREG(marker.st_mode)
+            and directory.st_uid == marker.st_uid == os.geteuid()
+            and not (directory.st_mode | marker.st_mode) & 0o022)
+
+
+def record_login(user: str) -> bool:
+    """Remember SDDM reaching open_session after authentication and account checks."""
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+        LOGINS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory = LOGINS.lstat()
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid()
+                or directory.st_mode & 0o022):
+            return False
+        try:
+            descriptor = os.open(LOGINS / str(uid), os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            return prior_login(uid)
+        os.close(descriptor)
+        return True
+    except (KeyError, OSError):
+        return False
+
+
+def no_login_keyring_files(home: Path) -> bool:
+    """Only ENOENT proves absence; run this lookup with the user's credentials."""
+    for name in LOGIN_FILES:
+        try:
+            (home / name).stat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        return False
+    return True
+
+
 def unlocked(user: str, run=subprocess.run, runtime: Path = RUNTIME) -> bool:
     try:
         entry = pwd.getpwnam(user)
     except KeyError:
         return False
+    if not prior_login(entry.pw_uid):
+        return False
     bus = runtime / str(entry.pw_uid) / "bus"
     if not bus.is_socket():
         return False
     command = ["/usr/bin/setpriv", f"--reuid={entry.pw_uid}", f"--regid={entry.pw_gid}",
-               "--clear-groups", "--reset-env", "/usr/bin/busctl",
+               "--init-groups", "--reset-env", "/usr/bin/busctl",
                f"--address=unix:path={bus}", "--timeout=2"]
 
     def ask(*arguments: str) -> str | None:
@@ -44,11 +92,10 @@ def unlocked(user: str, run=subprocess.run, runtime: Path = RUNTIME) -> bool:
     def no_login_keyring_file() -> bool:
         # Checked as the user, so root never follows a path the user controls.
         # Anything but a clean "neither file exists" refuses.
-        expression = [word for name in LOGIN_FILES
-                      for word in ("-a", "!", "-e", str(Path(entry.pw_dir) / name))][1:]
         try:
             done = run(["/usr/bin/setpriv", f"--reuid={entry.pw_uid}", f"--regid={entry.pw_gid}",
-                        "--clear-groups", "--reset-env", "/usr/bin/test", *expression],
+                        "--init-groups", "--reset-env", "/usr/bin/python3", "-I", __file__,
+                        "no-login-keyring-files", entry.pw_dir],
                        timeout=5, check=False)
         except (OSError, subprocess.TimeoutExpired):
             return False
@@ -71,8 +118,12 @@ def unlocked(user: str, run=subprocess.run, runtime: Path = RUNTIME) -> bool:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "no-login-keyring-files":
+        return 0 if no_login_keyring_files(Path(sys.argv[2])) else 1
     if subprocess.run(["omarchy-hw-apple-silicon"], check=False).returncode != 0:
         return 1
+    if os.environ.get("PAM_TYPE") == "open_session" and os.environ.get("PAM_SERVICE") == "sddm":
+        return 0 if record_login(os.environ.get("PAM_USER", "")) else 1
     if unlocked(os.environ.get("PAM_USER", "")):
         return 0
     return 1

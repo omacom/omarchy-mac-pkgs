@@ -96,8 +96,21 @@ if compatible apple,t8140 && ! installed apple/msrk-j700.bin &&
 fi
 # J715 needs its own FDR MSRk and FSC2, not the Neo's reconstructed key or
 # the older calibration an extractor can find in the system container.
-if compatible apple,t8132 && ! installed apple/msrk-j715.bin; then
-  echo unsupported:no-root-key
-  exit 0
+if compatible apple,t8132; then
+  found=0
+  for directory in "$firmware" "$firmware/vendor" "$firmware/updates"; do
+    key=$directory/apple/msrk-j715.bin
+    if [[ -e $key || -L $key ]]; then
+      if [[ ! -f $key || ! -r $key ]] || [[ $(stat -Lc %s -- "$key" 2>/dev/null) != 10848 ]]; then
+        echo unsupported:invalid-root-key
+        exit 0
+      fi
+      found=1
+    fi
+  done
+  if (( ! found )); then
+    echo unsupported:no-root-key
+    exit 0
+  fi
 fi
 echo available

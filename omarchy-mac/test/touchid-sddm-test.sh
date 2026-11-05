@@ -104,6 +104,13 @@ printf '# omarchy-mac Touch ID\nauth include omarchy-mac-touchid\n' | cat - "$wo
 python3 -I "$helper" enable
 current=$(python3 -I -c 'import runpy, sys; print(runpy.run_path(sys.argv[1])["POLICY"], end="")' "$helper")
 [[ $(<"$OMARCHY_MAC_TOUCHID_PAM/omarchy-mac-touchid") == "$current" ]] || fail 'enabling replaces the previous owned policy'
+python3 -I - "$helper" "$OMARCHY_MAC_TOUCHID_PAM/sddm" "$work/original" <<'PY'
+from pathlib import Path
+import runpy
+import sys
+prefix = runpy.run_path(sys.argv[1])["PREFIX"].encode()
+assert Path(sys.argv[2]).read_bytes() == prefix + Path(sys.argv[3]).read_bytes(), "an old include gains the session hook"
+PY
 python3 -I "$helper" disable
 cmp "$work/original" "$OMARCHY_MAC_TOUCHID_PAM/sddm" || fail 'disabling after an upgrade restores the original'
 [[ ! -e $OMARCHY_MAC_TOUCHID_PAM/omarchy-mac-touchid ]] || fail 'the upgraded policy is removed'
@@ -185,7 +192,9 @@ pass 'removal ignores SDDM files that do not include the policy and reports ones
 python3 -I - "$helper" "$work" "$ROOT/lib" <<'PY'
 import ctypes
 import ctypes.util
+import os
 from pathlib import Path
+import pwd
 import runpy
 import sys
 
@@ -193,6 +202,10 @@ helper, work, lib = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 root = work / "dispatch"
 root.mkdir()
 policy = runpy.run_path(str(helper))["POLICY"]
+prefix = runpy.run_path(str(helper))["PREFIX"]
+logins = work / "dispatch-logins"
+user = pwd.getpwuid(os.getuid())
+login_marker = logins / str(user.pw_uid)
 library = ctypes.util.find_library("pam")
 if library is None:
     raise RuntimeError("libpam is required for the PAM dispatch test")
@@ -221,6 +234,8 @@ pam.pam_start_confdir.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
                                  ctypes.POINTER(pointer)]
 pam.pam_authenticate.argtypes = [pointer, ctypes.c_int]
 pam.pam_acct_mgmt.argtypes = [pointer, ctypes.c_int]
+pam.pam_open_session.argtypes = [pointer, ctypes.c_int]
+pam.pam_close_session.argtypes = [pointer, ctypes.c_int]
 pam.pam_end.argtypes = [pointer, ctypes.c_int]
 
 def script(name, body):
@@ -234,6 +249,12 @@ cleared = work / "authsucc-record"
 # pam_exec passes no PATH, so point the real helper's platform check at the stub.
 empty = script("empty-password", (lib / "touchid-pam-empty-password").read_text().removeprefix("#!/bin/bash\n")
                .replace("omarchy-hw-apple-silicon", str(work / "bin" / "omarchy-hw-apple-silicon")))
+recorder = work / "record-login"
+recorder.write_text((lib / "touchid-pam-keyring-unlocked").read_text()
+                    .replace('Path("/run/omarchy-mac/touchid-logins")', f"Path({str(logins)!r})")
+                    .replace('["omarchy-hw-apple-silicon"]', f"[{str(work / 'bin/omarchy-hw-apple-silicon')!r}]"))
+recorder.chmod(0o755)
+prefix = prefix.replace("/usr/lib/omarchy-mac/touchid-pam-keyring-unlocked", str(recorder))
 keyring = {True: script("keyring-unlocked", "exit 0\n"),
            False: script("keyring-locked", "exit 1\n")}
 authfail = script("authfail", f"echo >>{record}\nexit 0\n")
@@ -257,10 +278,12 @@ def attempt(typed, unlocked, fingerprint, password=True, shell=True, nologin=Tru
     stack = (f"auth required pam_exec.so expose_authtok {check}\n" if password
              else "auth required pam_deny.so\n")
     (root / "sddm").write_text(
-        "auth include omarchy-mac-touchid\n" + stack +
-        "account required " + ("pam_permit.so" if account else "pam_deny.so") + "\n")
+        prefix + stack +
+        "account required " + ("pam_permit.so" if account else "pam_deny.so") + "\n"
+        "session required pam_permit.so\n")
     record.unlink(missing_ok=True)
     cleared.unlink(missing_ok=True)
+    login_marker.unlink(missing_ok=True)
     prompts = []
 
     def converse(count, messages, responses, data):
@@ -279,7 +302,7 @@ def attempt(typed, unlocked, fingerprint, password=True, shell=True, nologin=Tru
     function = CONVERSE(converse)
     conversation = Conversation(function, None)
     handle = pointer()
-    result = pam.pam_start_confdir(b"sddm", b"fixture-user", ctypes.byref(conversation),
+    result = pam.pam_start_confdir(b"sddm", user.pw_name.encode(), ctypes.byref(conversation),
                                   str(root).encode(), ctypes.byref(handle))
     if result != 0:
         raise RuntimeError(f"pam_start_confdir: {result}")
@@ -287,6 +310,11 @@ def attempt(typed, unlocked, fingerprint, password=True, shell=True, nologin=Tru
         result = pam.pam_authenticate(handle, 0)
         if result == 0:
             result = pam.pam_acct_mgmt(handle, 0)
+        if result == 0:
+            result = pam.pam_open_session(handle, 0)
+        assert login_marker.exists() == (result == 0), "only a session after successful authentication records login proof"
+        pam.pam_close_session(handle, 0)
+        assert login_marker.exists() == (result == 0), "close_session does not create or remove login proof"
     finally:
         pam.pam_end(handle, result)
     return result == 0, len(prompts), record.exists(), cleared.exists()
@@ -329,12 +357,12 @@ unlocked = module["unlocked"]
 runtime = Path(sys.argv[2]) / "runtime"
 user = pwd.getpwuid(os.getuid())
 bus = runtime / str(user.pw_uid) / "bus"
+logins = Path(sys.argv[2]) / "logins"
+unlocked.__globals__["LOGINS"] = logins
 
 LOGIN = '"/org/freedesktop/secrets/collection/login"'
 DEFAULT = '"/org/freedesktop/secrets/collection/Default_5fkeyring"'
 SESSION = '"/org/freedesktop/secrets/collection/session"'
-xdg_file = Path(user.pw_dir) / ".local/share/keyrings/login.keyring"
-legacy_file = Path(user.pw_dir) / ".gnome2/keyrings/login.keyring"
 
 def fake(owner, locked, collections=(LOGIN, SESSION), login_file_exists=False, failure=None):
     # login_file_exists: whether any of the two login keyring files exists
@@ -345,9 +373,8 @@ def fake(owner, locked, collections=(LOGIN, SESSION), login_file_exists=False, f
         assert command[:2] == ["/usr/bin/setpriv", f"--reuid={user.pw_uid}"], command
         if failure:
             raise failure
-        if "/usr/bin/test" in command:
-            assert command[command.index("/usr/bin/test") + 1:] == [
-                "!", "-e", str(xdg_file), "-a", "!", "-e", str(legacy_file)], command
+        if "no-login-keyring-files" in command:
+            assert command[-1] == user.pw_dir and "--init-groups" in command, command
             return subprocess.CompletedProcess(command, 1 if login_file_exists else 0)
         assert f"--address=unix:path={bus}" in command, command
         if "NameHasOwner" in command:
@@ -364,6 +391,8 @@ assert not unlocked(user.pw_name, run, runtime) and not calls, "no user bus mean
 bus.parent.mkdir(parents=True)
 listener = socket.socket(socket.AF_UNIX)
 listener.bind(str(bus))
+assert not unlocked(user.pw_name, run, runtime) and not calls, "a lingering user bus proves no login"
+assert module["record_login"](user.pw_name), "the session hook records the login"
 assert unlocked(user.pw_name, run, runtime) and len(calls) == 3, "an unlocked login collection"
 run, calls = fake("true", "true")
 assert not unlocked(user.pw_name, run, runtime), "a locked login collection"
@@ -379,17 +408,6 @@ assert not any("Locked" in call or "Collections" in call for call in calls), "a 
 run, calls = fake("false", "false", login_file_exists=True)
 assert not unlocked(user.pw_name, run, runtime), "a stopped keyring with a login keyring would start locked"
 
-def present_only(path):
-    # The fake test command answers for the two real paths: only `path` exists.
-    def run(command, **options):
-        if "/usr/bin/test" in command:
-            tail = command[command.index("/usr/bin/test") + 1:]
-            exists = [str(xdg_file), str(legacy_file)][1 if path == "legacy" else 0]
-            return subprocess.CompletedProcess(command, 1 if exists in tail else 0)
-        return subprocess.CompletedProcess(command, 0, "b false\n", "")
-    return run
-assert not unlocked(user.pw_name, present_only("legacy"), runtime), "a legacy login keyring is not missed"
-assert not unlocked(user.pw_name, present_only("xdg"), runtime), "an XDG login keyring is not missed"
 run, calls = fake("true", "false", failure=subprocess.TimeoutExpired("busctl", 5))
 assert not unlocked(user.pw_name, run, runtime)
 run, calls = fake("false", "false", failure=OSError("setpriv"))

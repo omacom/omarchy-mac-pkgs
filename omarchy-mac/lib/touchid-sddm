@@ -10,7 +10,9 @@ import subprocess
 import sys
 import tempfile
 
-PREFIX = "# omarchy-mac Touch ID\n" "auth include omarchy-mac-touchid\n"
+PREVIOUS_PREFIX = "# omarchy-mac Touch ID\n" "auth include omarchy-mac-touchid\n"
+PREFIX = (PREVIOUS_PREFIX
+          + "session optional pam_exec.so quiet type=open_session /usr/lib/omarchy-mac/touchid-pam-keyring-unlocked\n")
 # An empty password asks for Touch ID unless a login keyring is locked; any other
 # password skips to the stock stack. A rejected finger counts for faillock and an
 # accepted one clears the count. Faillock options come from system-auth.
@@ -178,8 +180,9 @@ def configure(directory: Path, enable: bool) -> None:
         raise Refused(f"{policy} was changed; leaving it alone")
     if original is None:
         return
-    active = original.startswith(PREFIX)
-    original = original.removeprefix(PREFIX)
+    active = original.startswith(PREVIOUS_PREFIX)
+    current = original.startswith(PREFIX)
+    original = original.removeprefix(PREFIX if current else PREVIOUS_PREFIX)
     if "omarchy-mac-touchid" in original:
         raise Refused(f"{sddm} has a custom Touch ID entry")
     if enable:
@@ -199,7 +202,7 @@ def configure(directory: Path, enable: bool) -> None:
                                options.get("authsucc", []))
         if existing_policy != wanted:
             write_atomic(policy, wanted)
-        if not active:
+        if not current:
             write_atomic(sddm, PREFIX + original)
     else:
         if active:
