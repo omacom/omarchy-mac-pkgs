@@ -1,0 +1,3 @@
+# Sync Bluetooth wake with the charger when it changes state or the Bluetooth function appears.
+ACTION!="remove", SUBSYSTEM=="power_supply", KERNEL=="macsmc-ac", RUN+="/usr/lib/omarchy-mac/bluetooth-wake-sync"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x14e4", ATTR{device}=="0x5f69|0x5f71|0x5f72", DRIVERS=="pcie-apple", RUN+="/usr/lib/omarchy-mac/bluetooth-wake-sync"
