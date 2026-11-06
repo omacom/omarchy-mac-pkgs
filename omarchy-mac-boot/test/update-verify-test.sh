@@ -33,12 +33,13 @@ verify() {
   set +e
   (
     eval "$(limine_mac_env "$ROOT/bin" "${1:-}")"
+    [[ -z ${TEST_REBUILDS:-} ]] || export PATH="$TEST_REBUILDS:$PATH"
     bash "$entrypoint"
   ) >"$tmp/out" 2>"$tmp/err"
   status=$?
   set -e
   tree_state >"$tmp/after"
-  diff -q "$tmp/before" "$tmp/after" >/dev/null || fail "update-verify changes no boot file" "$(diff "$tmp/before" "$tmp/after")"
+  [[ -n ${TEST_REBUILDS:-} ]] || diff -q "$tmp/before" "$tmp/after" >/dev/null || fail "update-verify changes no boot file" "$(diff "$tmp/before" "$tmp/after")"
   [[ ! -s $mac_state/mounts && -z $(ls -A "$mac_root/run") ]] || fail "update-verify leaves nothing mounted"
 }
 
@@ -345,3 +346,80 @@ rm -rf "$mac_state/initrd-tree"
 verify
 expect_verified "an unencrypted Mac, which has no passphrase prompt"
 pass "update-verify refuses an encrypted Mac whose boot image does not carry its keyboard layout"
+
+# After a snapshot restore across a boot update the ESP can stay newer than every
+# package, so the marker that restore left has update-verify rebuild it once.
+stubs=$tmp/rebuild-stubs
+mkdir -p "$stubs"
+cat >"$stubs/mkinitcpio" <<'SH'
+#!/bin/bash
+echo mkinitcpio >>"$REBUILD_LOG"
+SH
+cat >"$stubs/update-m1n1" <<'SH'
+#!/bin/bash
+echo update-m1n1 >>"$REBUILD_LOG"
+[[ -z ${REBUILD_FAILS:-} ]] || exit 1
+cp "$GOOD_BOOT_BIN" "$ESP_BOOT_BIN"
+SH
+cat >"$stubs/omarchy-mac-boot-update" <<'SH'
+#!/bin/bash
+echo omarchy-mac-boot-update >>"$REBUILD_LOG"
+SH
+chmod +x "$stubs"/*
+export REBUILD_LOG=$tmp/rebuilds GOOD_BOOT_BIN=$tmp/good-boot.bin
+
+limine_mac
+export ESP_BOOT_BIN=$mac_esp/m1n1/boot.bin
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a coherent Mac with the rollback marker"
+[[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a coherent Mac rebuilds nothing and clears the marker"
+pass "update-verify clears the rollback marker when the boot files already match"
+
+limine_mac
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a Mac with newer boot files after a rollback"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a finished rebuild clears the marker"
+pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
+
+limine_mac
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+REBUILD_FAILS=1 TEST_REBUILDS=$stubs verify
+expect_refused "a rollback rebuild that fails" "m1n1/boot.bin"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed rebuild keeps the marker for the next update"
+pass "update-verify refuses when the rollback rebuild fails, and tries again next time"
+
+# A rebuild whose commands succeed but leave the check failing keeps the marker.
+limine_mac
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_refused "a rebuild that does not converge" "m1n1/boot.bin"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a rebuild that does not converge keeps the marker"
+pass "update-verify keeps the marker until the check passes"
+
+# An owner-managed boot chain never rebuilds here, and drops the marker.
+limine_mac
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+printf 'hand-built chain\n' >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+[[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an owner-managed chain rebuilds nothing and drops the marker"
+pass "update-verify leaves an owner-managed boot chain to its owner"
+

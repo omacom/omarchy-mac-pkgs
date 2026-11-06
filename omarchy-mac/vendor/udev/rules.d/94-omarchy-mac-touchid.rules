@@ -1,0 +1,2 @@
+# Activate Touch ID as soon as the Secure Enclave publishes it (omarchy-mac-touchid-activate.service).
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omarchy-mac-touchid-activate.service"

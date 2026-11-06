@@ -20,10 +20,14 @@
 #
 # - /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check, before the restore. A
 #   Limine Mac restores from a snapshot it booted from the Limine menu; that
-#   running root, and the kernel Limine saved with it, must pass
+#   running root, and the kernel Limine saved with it, are checked with
 #   omarchy-apple-silicon-boot-check --boot-chain against the live boot files.
-#   Status 100 stops the restore before it changes anything. It sorts before
-#   05-omarchy-mac-limine-gate so a GRUB Mac is told why.
+#   A root from before a kernel, boot firmware or Limine update fails that
+#   check and is still restored, when the kernel it is running is its own
+#   package's: this boot just proved the ESP's m1n1, device trees, U-Boot and
+#   Limine boot it. Otherwise status 100 stops the restore before it changes
+#   anything. It sorts before 05-omarchy-mac-limine-gate so a GRUB Mac is told
+#   why.
 # - /etc/boot/hooks/post.d/99-omarchy-mac-snapshot-check, after it and after
 #   limine-snapper-sync's own post hooks.
 #   limine-snapper-restore's own list can put back a snapshot other than the one
@@ -34,6 +38,9 @@
 #   so the pre hook lets that restore through when the booted root fails its
 #   check, and this hook checks its result. A restored root that cannot be read
 #   is reported unchecked and arms no undo.
+#   After a rollback across a boot update it also puts the restored kernel and
+#   initramfs on the boot partition, keeps the ESP as it is, and leaves a marker
+#   there: the next omarchy update rebuilds the ESP from the installed packages.
 
 set -uo pipefail
 
@@ -54,7 +61,10 @@ top_mounted=""
 # started: when the pre hook let a restore through. undo: the backup to pick
 # after a restore this Mac's boot files do not match.
 state=${OMARCHY_SNAPSHOT_CHECK_STATE:-/run/omarchy-mac-snapshot-check}
+rollback_marker=$boot_dir/.omarchy-mac-rolled-back
 boot_kver=""
+rollback_kver=""
+undoing=0
 
 why_outside() {
   cat >&2 <<'MESSAGE'
@@ -99,6 +109,23 @@ carries_boot_kernel() {
     echo "$label has no $kernel kernel, the kernel on the boot partition." >&2
   fi
   return 1
+}
+
+# The running kernel is the installed Apple kernel package's, with its modules.
+# A tree that package does not own, such as one a kernel update left behind for
+# the running kernel, says nothing about this root.
+running_kernel_installed() {
+  local kernel kver dir
+  kernel=$(omarchy-mac-kernel 2>/dev/null) || return 1
+  kver=$(running_kernel)
+  [[ -n $kver && $kver != */* ]] || return 1
+  dir=$root/usr/lib/modules/$kver
+  [[ -f $dir/pkgbase && $(<"$dir/pkgbase") == "$kernel" && -f $dir/modules.dep && -f $dir/vmlinuz ]] || return 1
+  pacman -Qlq "$kernel" 2>/dev/null | grep -Fxq "/usr/lib/modules/$kver/vmlinuz"
+}
+
+running_kernel() {
+  printf '%s\n' "${OMARCHY_BOOT_CHECK_UNAME:-$(uname -r)}"
 }
 
 # The btrfs top level, read-only: the restored @ and every snapshot are there,
@@ -216,6 +243,7 @@ before_restore() {
     refuse
   fi
   (( platform == 0 )) || exit 0
+  rm -f "$state/rollback" "$state/undoing" 2>/dev/null
 
   # Kernel files alone (snapper rollback's plugin): the snapshot's kernel must
   # be the one on /boot, or the root would boot a kernel it has no modules for.
@@ -293,6 +321,17 @@ one is let through to put the previous root back.
 Press l and pick ${backup:+snapshot $backup, }the backup that restore made.
 It is checked afterwards.
 MESSAGE
+      mkdir -p "$state" 2>/dev/null && : >"$state/undoing"
+      let_through
+    fi
+    # From before a kernel, boot firmware or Limine update. This boot read the
+    # ESP as it is and the kernel Limine saved with this snapshot, so the
+    # restore keeps the ESP, and the post hook syncs /boot and checks the rest.
+    if running_kernel_installed; then
+      echo "Snapshot $number is from before this Mac's last boot file update:"
+      sed 's/^/  /' <<<"${reason:-omarchy-apple-silicon-boot-check failed}"
+      echo "It is restored with the kernel it is running, and the boot firmware that just booted it."
+      mkdir -p "$state" 2>/dev/null && running_kernel >"$state/rollback"
       let_through
     fi
     {
@@ -328,9 +367,12 @@ fstab_root() {
 }
 
 # The first way the restored root at $1 does not boot with the live boot files,
-# which the running root was checked against before the restore.
+# which the running root was checked against before the restore. A rollback
+# across a boot update holds it to the running kernel instead of /boot's. An
+# undo puts back the root the live boot files were built for, so only those
+# files, not the running root, say what it must hold.
 restored_mismatch() {
-  local restored=$1 kernel esp uki size linux
+  local restored=$1 kernel esp uki size linux image tree
   # As the pre hook refuses a booted root from before the Limine activation.
   if [[ ! -f $restored/var/lib/omarchy/limine.enabled || ! -f $restored/etc/default/limine || ! -x $restored/usr/bin/limine-update ]]; then
     echo "The restored root is from before Limine was activated on this Mac; it would bring back a system that boots through GRUB."
@@ -341,7 +383,23 @@ restored_mismatch() {
     echo "The restored root's Limine writes to another ESP than the one this Mac boots."
     return 0
   fi
-  carries_boot_kernel "$restored" "The restored root" 2>&1 || return 0
+  if ! kernel=$(omarchy-mac-kernel 2>/dev/null); then
+    echo "Cannot tell which Apple kernel is installed."
+    return 0
+  fi
+  if [[ -n $rollback_kver ]]; then
+    boot_kver=$rollback_kver
+    image=$root/usr/lib/modules/$boot_kver/vmlinuz
+    tree=$restored/usr/lib/modules/$boot_kver
+    if [[ ! -f $tree/pkgbase || $(<"$tree/pkgbase") != "$kernel" || ! -f $tree/modules.dep ]] ||
+      ! cmp -s "$image" "$tree/vmlinuz"; then
+      echo "The restored root does not hold the running $kernel $boot_kver kernel."
+      return 0
+    fi
+  else
+    carries_boot_kernel "$restored" "The restored root" 2>&1 || return 0
+    image=$boot_dir/vmlinuz-$kernel
+  fi
   # The boot check held the booted root's crypttab and root mount against the
   # Limine command line; a root from before encryption differs here.
   if [[ -e $root/etc/crypttab || -e $restored/etc/crypttab ]] && ! cmp -s "$root/etc/crypttab" "$restored/etc/crypttab"; then
@@ -352,6 +410,7 @@ restored_mismatch() {
     echo "The restored root mounts / differently from the root the Limine command line boots."
     return 0
   fi
+  (( undoing )) || {
   if ! diff -rq "$root/usr/lib/modules/$boot_kver/dtbs" "$restored/usr/lib/modules/$boot_kver/dtbs" >/dev/null 2>&1; then
     echo "The restored root's $boot_kver device trees are not the ones in m1n1 on the ESP."
     return 0
@@ -364,10 +423,7 @@ restored_mismatch() {
     echo "The restored root's Limine is not the one on the ESP."
     return 0
   fi
-  if ! kernel=$(omarchy-mac-kernel 2>/dev/null); then
-    echo "Cannot tell which Apple kernel is installed."
-    return 0
-  fi
+  }
   uki=$root$esp/EFI/Linux/omarchy_$kernel.efi
   if [[ -z $esp || ! -f $uki ]]; then
     echo "The restore left no Limine UKI at ${esp:-the ESP}/EFI/Linux/omarchy_$kernel.efi."
@@ -377,14 +433,67 @@ restored_mismatch() {
     echo "Cannot make a scratch file to read the restored UKI."
     return 0
   fi
-  size=$(stat -c %s "$boot_dir/vmlinuz-$kernel")
+  size=$(stat -c %s "$image")
   if ! objcopy -O binary --only-section=.linux "$uki" "$linux" 2>/dev/null ||
-    (( $(stat -c %s "$linux") < size )) || ! cmp -s -n "$size" "$boot_dir/vmlinuz-$kernel" "$linux"; then
+    (( $(stat -c %s "$linux") < size )) || ! cmp -s -n "$size" "$image" "$linux"; then
     echo "The UKI the restore put on the ESP does not carry the restored root's $boot_kver kernel."
     rm -f "$linux"
     return 0
   fi
   rm -f "$linux"
+  return 1
+}
+
+# Puts the restored kernel, and the initramfs in the UKI the restore put back,
+# on the boot partition, then checks everything the next boot reads but the
+# ESP's boot firmware. Limine boots the UKI: these two are for the tools that
+# read /boot. The old pair comes back when anything fails. A failure prints why.
+sync_boot_files() {
+  local restored=$1 kernel esp uki image initramfs new_image new_initramfs reason had_marker=0 put_back=1
+  if ! kernel=$(omarchy-mac-kernel 2>/dev/null); then
+    echo "Cannot tell which Apple kernel is installed."
+    return 1
+  fi
+  esp=$(esp_path "$limine_default")
+  uki=$root$esp/EFI/Linux/omarchy_$kernel.efi
+  image=$boot_dir/vmlinuz-$kernel
+  initramfs=$boot_dir/initramfs-$kernel.img
+  new_image=$image.rollback
+  new_initramfs=$initramfs.rollback
+  if ! cp "$restored/usr/lib/modules/$rollback_kver/vmlinuz" "$new_image" ||
+    ! objcopy -O binary --only-section=.initrd "$uki" "$new_initramfs" 2>/dev/null ||
+    [[ ! -s $new_initramfs ]] || ! sync "$new_image" "$new_initramfs"; then
+    rm -f "$new_image" "$new_initramfs"
+    echo "Cannot stage the restored kernel and initramfs on the boot partition."
+    return 1
+  fi
+  # Nothing on /boot has moved until both complete copies of the old pair exist.
+  if ! cp -p "$image" "$image.previous" || ! cp -p "$initramfs" "$initramfs.previous" ||
+    ! sync "$image.previous" "$initramfs.previous"; then
+    rm -f "$image.previous" "$initramfs.previous" "$new_image" "$new_initramfs"
+    echo "Cannot keep the current kernel and initramfs while the boot partition changes."
+    return 1
+  fi
+  # A marker from an earlier rollback stays: its ESP still needs the rebuild.
+  [[ -e $rollback_marker ]] && had_marker=1
+  if ! : >"$rollback_marker" || ! mv "$new_image" "$image" || ! mv "$new_initramfs" "$initramfs"; then
+    reason="Cannot put the restored kernel and initramfs on the boot partition."
+  elif ! reason=$(OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then
+    reason=${reason:-omarchy-apple-silicon-boot-check failed}
+  else
+    rm -f "$image.previous" "$initramfs.previous"
+    sync "$boot_dir" 2>/dev/null
+    return 0
+  fi
+  # Each one is tried, and the marker stays unless both came back.
+  mv "$image.previous" "$image" || put_back=0
+  mv "$initramfs.previous" "$initramfs" || put_back=0
+  (( put_back )) ||
+    reason+=$'\n'"The previous kernel and initramfs could not be put back: see $image.previous and $initramfs.previous."
+  rm -f "$new_image" "$new_initramfs"
+  (( had_marker || ! put_back )) || rm -f "$rollback_marker"
+  sync "$boot_dir" 2>/dev/null
+  printf '%s\n' "$reason"
   return 1
 }
 
@@ -408,7 +517,12 @@ after_restore() {
   elif [[ ! -d $top/@/usr ]]; then
     unchecked="The restore left no root subvolume @ to read."
   else
+    [[ ! -f $state/undoing ]] || undoing=1
+    [[ ! -f $state/rollback ]] || rollback_kver=$(<"$state/rollback")
     reason=$(restored_mismatch "$top/@")
+    if [[ -z $reason && -n $rollback_kver ]]; then
+      reason=$(sync_boot_files "$top/@") && reason=""
+    fi
   fi
 
   # Only a root found not to match arms the undo: one that could not be read
@@ -426,8 +540,16 @@ MESSAGE
     exit 100
   fi
   if [[ -z $reason ]]; then
-    rm -f "$state/undo"
-    echo "The restored root matches this Mac's boot files"
+    rm -f "$state/undo" "$state/undoing" "$state/rollback"
+    if [[ -n $rollback_kver ]]; then
+      cat <<MESSAGE
+The restored root's $rollback_kver kernel is on the boot partition.
+m1n1, the device trees, U-Boot and Limine stay as they are: they just booted
+this snapshot. The next omarchy update rebuilds them from the installed packages.
+MESSAGE
+    else
+      echo "The restored root matches this Mac's boot files"
+    fi
     exit 0
   fi
 
@@ -437,6 +559,7 @@ MESSAGE
       sed 's|.*/||' | grep -E '^[0-9]+$' | sort -n | tail -n 1)
   fi
   mkdir -p "$state" 2>/dev/null && printf '%s\n' "$backup" >"$state/undo"
+  rm -f "$state/rollback" "$state/undoing"
   {
     echo "The restore put back a root this Mac's boot files do not match:"
     printf '  %s\n' "$reason"

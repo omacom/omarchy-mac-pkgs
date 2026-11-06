@@ -32,6 +32,7 @@ loader = importlib.machinery.SourceFileLoader('mapper', sys.argv[1])
 spec = importlib.util.spec_from_loader(loader.name, loader)
 mapper = importlib.util.module_from_spec(spec); loader.exec_module(mapper)
 mapper.PACMAN_LOCK = Path(sys.argv[2])
+mapper.AUDIO_FILES = ()
 sys.argv = [sys.argv[1], '--watch']
 sys.exit(mapper.main())
 WATCH

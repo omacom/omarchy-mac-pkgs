@@ -10,7 +10,7 @@ trap 'rm -rf "$test_tmp"' EXIT
 
 # Minimal shared menu fixture; the production template is owned by omarchy-settings.
 mkdir -p "$test_tmp/runtime/default/limine"
-printf 'timeout: 3\ninterface_branding: Omarchy Bootloader\n' >"$test_tmp/runtime/default/limine/limine.conf"
+printf 'timeout: 1\nquiet: yes\ninterface_branding: Omarchy Bootloader\n' >"$test_tmp/runtime/default/limine/limine.conf"
 stub_bin="$test_tmp/bin"
 calls="$test_tmp/calls"
 esp="$test_tmp/esp"
@@ -79,6 +79,7 @@ run() {
   OMARCHY_PACMAN_HOOKS_DIR="$etc/pacman.d/hooks" OMARCHY_SYSTEMD_DIR="$etc/systemd/system" \
   OMARCHY_LIMINE_GATE="$test_tmp/limine.enabled" OMARCHY_FSTAB="$etc/fstab" \
   OMARCHY_MACHINE_ID="$etc/machine-id" \
+  OMARCHY_LIMINE_MENU_DEFAULTS="$ROOT/files/usr/lib/omarchy/mac-boot/limine-menu-defaults" \
   PATH="$stub_bin:$PATH" TEST_LEAF="$leaf" bash -c '
     trap "echo caller-trap >&2" ERR
     caller_trap=$(trap -p ERR)
@@ -174,8 +175,9 @@ grep -Fxq 'BOOT_ORDER="linux-aurora, *, *fallback, Snapshots"' "$etc/limine" && 
 [[ -L $etc/boot/hooks/pre.d/20-omarchy-mac-cmdline ]] || fail "the command line hook runs before every UKI rebuild"
 [[ $(tr '\n' ' ' <"$calls") == "update-grub limine-update limine-snapper-sync "* ]] ||
   fail "GRUB is regenerated first, the UKI built before Limine is deployed, snapshots synced last" "$(cat "$calls")"
-grep -Fxq 'timeout: 3' "$esp/limine.conf" && grep -Fq 'interface_branding: Omarchy Bootloader' "$esp/limine.conf" ||
-  fail "Omarchy's Limine menu with a 3 s timeout"
+grep -Fxq 'timeout: 1' "$esp/limine.conf" && grep -Fxq 'quiet: yes' "$esp/limine.conf" &&
+  grep -Fq 'interface_branding: Omarchy Bootloader' "$esp/limine.conf" ||
+  fail "Omarchy's Limine menu with the template's timeout and quiet mode"
 ! grep -q '^/GRUB' "$esp/limine.conf" || fail "the menu has no GRUB entry" "$(cat "$esp/limine.conf")"
 grep -Fq 'Exec = /usr/bin/omarchy-mac-limine-deploy' "$etc/pacman.d/hooks/81-omarchy-mac-limine-deploy.hook" ||
   fail "a pacman hook redeploys Limine when the package changes"
@@ -190,7 +192,7 @@ run || fail "a second run succeeds"
 ! grep -q '^/GRUB' "$esp/limine.conf" || fail "a leftover GRUB recovery entry is removed" "$(cat "$esp/limine.conf")"
 grep -q '^/+Omarchy$' "$esp/limine.conf" || fail "the Omarchy block survives the cleanup"
 [[ ! -e $etc/systemd/system/omarchy-mac-boot-sync.service ]] || fail "the experiment's resync unit is removed"
-(( $(grep -c '^timeout: 3$' "$esp/limine.conf") == 1 )) || fail "one timeout line"
+(( $(grep -c '^timeout: ' "$esp/limine.conf") == 1 && $(grep -c '^quiet: ' "$esp/limine.conf") == 1 )) || fail "one timeout line and one quiet line"
 pass "re-running the leaf changes nothing that was right and cleans the experiment up"
 
 # A newer Limine package: the ESP follows, and GRUB's recovery image is never

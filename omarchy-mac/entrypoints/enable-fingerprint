@@ -1,0 +1,78 @@
+#!/bin/bash
+# omarchy-lifecycle-dispatch enable-fingerprint: Omarchy's fingerprint setup runs
+# this as root before enrolling. It asks the owner before Touch ID is turned on,
+# since that leaves state in the Secure Enclave that can't be removed.
+omarchy-hw-apple-silicon || exit 0
+
+status=$(cat /run/omarchy-mac/touchid 2>/dev/null)
+recorded_status=${status:-no status}
+# A Mac without a sensor records nothing at boot, and neither does a status
+# service that failed, so the answer is worked out again.
+if [[ -z $status ]]; then
+  status=$(/usr/lib/omarchy-mac/touchid-eligibility 2>/dev/null)
+fi
+if [[ -e /etc/omarchy-mac/touchid-on ]]; then
+  # A Mac turned on before the record came with driver options gets them now,
+  # whatever its status: on a kernel that loads the driver read-only, the
+  # options are what lets it reach ready after a restart.
+  options=/etc/modprobe.d/omarchy-mac-touchid.conf
+  if [[ ! -e $options ]]; then
+    # Under the Touch ID lock, so a removal running now can't be undone here.
+    lock=/run/omarchy-mac/touchid.lock
+    if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
+      echo "Touch ID's driver options could not be written: its lock, $lock, could not be opened." >&2
+      exit 1
+    elif ! flock -w 300 "$lock_fd"; then
+      echo "Touch ID's driver options could not be written: another Touch ID setup or removal is still running." >&2
+      exit 1
+    fi
+    if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
+      echo "Touch ID was turned off while this ran, so setup goes on without it."
+      exit 0
+    elif [[ ! -e $options ]]; then
+      { mkdir -p -m 0755 "${options%/*}" &&
+        printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
+          "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+        chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
+        { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
+    fi
+    exec {lock_fd}>&-
+  fi
+  # The owner agreed already, so they are never asked again: a Touch ID that
+  # isn't ready yet needs a restart, and setup goes on with any other reader.
+  if [[ $status != "ready" ]]; then
+    echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
+    echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
+    echo "ready, see journalctl -u omarchy-mac-touchid-activate."
+  fi
+  exit 0
+fi
+# Only a Touch ID that can be set up stops the setup: anywhere else it goes on,
+# so a USB reader enrols as it would without Touch ID.
+case $status in
+  available | ready) ;;
+  none | "")
+    exit 0
+    ;;
+  *)
+    echo "Touch ID can't be used on this Mac yet ($status), so setup goes on with"
+    echo "any other fingerprint reader."
+    # A driver that came up wrong this boot stays so until a restart.
+    case $status in
+      failed | not-ready | unproven | blocked) echo "Restart this Mac, then set up the fingerprint again to retry Touch ID." ;;
+    esac
+    exit 0
+    ;;
+esac
+
+echo "Touch ID on Linux is experimental and can be unstable. It shares this Mac's"
+echo "Secure Enclave with macOS, so back up any data on your macOS partition first."
+echo "The Mac manual's Encryption and passwords page has the details."
+echo
+read -r -p "Turn on Touch ID? [y/N] " answer || answer=""
+if [[ $answer == [yY] || $answer == [yY][eE][sS] ]]; then
+  exec /usr/lib/omarchy-mac/touchid-enable
+else
+  echo "Touch ID stays off."
+  exit 1
+fi

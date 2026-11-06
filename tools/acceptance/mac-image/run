@@ -617,8 +617,18 @@ owner_setup() {
   serial_type "$owner_password"
   serial_expect 'Confirm> ' "$what: password confirmation" 60
   serial_type "$owner_password"
+  # Omarchy since omacom/omarchy#16288 asks for the git identity after first
+  # login instead; older images still ask for it here.
+  serial_expect 'Full name> |Hostname> ' "$what: owner setup prompt Full name> or Hostname> " 120
+  if [[ $serial_match == 'Full name> ' ]]; then
+    serial_send $'\r'
+    serial_expect 'Email address> ' "$what: owner setup prompt Email address> " 120
+    serial_send $'\r'
+    serial_expect 'Hostname> ' "$what: owner setup prompt Hostname> " 120
+  fi
+  serial_send $'\r'
   local prompt
-  for prompt in 'Full name> ' 'Email address> ' 'Hostname> ' 'Timezone' 'Does this look right\?'; do
+  for prompt in 'Timezone' 'Does this look right\?'; do
     serial_expect "$prompt" "$what: owner setup prompt $prompt" 120
     serial_send $'\r'
   done
