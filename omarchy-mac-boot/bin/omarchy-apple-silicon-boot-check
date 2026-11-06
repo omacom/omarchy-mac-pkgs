@@ -20,7 +20,9 @@
 # image, device trees and m1n1 against their package mtree, checks the kernel
 # the boot menu starts first when both kernels are installed, and leaves out
 # LUKS keyslots and provisioning leftovers and an m1n1 image its owner took
-# over with M1N1_UPDATE_DISABLED.
+# over with M1N1_UPDATE_DISABLED. OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1, from a
+# snapshot restore across a boot update, leaves out the ESP's Limine and
+# m1n1/boot.bin: they booted that snapshot, and may be newer than its packages.
 
 set -euo pipefail
 
@@ -416,7 +418,8 @@ if (( limine_mac )); then
     fail "$limine_esp/limine.conf starts ${first_kernel:-no kernel} first, not $kernel; put $kernel first in BOOT_ORDER in /etc/default/limine, then run sudo omarchy-mac-boot-update"
   sudo grep -Fq "/EFI/Linux/omarchy_$kernel.efi" "$limine_cfg" ||
     fail "$limine_esp/limine.conf does not boot the $kernel UKI"
-  sudo cmp -s "$limine_efi" "$(path "$limine_esp/EFI/BOOT/BOOTAA64.EFI")" ||
+  [[ ${OMARCHY_BOOT_CHECK_ROLLBACK_ESP:-0} == 1 ]] ||
+    sudo cmp -s "$limine_efi" "$(path "$limine_esp/EFI/BOOT/BOOTAA64.EFI")" ||
     fail "$limine_esp/EFI/BOOT/BOOTAA64.EFI is not the installed Limine"
   # The first kernel entry's cmdline: the tool writes the Omarchy block first.
   limine_cmdline=$(sudo awk -v entry="//$kernel" '
@@ -856,6 +859,11 @@ report_running_release() {
 }
 if [[ -n $disabled ]]; then
   echo "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin is its owner's and is not checked"
+  report_running_release
+  exit 0
+fi
+if [[ ${OMARCHY_BOOT_CHECK_ROLLBACK_ESP:-0} == 1 ]]; then
+  echo "Apple Silicon boot check: m1n1/boot.bin and Limine on the system ESP are the ones that booted this snapshot"
   report_running_release
   exit 0
 fi

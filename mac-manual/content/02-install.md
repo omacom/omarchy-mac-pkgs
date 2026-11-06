@@ -6,10 +6,6 @@ section: Using it
 
 Installation starts in macOS. The installer app downloads the signed Omarchy image for the channel you pick, resizes the APFS container, writes the image and hands over to a first boot that finishes the setup on the Mac itself.
 
-<div class="note warn" markdown="1">
-There is no public installer release yet. It will be published from [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer/releases) once the first image is qualified. Until then the installer is for testers.
-</div>
-
 ## Before you begin
 
 - Back up macOS and anything you care about. The installer shrinks your macOS volume.
@@ -19,26 +15,35 @@ There is no public installer release yet. It will be published from [omacom/omar
 - Plug in power and use a reliable Internet connection. The image is a multi-gigabyte download.
 - Expect model-specific limits around external displays, speakers, cameras and power management.
 
-## Verify the installer
+## Get the installer
 
-The installer ships as a signed and notarized `.pkg`. Verify it before opening it, using the file name you downloaded. Both commands must accept it and report an Apple Developer ID, and the identity must be the one named on the release page:
+The installer is the **Omarchy Installer** app. It needs macOS 15 (Sequoia) or later on an Apple Silicon Mac.
+
+The simplest way to get it is [Homebrew](https://brew.sh):
 
 ```bash
-pkgutil --check-signature ~/Downloads/<installer>.pkg
-spctl -a -vv -t install ~/Downloads/<installer>.pkg
+brew install omacom/mac/omarchy
 ```
 
-If you unpack the app yourself, check it the same way. Gatekeeper must report `Notarized Developer ID`:
+This installs the app into `/Applications` and opens it. Homebrew prints a deprecation warning about `postflight`, which is expected. `brew upgrade omarchy` updates the app. `brew uninstall --zap omarchy` removes the app, its helper and its support files, but not Omarchy itself: use **Remove Omarchy** in the app for that.
+
+Without Homebrew, download [`Omarchy-Mac-Installer-2.3.15.dmg`](https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.15/Omarchy-Mac-Installer-2.3.15.dmg) and its [`.dmg.sha256`](https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.15/Omarchy-Mac-Installer-2.3.15.dmg.sha256) from the [2.3.15 release](https://github.com/omacom/omarchy-mac-installer/releases/tag/v2.3.15), or a newer `Omarchy Installer <version>` release if the [releases page](https://github.com/omacom/omarchy-mac-installer/releases) has one. Every installer release is marked pre-release; ignore the `catalog-*` and `engine-*` releases. Check the download from the folder that holds both files:
 
 ```bash
-codesign --verify --deep --strict ~/Downloads/<installer>.app
-spctl -a -vv -t execute ~/Downloads/<installer>.app
+shasum -a 256 -c Omarchy-Mac-Installer-2.3.15.dmg.sha256
+```
+
+Then open the disk image and drag **Omarchy Installer** to `/Applications`. The app is signed and notarized; to check it, Gatekeeper must report `Notarized Developer ID`:
+
+```bash
+codesign --verify --deep --strict "/Applications/Omarchy Installer.app"
+spctl -a -vv -t execute "/Applications/Omarchy Installer.app"
 ```
 
 ## Run the installer
 
-1. Open the `.pkg`. It installs the installer app into `/Applications`, together with a privileged helper that performs the disk work.
-2. Open the app. It fetches the signed catalog for the selected channel and checks the catalog signature, the sequence number and the SHA-256 of every file it downloads.
+1. Open the app. When it first asks for your macOS administrator password, it adds a privileged helper that performs the disk work.
+2. It fetches the signed catalog for the selected channel and checks the catalog signature, the sequence number and the SHA-256 of every file it downloads.
 3. The app opens on **Stable** at every launch and always shows the channel it is installing. Choose **RC** in the **Release Channel** menu only if the Mac should take release candidates first; the choice lasts until the app quits. See [Updates and channels]({{page:updates}}).
 4. Choose how much space to give Omarchy. The APFS container is shrunk, and four partitions are created: a small APFS stub for the boot object, an EFI system partition, a boot partition and a root partition that fills the space you chose. While this screen is up the app downloads the image in the background, over Wi-Fi or Ethernet only, and changing the split does not restart the download. **Install** stays disabled until the download matches the signed catalog. If the download fails, the strip under the disk split names the check that failed, for example not enough free space or a file that does not match the signed release, and offers **Try again**.
 5. Choose whether to encrypt the root file system. Encryption is set up on the first Linux boot and asks for your password on every boot afterwards. See [Encryption and passwords]({{page:security}}).
