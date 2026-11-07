@@ -26,9 +26,20 @@ native_ready() {
   done
   [[ $native_display == "true" && $native_gpu == "true" ]]
 }
+# Only a boot whose loader handed both over can bring native graphics up. Without
+# that (an owner opt-out, a refused check, an older m1n1) waiting only delays login.
+handed_over() {
+  local gpu status
+  gpu=$(tr -d '\0' <"$proc/device-tree/aliases/gpu" 2>/dev/null) || return 1
+  [[ $gpu == /* ]] || return 1
+  status=$(tr -d '\0' <"$proc/device-tree$gpu/status" 2>/dev/null) || return 1
+  [[ $status == "okay" || $status == "ok" ]] || return 1
+  compgen -G "$proc/device-tree/soc/dcp@*/apple,t6031-handoff" >/dev/null || return 1
+  ! grep -Eq '(^| )apple_t6031_display\.enable=(0|n|N|f|F|off)( |$)' "$proc/cmdline" 2>/dev/null
+}
 
 if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
-  grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null; then
+  grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null && handed_over; then
   started=$SECONDS
   deadline=$((SECONDS + 30))
   while (( SECONDS < deadline )); do

@@ -32,8 +32,32 @@ waiting() {
   timeout 0.3 "$helper" >"$work/output" || status=$?
   (( status == 124 )) || fail "$1" "status=$status"
 }
+handoff() {
+  mkdir -p "$work/proc/device-tree/aliases" "$work/proc/device-tree/soc/gpu@40a400000" \
+    "$work/proc/device-tree/soc/dcp@386c00000"
+  printf '/soc/gpu@40a400000\0' >"$work/proc/device-tree/aliases/gpu"
+  printf '%s\0' "$1" >"$work/proc/device-tree/soc/gpu@40a400000/status"
+  if [[ $2 == marker ]]; then
+    : >"$work/proc/device-tree/soc/dcp@386c00000/apple,t6031-handoff"
+  else
+    rm -f "$work/proc/device-tree/soc/dcp@386c00000/apple,t6031-handoff"
+  fi
+}
 compatibility apple,j514c apple,t6031
 parameter
+handoff disabled marker
+timeout 2 "$helper" || fail 'a GPU the loader left disabled never enters the native wait'
+handoff okay none
+timeout 2 "$helper" || fail 'no display handoff marker never enters the native wait'
+handoff okay marker
+for value in 0 n off; do
+  parameter apple_t6031_display.enable=$value
+  timeout 2 "$helper" || fail "apple_t6031_display.enable=$value never enters the native wait"
+done
+parameter apple_t6031_display.enable=1
+waiting 'an explicit enable still waits'
+parameter
+pass 'only a handed-over GPU and display, not disabled by the owner, enter the native wait'
 APPLE=0 timeout 2 "$helper" || fail 'other platforms never enter the J514C wait'
 waiting 'J514C waits for native graphics without an enable parameter'
 parameter
