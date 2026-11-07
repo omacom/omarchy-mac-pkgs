@@ -15,3 +15,11 @@ esac
 STUB
   chmod +x "$1/omarchy-hw-apple-silicon"
 }
+
+# Services with default dependencies require this target even during verification.
+# Stage it explicitly so the test never depends on the host's boot units.
+stub_systemd_boot_targets() {
+  local units=$1/usr/lib/systemd/system
+  mkdir -p "$units"
+  printf '[Unit]\nDescription=Fixture system initialization\nDefaultDependencies=no\n' >"$units/sysinit.target"
+}
