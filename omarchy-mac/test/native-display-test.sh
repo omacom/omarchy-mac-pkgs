@@ -66,6 +66,12 @@ parameter apple_t6031_display.enable=0 apple_t6031_display.enable=bogus
 timeout 2 "$helper" || fail 'an invalid later value keeps the earlier off'
 parameter apple_t6031_display.enable=0 apple_t6031_display.enable
 waiting 'a later bare apple_t6031_display.enable turns it back on'
+parameter apple-t6031-display.enable=0
+timeout 2 "$helper" || fail 'hyphens match underscores in the switch name'
+parameter 'note="text apple_t6031_display.enable=0"'
+waiting 'the switch quoted inside another parameter is only text'
+parameter -- apple_t6031_display.enable=0
+waiting 'the switch after -- belongs to init'
 for value in 1 y yes on true; do
   parameter apple_t6031_display.enable=0 apple_t6031_display.enable=$value
   waiting "a final apple_t6031_display.enable=$value still waits"

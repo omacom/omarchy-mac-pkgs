@@ -37,16 +37,31 @@ handed_over() {
   compgen -G "$proc/device-tree/soc/dcp@*/apple,t6031-handoff" >/dev/null || return 1
   ! display_disabled
 }
-# As the kernel parses it: quotes stripped, a bare switch is on, a value kstrtobool
+# As the kernel parses it: double quotes group and are stripped, "--" ends the
+# kernel's parameters, - and _ match alike, a bare switch is on, a value kstrtobool
 # rejects is ignored, and the last valid one wins.
 display_disabled() {
-  local arg value off=false args=()
-  read -r -a args <"$proc/cmdline" 2>/dev/null
+  local line='' c tok='' quoted=false arg name value off=false args=() i
+  IFS= read -r line <"$proc/cmdline" 2>/dev/null
+  for ((i = 0; i < ${#line}; i++)); do
+    c=${line:i:1}
+    if [[ $c == '"' ]]; then
+      if [[ $quoted == "true" ]]; then quoted=false; else quoted=true; fi
+    elif [[ $c == [[:space:]] && $quoted == "false" ]]; then
+      [[ -n $tok ]] && args+=("$tok")
+      tok=''
+    else
+      tok+=$c
+    fi
+  done
+  [[ -n $tok ]] && args+=("$tok")
   for arg in "${args[@]}"; do
-    arg=${arg//\"/}
-    if [[ $arg == apple_t6031_display.enable ]]; then
+    [[ $arg == "--" ]] && break
+    name=${arg%%=*}
+    name=${name//-/_}
+    if [[ $arg != *=* && $name == apple_t6031_display.enable ]]; then
       off=false
-    elif [[ $arg == apple_t6031_display.enable=* ]]; then
+    elif [[ $name == apple_t6031_display.enable ]]; then
       value=${arg#*=}
       if [[ $value == [1yYtTeE]* || $value == [oO][nN]* ]]; then
         off=false
