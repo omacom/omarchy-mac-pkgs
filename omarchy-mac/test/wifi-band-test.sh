@@ -103,16 +103,19 @@ for wifi in 106b:1900 106b:1901; do
 done
 pass "iwd keeps its own defaults, 6 GHz included, on the N1 only"
 
+# The administrator overrides, with the N1 link in place.
+WIFI_ID=106b:1900 iwd_start
+[[ -L $root/run/omarchy-mac/iwd/main.conf ]] || fail "the N1 link is in place for the override checks"
 mkdir -p "$root/etc/iwd"
 printf '[General]\nAddressRandomization=network\n' >"$root/etc/iwd/main.conf"
 config=$(iwd_config)
-[[ $config == "$root/etc/iwd/main.conf" ]] || fail "an administrator main.conf replaces the Apple default" "$config"
+[[ $config == "$root/etc/iwd/main.conf" ]] || fail "an administrator main.conf replaces the N1 and Apple defaults" "$config"
 band_enabled "$config" BandModifier6GHz || fail "the administrator decides about 6 GHz"
-pass "an administrator's /etc/iwd/main.conf replaces the Apple default"
+pass "an administrator's /etc/iwd/main.conf replaces the N1 and Apple defaults"
 
 rm "$root/etc/iwd/main.conf"
 mkdir -p "$root/etc/systemd/system/iwd.service.d"
 printf '[Service]\n' >"$root/etc/systemd/system/iwd.service.d/20-omarchy-mac.conf"
-config=$(iwd_config) && fail "a same-name /etc drop-in removes the Apple default" "$config"
+config=$(iwd_config) && fail "a same-name /etc drop-in removes the N1 and Apple defaults" "$config"
 [[ -z $(unit_setting ExecStartPre) ]] || fail "a same-name /etc drop-in removes the Apple start step"
-pass "a same-name /etc drop-in removes the Apple default"
+pass "a same-name /etc drop-in removes the N1 and Apple defaults"
