@@ -94,3 +94,7 @@ pacman-conf --repo-list
 For an update that stopped, add the update output and `/var/log/pacman.log`. For an installer that stopped, add the app's log folder under `~/Library/Logs/`.
 
 Never post passwords, Wi-Fi credentials, private keys or complete connection profiles.
+
+## Fan modes on the 16-inch M4 Max
+
+On this Mac only, `omarchy-mac-fan` offers `auto`, `macos`, `quiet` and `boost` fan modes. `auto` is the default and leaves the fans to the SMC. The modes need manual fan targets from the device tree.
