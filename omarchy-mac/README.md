@@ -50,6 +50,10 @@ On a Mac whose GPU has no driver yet, such as the M3 Max, the only OpenGL render
 
 On an M3 Max, llvmpipe plays video but cannot keep up with it. These figures assume a Mesa built with LLVM (Arch's 26.2.3). Fullscreen on the 3456×2160 panel with mpv 0.41.0, 30-second 30 fps clips cost about 10.7 cores and drop 350 of 900 frames at 1080p H.264, and about 12 cores with 526 dropped at 4K H.264 or HEVC. Decoding goes to software: without a GPU render node libva cannot name its driver, so `vaapi-copy` fails over. Forced with `LIBVA_DRIVER_NAME=v4l2_request`, AVD decodes all three, and decoding alone falls from 0.23 to 0.08 of a core at 1080p H.264 and from 1.1 to 0.24 at 4K HEVC, but as many frames drop, because drawing is the cost. Current mesa-aurora is built without LLVM, so until omacom/omarchy-pkgs#1474 is resolved such a Mac gets softpipe, which draws a fraction of a frame per second: on a 13" M3 Air, about 0.2 fps at 1080p and 720p. mpv still plays rather than aborting.
 
+## Focus boost on the 16-inch M4 Max
+
+`omarchy-mac-focus-boost.service` runs only on `apple,j616c`. Within 3 seconds of keyboard, trackpad or mouse input or a window change, it sets `uclamp.min` to 822 on every process of the focused Hyprland app, and back to 0 afterwards. A fullscreen app using at least 0.75 of a core keeps the boost without input. It reads input only to time it. `systemctl disable --now omarchy-mac-focus-boost` turns it off.
+
 ## Battery charge limit
 
 `omarchy battery charge limit [80|100]` shows or sets the `macsmc-battery` charge thresholds and refuses unless `omarchy-hw-apple-silicon` holds. It writes only the end threshold through `sudo`, since the driver derives the start threshold (80 restarts charging at 75; 100 restores full charging), and checks the SMC's readback. Full charging stays the default.
