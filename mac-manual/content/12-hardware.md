@@ -17,7 +17,7 @@ tr '\0' '\n' < /proc/device-tree/compatible
 
 In macOS, `sysctl hw.model` shows the model identifier, such as `MacBookPro18,3`.
 
-The first release is qualified on the MacBook Pro 14" M1 Pro (`apple,j314s`) and the MacBook Pro 16" M2 Max (`apple,j416c`). The signed catalog on each channel lists every identifier it admits, and the installer refuses any other Mac before touching the disk. M1 and M2 Macs only: M3 and M4 Macs are not supported.
+The first release is qualified on the MacBook Pro 14" M1 Pro (`apple,j314s`) and the MacBook Pro 16" M2 Max (`apple,j416c`). The signed catalog on each channel lists every identifier it admits, and the installer refuses any other Mac before touching the disk. M1 and M2 Macs only: M3, M4 and M5 Macs are not supported.
 
 ## Reference machines
 
@@ -81,6 +81,31 @@ Anything marked work in progress there, Thunderbolt device support among them, i
 ### Experimental J514C login
 
 The 14-inch M3 Max J514C bring-up remains outside the supported release. On a J514C/T6031 install whose boot loader handed the native display and GPU over, the login manager waits for them before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
+
+### M5 Pro MacBook Pro 16-inch (bring-up)
+
+The 16-inch MacBook Pro with the M5 Pro (`apple,j716s`, `Mac17,8`, SoC T6050) is not admitted: the installer refuses it, and nothing else on this page applies to it yet. One J716s runs Linux from a bring-up chain outside these packages: m1n1 with T6050 patches, Aurora Silicon's `integration/aurora` kernel (Linux 7.3) with a J716s patch series, and an Arch Linux ARM root with an Omarchy-style Hyprland session. Neither `omarchy-mac` nor `omarchy-mac-boot` has been installed on it yet.
+
+Nothing in the packages is specific to this board, and nothing needs to be. Their Apple matches already cover it: the speaker no-suspend rule takes the jack and speakers of its `AppleJ716` card and leaves its separate `AppleJ716AOP` microphone card alone, the microphone mapper counts that AOP card as the array, the 16-inch notch entry is its panel's size (3456×2234) and applies while the kernel names the panel's connector eDP, which depends on the device tree, the passphrase-prompt backlight rule matches its `kbd_backlight`, the Wi-Fi resume recovery stays off on its N1, and Touch ID reads `unsupported:board`.
+
+Where that machine stood on 7 November 2026. <span class="status ok">works</span> means it works on the bring-up stack, unattended boots included; <span class="status partial">attended only</span> means it has only been run with someone at the machine; <span class="status no">not yet</span> means it doesn't work or hasn't been tried.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| CPUs, storage, keyboard and its backlight | <span class="status ok">works</span> | All 18 cores. The storage controller's firmware can take about 3 s to answer, so the kernel waits 10 s for it. |
+| Trackpad | <span class="status ok">works</span> | The kernel drives the touch controller's reset. libinput's stock Apple MTP quirk applies; thresholds for this pad haven't been measured. |
+| Battery, charger, power off, restart | <span class="status ok">works</span> | The charge limit hasn't been tried; the SMC has its keys. |
+| USB-C ports as hosts | <span class="status ok">works</span> | Both ports. Plugging in with the Mac running has only been seen working on the right port. DisplayPort over USB-C hasn't been tried. |
+| Wi-Fi and Bluetooth (Apple N1) | <span class="status ok">works</span> | WPA2 on 2.4 and 5 GHz with DHCP, through restarts with the link in use, and a Bluetooth scan. Needs m1n1 to train the N1's PCIe link, kernel patches and Apple's firmware for the board (below). Its firmware lists no 6 GHz channels. Joined with wpa_supplicant: iwd starts once the kernel has its crypto options, but iwd under NetworkManager, the backend `omarchy-mac` sets, hasn't joined a network here. Bluetooth audio can only be A2DP, since the driver carries no SCO. |
+| Microphone | <span class="status ok">works</span> | The three-capsule array on the AOP card, through a DSP source in PipeWire. The `omarchy-mac` mapper hasn't run on it. |
+| Suspend and resume | <span class="status partial">attended only</span> | Lid close sleeps and lid open wakes, Wi-Fi up or not, with two kernel patches: one ignores the false lid-open report the SMC sends as sleep begins, one keeps the N1's link up through sleep. Not yet repeated on the latest kernel, and power draw while asleep isn't measured. |
+| Speakers | <span class="status partial">attended only</span> | All six play cleanly, under a −30 dB ceiling set on the kernel command line, with `speakersafetyd` running a bring-up profile whose thermal values are estimates, and a bring-up DSP graph. Not for everyday use until Asahi's speaker profile and DSP for this board exist. |
+| Headphones, headset microphone | <span class="status partial">attended only</span> | With a corrected ALSA UCM profile: the headset sequence in `alsa-ucm-conf-asahi` sets `Jack ADC Preamp Gain`, which this kernel's CS42L84 driver names `Jack ADC Preamp Capture Volume`, so the whole sequence fails without the fix. |
+| Internal display | <span class="status ok">works</span> | Through the boot framebuffer, notch rows included. No display driver yet: no brightness control and no external displays. |
+| GPU | <span class="status no">not yet</span> | On a test kernel Vulkan runs on the GPU, OpenGL runs through zink and Hyprland starts on it; the everyday desktop still renders in software. |
+| Touch ID, camera, Thunderbolt, video decode | <span class="status no">not yet</span> | |
+
+The N1 starts from a firmware image macOS carries for each board and macOS build, and its ROM takes the image only with the board's Image4 manifest, kept beside it, stitched into the image's ticket slot. It is Apple's firmware, so no package ships it, and it must never be copied off one Mac into a package or a bug report. Once the J716s is supported it would arrive as the Broadcom Wi-Fi and trackpad firmware do: asahi-installer copies firmware out of macOS onto the ESP, asahi-fwextract builds the vendor firmware archive `vendorfw/firmware.cpio` from it, and `omarchy-mac-boot` unpacks that archive in the initramfs on every boot. Two pieces are missing: a step in that collection that picks up the N1's image and manifest and writes the stitched file, and a way for the file to reach a driver built into the kernel, which asks for it while PCI devices are first found, before the initramfs unpacks anything. Built as a module, the driver would load after the unpack instead.
 
 ## Reporting a problem
 
