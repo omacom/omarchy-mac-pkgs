@@ -1,6 +1,6 @@
 {
-  "node.description": "MacBook Pro J714 Microphone",
-  "media.name": "MacBook Pro J714 Microphone",
+  "node.description": "MacBook Microphone (Mono)",
+  "media.name": "MacBook Microphone (Mono)",
   "filter.graph": {
     "nodes": [
       {

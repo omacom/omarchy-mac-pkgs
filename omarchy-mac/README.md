@@ -41,7 +41,7 @@ Vendor defaults use NetworkManager's `/usr/lib/NetworkManager/conf.d`, systemd's
 
 speakersafetyd's machine profiles live in `/usr/share/speakersafetyd/apple`. The package adds `j714.conf` for the 14" MacBook Pro with M5 (J714), which speakersafetyd does not ship. Its thermal limits are the J716 bring-up values, not measured on a J714. The file is GPL-2.0-only, like the speakersafetyd profiles it is derived from.
 
-The J714's microphone array is PCM 0 of its AOP sound card, which asahi-audio does not know. `wireplumber.conf.d/j714-mic.conf` names it `RawMics` and puts the J714 microphone graph, `/usr/share/omarchy-mac/j714/mic.json` (gain, a 120 Hz high-pass and a limiter), on top of it; the microphone mapper then wraps its `effect_output.j714-mic` like any other Asahi microphone.
+The J714's microphone array is PCM 0 of its AOP sound card, which asahi-audio does not know. `wireplumber.conf.d/j714-mic.conf` names it `RawMics` and puts the J714 microphone graph, `/usr/share/omarchy-mac/j714/mic.json` (gain, a 120 Hz high-pass and a limiter), on top of it; the microphone mapper then wraps its `effect_output.j714-mic` like any other Asahi microphone, so apps see "MacBook Microphone" and the mono graph shows as "MacBook Microphone (Mono)", the names every Mac gets.
 
 ## Video decode in mpv
 
