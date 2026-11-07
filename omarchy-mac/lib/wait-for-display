@@ -35,11 +35,22 @@ handed_over() {
   status=$(tr -d '\0' <"$proc/device-tree$gpu/status" 2>/dev/null) || return 1
   [[ $status == "okay" || $status == "ok" ]] || return 1
   compgen -G "$proc/device-tree/soc/dcp@*/apple,t6031-handoff" >/dev/null || return 1
-  ! grep -Eq '(^| )apple_t6031_display\.enable=(0|n|N|f|F|off)( |$)' "$proc/cmdline" 2>/dev/null
+  ! display_disabled
+}
+# The kernel's last apple_t6031_display.enable wins, read as kstrtobool does.
+display_disabled() {
+  local arg value='' args=()
+  read -r -a args <"$proc/cmdline" 2>/dev/null
+  for arg in "${args[@]}"; do
+    [[ $arg == apple_t6031_display.enable=* ]] && value=${arg#*=}
+  done
+  [[ $value == [0nNfFdD]* || $value == [oO][fF]* ]]
 }
 
 if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
-  grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null && handed_over; then
+  grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null; then
+  # Without a handover the native display never replaces simpledrm: nothing to wait for.
+  handed_over || exit 0
   started=$SECONDS
   deadline=$((SECONDS + 30))
   while (( SECONDS < deadline )); do

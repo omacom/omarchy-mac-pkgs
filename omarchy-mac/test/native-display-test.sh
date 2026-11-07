@@ -45,18 +45,25 @@ handoff() {
 }
 compatibility apple,j514c apple,t6031
 parameter
+# The display-subsystem node is present, so falling into the old 10 s wait would time out here.
+mkdir -p "$work/proc/device-tree/soc/display-subsystem"
 handoff disabled marker
-timeout 2 "$helper" || fail 'a GPU the loader left disabled never enters the native wait'
+timeout 2 "$helper" || fail 'a GPU the loader left disabled waits for nothing'
 handoff okay none
-timeout 2 "$helper" || fail 'no display handoff marker never enters the native wait'
+timeout 2 "$helper" || fail 'no display handoff marker waits for nothing'
 handoff okay marker
-for value in 0 n off; do
-  parameter apple_t6031_display.enable=$value
-  timeout 2 "$helper" || fail "apple_t6031_display.enable=$value never enters the native wait"
+for value in 0 n no false OFF off disable; do
+  parameter quiet apple_t6031_display.enable=$value splash
+  timeout 2 "$helper" || fail "apple_t6031_display.enable=$value waits for nothing"
 done
-parameter apple_t6031_display.enable=1
-waiting 'an explicit enable still waits'
+parameter apple_t6031_display.enable=1 apple_t6031_display.enable=0
+timeout 2 "$helper" || fail 'the last apple_t6031_display.enable=0 wins'
+for value in 1 y yes on true; do
+  parameter apple_t6031_display.enable=0 apple_t6031_display.enable=$value
+  waiting "a final apple_t6031_display.enable=$value still waits"
+done
 parameter
+rmdir "$work/proc/device-tree/soc/display-subsystem"
 pass 'only a handed-over GPU and display, not disabled by the owner, enter the native wait'
 APPLE=0 timeout 2 "$helper" || fail 'other platforms never enter the J514C wait'
 waiting 'J514C waits for native graphics without an enable parameter'
