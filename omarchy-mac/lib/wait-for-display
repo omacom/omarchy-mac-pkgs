@@ -37,14 +37,25 @@ handed_over() {
   compgen -G "$proc/device-tree/soc/dcp@*/apple,t6031-handoff" >/dev/null || return 1
   ! display_disabled
 }
-# The kernel's last apple_t6031_display.enable wins, read as kstrtobool does.
+# As the kernel parses it: quotes stripped, a bare switch is on, a value kstrtobool
+# rejects is ignored, and the last valid one wins.
 display_disabled() {
-  local arg value='' args=()
+  local arg value off=false args=()
   read -r -a args <"$proc/cmdline" 2>/dev/null
   for arg in "${args[@]}"; do
-    [[ $arg == apple_t6031_display.enable=* ]] && value=${arg#*=}
+    arg=${arg//\"/}
+    if [[ $arg == apple_t6031_display.enable ]]; then
+      off=false
+    elif [[ $arg == apple_t6031_display.enable=* ]]; then
+      value=${arg#*=}
+      if [[ $value == [1yYtTeE]* || $value == [oO][nN]* ]]; then
+        off=false
+      elif [[ $value == [0nNfFdD]* || $value == [oO][fF]* ]]; then
+        off=true
+      fi
+    fi
   done
-  [[ $value == [0nNfFdD]* || $value == [oO][fF]* ]]
+  [[ $off == "true" ]]
 }
 
 if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&

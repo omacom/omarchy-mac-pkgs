@@ -58,6 +58,14 @@ for value in 0 n no false OFF off disable; do
 done
 parameter apple_t6031_display.enable=1 apple_t6031_display.enable=0
 timeout 2 "$helper" || fail 'the last apple_t6031_display.enable=0 wins'
+parameter 'apple_t6031_display.enable="0"'
+timeout 2 "$helper" || fail 'a quoted apple_t6031_display.enable="0" waits for nothing'
+parameter '"apple_t6031_display.enable=0"'
+timeout 2 "$helper" || fail 'a quoted "apple_t6031_display.enable=0" waits for nothing'
+parameter apple_t6031_display.enable=0 apple_t6031_display.enable=bogus
+timeout 2 "$helper" || fail 'an invalid later value keeps the earlier off'
+parameter apple_t6031_display.enable=0 apple_t6031_display.enable
+waiting 'a later bare apple_t6031_display.enable turns it back on'
 for value in 1 y yes on true; do
   parameter apple_t6031_display.enable=0 apple_t6031_display.enable=$value
   waiting "a final apple_t6031_display.enable=$value still waits"
