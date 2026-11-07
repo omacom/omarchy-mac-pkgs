@@ -1,0 +1,202 @@
+#!/usr/bin/python3
+# Fan modes for the 16-inch M4 Max on top of macsmc-hwmon's manual fan targets.
+# Below each mode's thresholds the SMC runs the fans; a hot battery, SSD or charger hands them back.
+# Usage: omarchy-mac-fan [status|auto|macos|quiet|boost|cycle], omarchy-mac-fan daemon (root)
+import glob
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+MODES = ("auto", "macos", "quiet", "boost")
+HWMON_GLOB = "/sys/class/hwmon/hwmon*"
+THERMAL_GLOB = "/sys/class/thermal/thermal_zone*"
+MODE_FILE = "/var/lib/omarchy-mac-fan/mode"
+STATE_FILE = "/run/omarchy-mac-fan/state"
+DIE_ZONES = ("macsmc_soc_die", "cpu-die-thermal")
+QUIET_CAP = 2000
+QUIET_STOP, QUIET_HOLD_S = 85.0, 5.0
+BOOST_CURVE = [(75, 1800), (80, 3000), (90, 4200), (100, 5777)]
+BOOST_STOP = 62.0
+# The ladder macOS 26.6.2 runs on the CPU die, measured on a J616s under all-core load.
+MACOS_CURVE = [(100, 1350), (104, 1980), (106, 3250), (108, 3880), (111, 5777)]
+MACOS_STOP = 95.0
+HOLD_S = 15.0
+RAMP_DOWN = 150
+REASSERT_S = 10.0
+GUARDS = {"Battery Hotspot": 42.0, "NAND Flash Temperature": 75.0, "Charge Regulator Temp": 90.0}
+GUARD_S = 300.0
+AUTO_POLL_S = 5.0
+
+
+def read(path, default=None):
+    try:
+        with open(path) as handle:
+            return handle.read().strip()
+    except OSError:
+        return default
+
+
+def find_hwmon():
+    return next((path for path in glob.glob(HWMON_GLOB) if read(f"{path}/name") == "macsmc_hwmon"), None)
+
+
+def find_die_zone():
+    zones = {read(f"{path}/type"): f"{path}/temp" for path in glob.glob(THERMAL_GLOB)}
+    return next((zones[name] for name in DIE_ZONES if name in zones), None)
+
+
+def get_mode():
+    mode = read(MODE_FILE, "auto")
+    return mode if mode in MODES else "auto"
+
+
+def curve(temperature, points):
+    if temperature <= points[0][0]:
+        return points[0][1]
+    for (low_temp, low_rpm), (high_temp, high_rpm) in zip(points, points[1:]):
+        if temperature <= high_temp:
+            return int(low_rpm + (high_rpm - low_rpm) * (temperature - low_temp) / (high_temp - low_temp))
+    return points[-1][1]
+
+
+class Fans:
+    def __init__(self, hwmon):
+        self.fans = sorted(path[: -len("_target")] for path in glob.glob(f"{hwmon}/fan*_target"))
+        self.limits = [(int(read(f"{fan}_min", "1350")), int(read(f"{fan}_max", "5777"))) for fan in self.fans]
+        self.guards = {}
+        for label in glob.glob(f"{hwmon}/temp*_label"):
+            if (name := read(label)) in GUARDS:
+                self.guards[name] = label[: -len("_label")] + "_input"
+        self.target = None
+        self.written = 0.0
+
+    def rpm(self):
+        return [int(read(f"{fan}_input", "0")) for fan in self.fans]
+
+    def hot_guard(self):
+        return next((name for name, path in self.guards.items() if int(read(path, "0")) / 1000 >= GUARDS[name]), None)
+
+    def set(self, rpm, now):
+        if rpm == self.target and (not rpm or now - self.written < REASSERT_S):
+            return
+        for fan, (low, high) in zip(self.fans, self.limits):
+            try:
+                with open(f"{fan}_target", "w") as handle:
+                    handle.write(str(min(max(rpm, low), high) if rpm else 0))
+            except OSError as error:
+                print(f"{os.path.basename(fan)}: {error}", flush=True)
+                if rpm:
+                    return self.set(0, now)
+        self.target, self.written = rpm, now
+
+
+class Policy:
+    """The rpm a mode wants, 0 to leave the fans to the SMC. Holds no hardware."""
+
+    def __init__(self):
+        self.cool_since = None
+        self.guard_until = 0.0
+
+    def released(self, cool, now, hold):
+        if not cool:
+            self.cool_since = None
+            return False
+        self.cool_since = self.cool_since or now
+        return now - self.cool_since >= hold
+
+    def want(self, mode, die, target, fastest, hot, now):
+        if hot and target:
+            self.guard_until = now + GUARD_S
+        if mode == "auto" or now < self.guard_until:
+            return 0
+        if mode == "quiet":
+            if target:
+                return 0 if self.released(die < QUIET_STOP, now, QUIET_HOLD_S) else QUIET_CAP
+            return QUIET_CAP if fastest > QUIET_CAP + 150 else 0
+        points, stop = (BOOST_CURVE, BOOST_STOP) if mode == "boost" else (MACOS_CURVE, MACOS_STOP)
+        if not target and die < points[0][0]:
+            return 0
+        wanted = max(curve(die, points), target - RAMP_DOWN) if target else curve(die, points)
+        return 0 if self.released(die < stop, now, HOLD_S) else wanted
+
+
+def write_state(state):
+    with open(STATE_FILE + ".tmp", "w") as handle:
+        json.dump(state, handle)
+    os.replace(STATE_FILE + ".tmp", STATE_FILE)
+
+
+def daemon():
+    hwmon, zone = find_hwmon(), find_die_zone()
+    if not hwmon or not zone:
+        print("no macsmc_hwmon or SoC die zone: leaving the fans to the SMC", flush=True)
+        return 0
+    fans = Fans(hwmon)
+    if not fans.fans:
+        print("no fan targets: this device tree does not offer manual fan control", flush=True)
+        return 0
+
+    def stop(*_):
+        fans.set(0, time.monotonic())
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    policy, smoothed = Policy(), None
+    while True:
+        mode, now = get_mode(), time.monotonic()
+        if mode == "auto" and not fans.target:
+            smoothed = None
+            fans.set(0, now)
+            write_state({"mode": "auto"})
+            time.sleep(AUTO_POLL_S)
+            continue
+        die = int(read(zone, "0")) / 1000
+        smoothed = die if smoothed is None else smoothed + 0.3 * (die - smoothed)
+        rpm = fans.rpm()
+        fans.set(policy.want(mode, smoothed, fans.target or 0, max(rpm, default=0), fans.hot_guard(), now), now)
+        write_state({"mode": mode, "die": round(smoothed, 1), "rpm": rpm, "held": fans.target})
+        time.sleep(1)
+
+
+def status():
+    state = json.loads(read(STATE_FILE, "{}") or "{}")
+    if not state:
+        print(f"mode {get_mode()} (service not running)")
+    elif state["mode"] == "auto":
+        print("mode auto: the SMC runs the fans")
+    else:
+        held = f"held at {state['held']} rpm" if state["held"] else "the SMC runs them"
+        print(f"mode {state['mode']}: fans {'/'.join(map(str, state['rpm']))} rpm, {held}, SoC die {state['die']} C")
+    return 0
+
+
+def main(argv):
+    if subprocess.run(["omarchy-hw-apple-silicon"]).returncode:
+        return 0
+    command = argv[1] if len(argv) > 1 else "status"
+    if command == "daemon":
+        return daemon()
+    if command == "status":
+        return status()
+    if command == "cycle":
+        command = MODES[(MODES.index(get_mode()) + 1) % len(MODES)]
+    if command not in MODES:
+        print("Usage: omarchy-mac-fan [status|auto|macos|quiet|boost|cycle]", file=sys.stderr)
+        return 2
+    try:
+        with open(MODE_FILE + ".tmp", "w") as handle:
+            handle.write(command + "\n")
+        os.replace(MODE_FILE + ".tmp", MODE_FILE)
+    except OSError as error:
+        print(f"Changing the fan mode needs root and the running service: {error}", file=sys.stderr)
+        return 1
+    print(f"fan mode {command}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

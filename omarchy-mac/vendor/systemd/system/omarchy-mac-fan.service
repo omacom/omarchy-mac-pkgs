@@ -1,0 +1,14 @@
+[Unit]
+Description=Fan modes for the 16-inch MacBook Pro with M4 Max
+ConditionFirmware=device-tree-compatible(apple,j616c)
+
+[Service]
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+StateDirectory=omarchy-mac-fan
+RuntimeDirectory=omarchy-mac-fan
+ExecStart=/usr/bin/omarchy-mac-fan daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
