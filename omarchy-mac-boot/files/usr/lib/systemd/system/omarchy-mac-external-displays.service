@@ -1,11 +1,11 @@
 # Turns on the external displays a Mac held off while its boot splash ran on
 # the built-in screen: after the splash quits, which first boot holds until
-# it hands over, and after owner setup or a password reset on tty1 ends,
+# it hands over, and after owner setup on tty1 ends,
 # before the display manager starts. Static: pulled in by multi-user.target,
 # so an upgraded Mac needs no enable step.
 [Unit]
 Description=Turn external displays on for the desktop
-After=plymouth-quit.service plymouth-quit-wait.service omarchy-provision-owner.service omarchy-drive-recover.service
+After=plymouth-quit.service plymouth-quit-wait.service omarchy-provision-owner.service
 Before=display-manager.service sddm.service
 
 [Service]
