@@ -71,7 +71,11 @@ dtb_overlays_has_compatible() {
         if (matched[depth] && (status[depth] == "" || status[depth] == "okay" ||
           status[depth] == "ok")) {
           found = 1
-          exit
+          # Read on to the end: a caller under pipefail (the boot check) would
+          # otherwise see dtc die of SIGPIPE and take the match for a miss.
+          # This skips the depth-- below, so depth is off by one from here on;
+          # found is never cleared and nothing reads depth after a match.
+          next
         }
         delete matched[depth]
         delete status[depth]
