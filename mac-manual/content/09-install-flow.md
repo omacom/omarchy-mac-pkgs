@@ -42,7 +42,7 @@ Before a release, the image is installed and booted in KVM on a test Mac, once p
 
 - copies the Apple vendor firmware the Asahi engine extracted from macOS into the running system and the initramfs;
 - loads the Apple keyboard and trackpad drivers early, so the passphrase prompt and the greeter both have input;
-- converts the root file system to LUKS if the installer asked for it, from the initramfs and before the root is mounted;
+- converts the root file system to LUKS unless the installer recorded `encrypt=0`, from the initramfs and before the root is mounted;
 - hands over to owner provisioning: your account and password, and the disk re-key;
 - leaves the remaining model-specific hardware steps for your first desktop session, which runs them without asking.
 

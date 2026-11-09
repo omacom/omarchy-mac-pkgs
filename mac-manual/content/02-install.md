@@ -49,7 +49,7 @@ spctl -a -vv -t execute "/Applications/Omarchy Installer.app"
 5. Choose whether to encrypt the root file system. Encryption is set up on the first Linux boot and asks for your password on every boot afterwards. See [Encryption and passwords]({{page:security}}).
 6. Follow the prompt to complete the boot policy step in recoveryOS. This is Apple's own step and needs your macOS password. The disk is already written when that prompt appears.
 
-The Mac reboots into Omarchy. The [first boot]({{page:install-flow}}) installs Apple's vendor firmware, converts the root to LUKS if you asked for it, creates your account and lands on the desktop.
+The Mac reboots into Omarchy. The [first boot]({{page:install-flow}}) installs Apple's vendor firmware, converts the root to LUKS unless the installer recorded that you said no, creates your account and lands on the desktop.
 
 ## When the installer stops
 
