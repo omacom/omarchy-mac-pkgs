@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.2.5` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.2.6` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
@@ -54,6 +54,8 @@ On an M3 Max, llvmpipe plays video but cannot keep up with it. These figures ass
 `omarchy battery charge limit [80|100]` shows or sets the `macsmc-battery` charge thresholds and refuses unless `omarchy-hw-apple-silicon` holds. It writes only the end threshold through `sudo`, since the driver derives the start threshold (80 restarts charging at 75; 100 restores full charging), and checks the SMC's readback. Full charging stays the default.
 
 A set limit is saved as `CHARGE_CONTROL_END_THRESHOLD=` in `/etc/udev/macsmc-battery.conf`, the file asahi-scripts' own rule restores from, so both agree on one value. The package's udev rule runs `/usr/lib/omarchy-mac/battery-charge-limit-restore` when the SMC battery appears at boot; it reapplies a saved 80 or 100 on Apple Silicon and otherwise leaves the SMC alone. Nothing needs enabling.
+
+asahi-scripts' path unit starts `macsmc-battery-charge-control-end-threshold.service`, which saves the limit, on every SMC battery event, so plugging in the charger or resuming can start it more than five times in ten seconds and leave it `failed` with `start-limit-hit`. Since it only rewrites the same line, the package's drop-in removes its start limit; the drop-in goes once AsahiLinux/asahi-scripts#78 fixes the unit upstream.
 
 ## Keyboard function-key mode
 
