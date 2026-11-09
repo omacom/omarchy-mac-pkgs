@@ -90,6 +90,20 @@ omarchy-hw-apple-silicon || return 0
   cmdline=$(grub_console_get GRUB_CMDLINE_LINUX)
   read -ra words <<<"$cmdline"
   wanted_cmdline=$(grub_console_device_wait "$(omarchy-mac-initramfs-hooks 2>/dev/null || true)" "$cmdline")
+  # Aurora's native ARM64 Steam launcher requests inherited 4K user pages.
+  # The kernel keeps this support off until boot enables it. GRUB defaults
+  # also feed Limine, so set it here for both loaders. Keep an owner's
+  # explicit user4k= choice in either variable, including user4k=off.
+  if [[ $(omarchy-mac-kernel 2>/dev/null) == linux-aurora ]]; then
+    read -ra default_words <<<"$(grub_console_get GRUB_CMDLINE_LINUX_DEFAULT)"
+    has_user4k=0
+    for word in "${words[@]}" "${default_words[@]}"; do
+      [[ $word != user4k=* ]] || has_user4k=1
+    done
+    if (( ! has_user4k )); then
+      wanted_cmdline="${wanted_cmdline:+$wanted_cmdline }user4k=on"
+    fi
+  fi
   # Words unchanged: the line stays as the Mac wrote it, spacing and all.
   [[ $wanted_cmdline == "${words[*]}" ]] && wanted_cmdline=$cmdline
   grub_console_set GRUB_CMDLINE_LINUX "$wanted_cmdline" || exit 1
