@@ -120,6 +120,17 @@ mapfile -t result < <(dtb_overlays_apply "$tmp/out" "$dtbs/t8103-j293-kernel-ane
   fail "an overlay stays out of a device tree that already has its skip-if-compatible node"
 pass "a kernel device tree that has the node wins over the overlay"
 
+# The boot check uses pipefail. Put enough data after the matching node to
+# overflow the pipe if awk stops reading as soon as it finds the match.
+{
+  printf '/dts-v1/; / { ane { compatible = "apple,t8103-ane"; }; filler { data = "'
+  head -c 2097152 /dev/zero | tr '\000' x
+  printf '"; }; };\n'
+} | dtc -q -I dts -O dtb -o "$tmp/large.dtb" -
+dtb_overlays_has_compatible "$tmp/large.dtb" apple,t8103-ane ||
+  fail "with pipefail, a match near the start of a large tree is still found"
+pass "large device trees keep the overlay out under pipefail"
+
 # Only an available node has the compatible: Linux's of_device_is_available()
 # rule is no status, "okay" or "ok"; a disabled node does not count.
 dtc -q -I dts -O dtb -o "$tmp/available.dtb" - <<'DTS'
