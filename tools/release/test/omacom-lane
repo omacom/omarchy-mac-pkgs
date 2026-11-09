@@ -578,7 +578,7 @@ GIT_CONFIG_GLOBAL=$tmp/hostile.gitconfig lib git_source_sha256 "$tmp/sum.git" "$
 echo "ok - a git source hashes to what makepkg -g records, whatever the operator's git settings"
 
 # omarchy-mac-pkgs commits and the checksums makepkg recorded for them in
-# omacom/omarchy-pkgs, when this checkout has their history (a shallow CI
+# omacom/omarchy-pkgs, when this checkout has their history (a shallow
 # checkout does not).
 known=(
   5b2c815f007dd01a8ad9bb26f8af977c19e6a130 d44aadb3e396092d91e86cd5df24905bbcf7407ed7b33e7d6e47dd0671ba0bf3
