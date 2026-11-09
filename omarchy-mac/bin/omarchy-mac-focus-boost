@@ -7,6 +7,7 @@ import json
 import os
 import re
 import select
+import signal
 import socket
 import subprocess
 import sys
@@ -18,8 +19,12 @@ HOLD_SECONDS = 3.0
 RESCAN_SECONDS = 2.0
 DEVICE_RESCAN_SECONDS = 10.0
 GAME_CORES = 0.75
+REPLY_BYTES = 65536
+REPLY_SECONDS = 1.0
+EVENT_LINE_BYTES = 65536
 SESSION_SOCKETS = "/run/user/*/hypr/*/.socket2.sock"
 CGROUP_ROOT = "/sys/fs/cgroup"
+PROC_ROOT = "/proc"
 INPUT_LIST = "/proc/bus/input/devices"
 INPUT_ROOT = "/dev/input"
 WANTED_INPUT = re.compile(r"keyboard|touch|trackpad|touchpad|mouse", re.I)
@@ -30,10 +35,29 @@ def log(message):
     print(f"omarchy-mac-focus-boost: {message}", flush=True)
 
 
-def clamp(pids, value):
+def owned(pid, uid):
+    """Whether the process's real and effective uid are the session owner's."""
+    try:
+        with open(f"{PROC_ROOT}/{pid}/status") as file:
+            for line in file:
+                if line.startswith("Uid:"):
+                    real, effective = (int(field) for field in line.split()[1:3])
+                    return real == uid and effective == uid
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def uclampset(pid, value):
+    subprocess.run(["uclampset", "-m", str(value), "-a", "-p", str(pid)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def clamp(pids, value, uid):
+    """Sets uclamp.min on the processes the session owner owns, and nobody else's."""
     for pid in pids:
-        subprocess.run(["uclampset", "-m", str(value), "-a", "-p", str(pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if owned(pid, uid):
+            uclampset(pid, value)
 
 
 def session():
@@ -52,7 +76,7 @@ def user_pids(uid):
 
 def cgroup_of(pid):
     try:
-        with open(f"/proc/{pid}/cgroup") as file:
+        with open(f"{PROC_ROOT}/{pid}/cgroup") as file:
             return file.read().strip().split("::", 1)[1]
     except (OSError, IndexError):
         return None
@@ -93,14 +117,24 @@ def app_cpu_usec(cgroups):
 
 
 def focused(directory):
-    """(pid, fullscreen) of the focused window."""
+    """(pid, fullscreen) of the focused window; a reply over REPLY_BYTES or REPLY_SECONDS counts as none."""
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    deadline = time.monotonic() + REPLY_SECONDS
     data = b""
     try:
+        connection.settimeout(REPLY_SECONDS)
         connection.connect(f"{directory}/.socket.sock")
         connection.sendall(b"j/activewindow")
-        while chunk := connection.recv(65536):
+        while True:
+            connection.settimeout(max(0.001, deadline - time.monotonic()))
+            chunk = connection.recv(REPLY_BYTES + 1 - len(data))
+            if not chunk:
+                break
             data += chunk
+            if len(data) > REPLY_BYTES or time.monotonic() >= deadline:
+                return None, False
+    except OSError:
+        return None, False
     finally:
         connection.close()
     try:
@@ -108,6 +142,16 @@ def focused(directory):
         return int(window.get("pid", 0)) or None, bool(window.get("fullscreen", 0))
     except ValueError:
         return None, False
+
+
+def split_events(pending, chunk):
+    """Complete event lines and the unfinished rest. A line longer than EVENT_LINE_BYTES is dropped whole: None as the rest skips to its end."""
+    if pending is None:
+        if b"\n" not in chunk:
+            return [], None
+        pending, chunk = b"", chunk.split(b"\n", 1)[1]
+    *lines, rest = (pending + chunk).split(b"\n")
+    return lines, rest if len(rest) <= EVENT_LINE_BYTES else None
 
 
 def input_devices():
@@ -154,11 +198,24 @@ class Inputs:
 
 def run(uid, directory):
     log(f"following uid {uid}, boost {BOOST} for {HOLD_SECONDS} s after input")
-    clamp(user_pids(uid), 0)
+    clamp(user_pids(uid), 0, uid)
     events = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     events.connect(f"{directory}/.socket2.sock")
+    boosted = set()
+    try:
+        follow(uid, directory, events, boosted)
+    finally:
+        # Every way out, a stop signal included, puts the boosted app back to 0.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        clamp(boosted, 0, uid)
+        events.close()
+
+
+def follow(uid, directory, events, boosted):
+    """The event loop. It records a process in boosted before raising it, so a stop always undoes it."""
     inputs = Inputs()
-    buffer, cgroups, boosted, active = b"", [], set(), False
+    buffer, cgroups, active = b"", [], False
     fullscreen, game, cpu_sample = False, False, None
     last_input = last_scan = time.monotonic()
     focus_changed = True
@@ -170,6 +227,8 @@ def run(uid, directory):
             timeout = min(timeout, max(0.05, last_input + HOLD_SECONDS - now))
         if fullscreen:
             timeout = min(timeout, RESCAN_SECONDS)
+        if focus_changed:
+            timeout = 0
         ready, _, _ = select.select([events] + list(inputs.descriptors.values()), [], [], timeout)
         now = time.monotonic()
         for source in ready:
@@ -177,10 +236,8 @@ def run(uid, directory):
                 chunk = events.recv(65536)
                 if not chunk:
                     log("Hyprland went away")
-                    clamp(boosted, 0)
                     return
-                buffer += chunk
-                *lines, buffer = buffer.split(b"\n")
+                lines, buffer = split_events(buffer, chunk)
                 if any(line.startswith((b"activewindowv2>>", b"closewindow>>")) for line in lines):
                     focus_changed = True
                     last_input = now
@@ -192,10 +249,11 @@ def run(uid, directory):
         if focus_changed:
             focus_changed = False
             pid, fullscreen = focused(directory)
-            new_cgroups = app_cgroups(cgroup_of(pid)) if pid else []
+            new_cgroups = app_cgroups(cgroup_of(pid)) if pid and owned(pid, uid) else []
             if new_cgroups != cgroups:
-                clamp(boosted, 0)
-                boosted, cgroups = set(), new_cgroups
+                clamp(boosted, 0, uid)
+                boosted.clear()
+                cgroups, active = new_cgroups, False
             if not fullscreen or cpu_sample is None or cpu_sample[2] != cgroups:
                 cpu_sample = (now, app_cpu_usec(cgroups), cgroups) if fullscreen else None
                 game = False
@@ -206,14 +264,28 @@ def run(uid, directory):
         if now - last_input < HOLD_SECONDS or game:
             if not active or now - last_scan >= RESCAN_SECONDS:
                 current = app_pids(cgroups)
-                clamp(current - boosted, BOOST)
-                boosted, active, last_scan = current, True, now
+                added = current - boosted
+                boosted.intersection_update(current)
+                boosted.update(added)
+                clamp(added, BOOST, uid)
+                active, last_scan = True, now
         elif active:
-            clamp(boosted, 0)
-            boosted, active = set(), False
+            clamp(boosted, 0, uid)
+            boosted.clear()
+            active = False
+
+
+def stop(signum, frame):
+    raise SystemExit(0)
+
+
+def stop_on_signals():
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
 
 
 def main():
+    stop_on_signals()
     if subprocess.run(["omarchy-hw-apple-silicon"]).returncode:
         return 0
     while not (found := session()):

@@ -5,6 +5,7 @@ ConditionFirmware=device-tree-compatible(apple,j616c)
 [Service]
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
 ExecStart=/usr/bin/omarchy-mac-focus-boost
+KillMode=mixed
 Restart=always
 RestartSec=3
 

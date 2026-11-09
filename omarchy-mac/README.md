@@ -51,7 +51,7 @@ On an M3 Max, llvmpipe plays video but cannot keep up with it. These figures ass
 
 ## Focus boost on the 16-inch M4 Max
 
-`omarchy-mac-focus-boost.service` runs only on `apple,j616c`. Within 3 seconds of keyboard, trackpad or mouse input or a window change, it sets `uclamp.min` to 822 on every process of the focused Hyprland app, and back to 0 afterwards. A fullscreen app using at least 0.75 of a core keeps the boost without input. It reads input only to time it. `systemctl disable --now omarchy-mac-focus-boost` turns it off.
+`omarchy-mac-focus-boost.service` runs only on `apple,j616c`. Within 3 seconds of keyboard, trackpad or mouse input or a window change, it sets `uclamp.min` to 822 on every process of the focused Hyprland app, and back to 0 afterwards. A fullscreen app using at least 0.75 of a core keeps the boost without input. It reads input only to time it. It changes only processes whose real and effective uid are the session owner's, so a Hyprland socket that names another user's process changes nothing; it gives up on a socket reply over 64 KiB or 1 s and drops an event line over 64 KiB. Stopping the service puts every boosted process back to 0. `sudo systemctl mask --now omarchy-mac-focus-boost` turns it off: the package enables the unit with a `multi-user.target.wants` link under `/usr/lib`, which `systemctl disable` can't remove.
 
 ## Battery charge limit
 
