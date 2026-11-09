@@ -22,11 +22,18 @@ done
 
 [[ ! -e $platform_root/hypr ]] || fail "omarchy-mac ships no Hyprland files; Omarchy's own config carries the Mac's binds"
 
-# The keybindings menu shows the brightness keys as the F1 and F2 they are.
-[[ $(<"$platform_root/key-names") == $'XF86MonBrightnessUp F2\nXF86MonBrightnessDown F1' ]] ||
-  fail "omarchy-mac names the brightness keys F2 and F1"
+# The keybindings menu shows the built-in keyboard's top row as the F-keys
+# printed on it: hid-apple maps F1..F12 of a 2021 or later Apple keyboard to
+# the media keysyms, and fnmode=1 makes that the bare press.
+expected_key_names=$(printf '%s\n' \
+  'XF86MonBrightnessDown F1' 'XF86MonBrightnessUp F2' 'XF86LaunchA F3' \
+  'XF86Search F4' 'XF86AudioMicMute F5' 'XF86Sleep F6' 'XF86AudioPrev F7' \
+  'XF86AudioPlay F8' 'XF86AudioNext F9' 'XF86AudioMute F10' \
+  'XF86AudioLowerVolume F11' 'XF86AudioRaiseVolume F12')
+[[ $(<"$platform_root/key-names") == "$expected_key_names" ]] ||
+  fail "omarchy-mac names the whole top row F1 to F12"
 grep -Fq /usr/share/omarchy-platform/key-names "$runtime/bin/omarchy-menu-keybindings" || fail "the keybindings menu reads the platform's key names"
-pass "the keybindings menu names the Mac's brightness keys as its F-keys"
+pass "the keybindings menu names the Mac's top row as its F-keys"
 
 # The bar keeps clear of each MacBook panel's notch.
 CUTOUTS="$platform_root/display-cutouts.json" RUNTIME="$runtime" node <<'JS'

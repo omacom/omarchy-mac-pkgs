@@ -1,2 +1,12 @@
-XF86MonBrightnessUp F2
 XF86MonBrightnessDown F1
+XF86MonBrightnessUp F2
+XF86LaunchA F3
+XF86Search F4
+XF86AudioMicMute F5
+XF86Sleep F6
+XF86AudioPrev F7
+XF86AudioPlay F8
+XF86AudioNext F9
+XF86AudioMute F10
+XF86AudioLowerVolume F11
+XF86AudioRaiseVolume F12

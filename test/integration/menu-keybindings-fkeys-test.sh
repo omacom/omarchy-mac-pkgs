@@ -5,8 +5,9 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
 
 # The keybindings menu must show Mac physical key names: on Apple Silicon
-# MacBook keyboards XF86MonBrightnessUp/Down ARE F2/F1, so raw symbols leak
-# meaningless rows like "SHIFT + XF86MonBrightnessUp" (issue #194).
+# MacBook keyboards the top row sends media keysyms (XF86MonBrightnessUp IS
+# F2, XF86AudioMute IS F10), so raw symbols leak meaningless rows like
+# "SHIFT + XF86MonBrightnessUp" or "SUPER + XF86AudioMute" (issue #194).
 # Regression guard for the cache too: a pre-seeded stale cache file from the
 # v13 era must not win over current rendering (cache key bumped to v14).
 
@@ -48,6 +49,30 @@ bindi
 	description: Brightness up precise
 	dispatcher: exec
 	arg: omarchy-brightness-display +1%
+
+bindl
+	modmask: 0
+	key: XF86AudioMicMute
+	keycode: 0
+	description: Mute microphone
+	dispatcher: exec
+	arg: omarchy-audio-mic-mute
+
+bindl
+	modmask: 64
+	key: XF86AudioMute
+	keycode: 0
+	description: Screenshot window
+	dispatcher: exec
+	arg: omarchy-screenshot window
+
+bindel
+	modmask: 0
+	key: XF86AudioRaiseVolume
+	keycode: 0
+	description: Volume up
+	dispatcher: exec
+	arg: omarchy-audio-volume up
 
 bindm
 	modmask: 64
@@ -120,7 +145,19 @@ tr -s ' ' <<<"$output" | grep -qF 'ALT + F2 → Brightness up precise' || \
 grep -qF 'XF86MonBrightness' <<<"$output" && \
   fail "raw XF86MonBrightness symbols no longer leak into the menu" "$output"
 
+tr -s ' ' <<<"$output" | grep -qF 'F5 → Mute microphone' || \
+  fail "XF86AudioMicMute renders as F5" "$output"
+
+tr -s ' ' <<<"$output" | grep -qF 'SUPER + F10 → Screenshot window' || \
+  fail "SUPER + XF86AudioMute renders as SUPER + F10" "$output"
+
+tr -s ' ' <<<"$output" | grep -qF 'F12 → Volume up' || \
+  fail "XF86AudioRaiseVolume renders as F12" "$output"
+
+grep -qE 'XF86Audio' <<<"$output" && \
+  fail "raw media keysyms no longer leak into the menu" "$output"
+
 tr -s ' ' <<<"$output" | grep -qF 'SUPER + Q → Close window' || \
   fail "unrelated bindings render unchanged (SUPER + Q)" "$output"
 
-pass "keybindings menu shows Mac physical key names (F1/F2), stale caches ignored"
+pass "keybindings menu shows Mac physical key names (F1 to F12), stale caches ignored"
