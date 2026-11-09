@@ -36,12 +36,14 @@ saved=$modules/$running
 [[ -d $root$saved && ! -L $root$saved ]] || exit 0
 pacman "${pacman_args[@]}" -Qq kernel-modules-hook >/dev/null 2>&1 || exit 0
 
-# Only when update-m1n1 takes its device trees from the -ARCH default.
+# Only when update-m1n1 takes its device trees from the -ARCH default. With
+# OMARCHY_DTB_OVERLAYS=0 the configuration's dtb-overlays.sh call builds
+# nothing, so only a DTBS the configuration sets itself counts.
 script=$root/usr/bin/update-m1n1
 [[ -r $script ]] && grep -Eq '^[[:space:]]*:[[:space:]]+\$\{DTBS:=.*/modules/\*-ARCH' "$script" || exit 0
 config=$root/etc/default/update-m1n1
 if [[ -e $config ]]; then
-  configured=$(env -i PATH=/usr/bin:/bin bash --noprofile --norc -c '
+  configured=$(env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
     unset DTBS M1N1_UPDATE_DISABLED
     . "$1" >/dev/null 2>&1 || exit 1
     printf "%s" "${DTBS-}${M1N1_UPDATE_DISABLED-}"
