@@ -213,6 +213,7 @@ source "$tmp/functions"
 {
   PROVISIONING_DIR=/var/lib/omarchy/provisioning
   TOP_MNT=$top
+  ESP_MNT=$tmp/esp
   NEXT_NAME=@omarchy-reset-next
   LOG_FILE=$tmp/reset.log
   DISPATCH=$OMARCHY_PATH/bin/omarchy-lifecycle-dispatch
@@ -233,6 +234,7 @@ on_platform() {
   export OMARCHY_PROC_ROOT=$tmp/$1/proc PATH=$tmp/$1/bin:$base_path
   RESET_BOOT="" RESET_BOOT_PREPARED=0 RESET_LUKS_ADDED=0 RESET_LUKS_SLOT="" RESET_LUKS_DEVICE="" RESET_LUKS_AUTH=""
   RESET_THROWAWAY="" reset_committed=0 swap_done=0
+  esp_restore="" esp_backup="" esp_old_id="" esp_new_id=""
 }
 
 # The previous owner's root at @ and the installer's @factory, which predates
@@ -273,7 +275,9 @@ echo "limine-update" >>"$calls"
 root=\$(cd "\$(dirname "\$0")/../.." && pwd)
 mkdir -p "\$root/boot/EFI/Linux"
 printf 'uki with %s' "\$(cat "\$root/etc/omarchy/provisioning.key" 2>/dev/null)" >"\$root/boot/EFI/Linux/omarchy_linux.efi"
-printf '  path: boot():/EFI/Linux/omarchy_linux.efi#%s\n' "\$(b2sum "\$root/boot/EFI/Linux/omarchy_linux.efi" | cut -d' ' -f1)" >>"\$root/boot/limine.conf"
+printf '/Omarchy\ncomment: machine-id=%s\n  path: boot():/EFI/Linux/omarchy_linux.efi#%s\n' \\
+  "\$(cat "\$root/etc/machine-id")" \\
+  "\$(b2sum "\$root/boot/EFI/Linux/omarchy_linux.efi" | cut -d' ' -f1)" >>"\$root/boot/limine.conf"
 SH
   chmod +x "$factory/usr/bin/limine-update"
 }
