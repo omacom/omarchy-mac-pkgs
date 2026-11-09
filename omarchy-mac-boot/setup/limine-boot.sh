@@ -108,7 +108,7 @@ TARGET_OS_NAME="Omarchy"
 ENABLE_UKI=yes
 CUSTOM_UKI_NAME="omarchy"
 FIND_BOOTLOADERS=no
-KERNEL_CMDLINE[default]=""
+KERNEL_CMDLINE[default]+=""
 CONF
   printf 'ESP_PATH="%s"\nBOOT_ORDER="%s, *, *fallback, Snapshots"\n' "$esp" "$kernel" |
     sudo tee -a "$limine_default" >/dev/null || limine_boot_fail "cannot finish Limine defaults"
@@ -116,7 +116,7 @@ CONF
   cmdline_command=$(command -v omarchy-mac-limine-cmdline) || limine_boot_fail "the command-line helper is missing"
   sudo ln -sfn "$cmdline_command" "$boot_hooks_dir/20-omarchy-mac-cmdline" || limine_boot_fail "cannot install the command-line hook"
   sudo omarchy-mac-limine-cmdline || limine_boot_fail "could not derive the kernel command line"
-  sudo grep -q '^KERNEL_CMDLINE\[default\]="root=UUID=' "$limine_default" || limine_boot_fail "no root= in the derived command line"
+  sudo grep -Eq '^KERNEL_CMDLINE\[default\]\+?="root=UUID=' "$limine_default" || limine_boot_fail "no root= in the derived command line"
 
   # The entry tool keys history by machine-id. Discard foreign history only
   # after a successful replacement; installer ESP:/omarchy staging survives.

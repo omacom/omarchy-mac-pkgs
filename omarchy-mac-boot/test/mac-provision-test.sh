@@ -95,7 +95,7 @@ cmdline=\$(sed -n 's/^GRUB_CMDLINE_LINUX="\(.*\)"/\1/p' "$root/etc/default/grub"
 echo "omarchy-mac-boot-update \$cmdline" >>"$calls"
 [[ ! -e $test_tmp/fail-boot-update ]] || exit 1
 if [[ -e $root/var/lib/omarchy/limine.enabled ]]; then
-  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="%s"\n' "\$cmdline" >"$root/etc/default/limine"
+  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]+="%s"\n' "\$cmdline" >"$root/etc/default/limine"
   mkdir -p "$root/boot/efi/EFI/Linux"
   echo "$root/boot/initramfs-linux-aurora.img" >"$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
 else
@@ -157,7 +157,7 @@ fixture() {
 limine_fixture() {
   fixture
   : >"$root/var/lib/omarchy/limine.enabled"
-  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID=x rw quiet rd.luks.name=%s=root %s"\n' "$luks_uuid" "$key_line" \
+  printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]+="root=UUID=x rw quiet rd.luks.name=%s=root %s"\n' "$luks_uuid" "$key_line" \
     >"$root/etc/default/limine"
 }
 
@@ -478,9 +478,9 @@ verify_fixture
 printf 'linux /vmlinuz %s\n' "$key_line" >"$root/boot/grub/grub.cfg"
 if run provision-verify; then fail "rd.luks.key= in a GRUB Mac's grub.cfg remains"; fi
 : >"$root/var/lib/omarchy/limine.enabled"
-printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID=x rw"\n' >"$root/etc/default/limine"
+printf 'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]+="root=UUID=x rw"\n' >"$root/etc/default/limine"
 run provision-verify || fail "a Limine Mac does not boot the GRUB image it keeps for rollback"
-printf 'KERNEL_CMDLINE[default]="root=UUID=x %s"\n' "$key_line" >"$root/etc/default/limine"
+printf 'KERNEL_CMDLINE[default]+="root=UUID=x %s"\n' "$key_line" >"$root/etc/default/limine"
 if run provision-verify; then fail "rd.luks.key= in the Limine command line remains"; fi
 for phase in configured rekeyed encrypted; do
   verify_fixture

@@ -498,7 +498,7 @@ STUB
   # A Limine Mac: the gate, Limine's defaults and the Omarchy rebuild command.
   mkdir -p "$mnt/@/var/lib/omarchy" "$mnt/@/etc/default"
   : >"$mnt/@/var/lib/omarchy/limine.enabled"
-  printf 'KERNEL_CMDLINE[default]=""\n' >"$mnt/@/etc/default/limine"
+  printf 'KERNEL_CMDLINE[default]+=""\n' >"$mnt/@/etc/default/limine"
   cat >"$mnt/@/usr/bin/omarchy-mac-boot-update" <<'STUB'
 #!/bin/bash
 echo "omarchy-mac-boot-update grub=${OMARCHY_MAC_BOOT_UPDATE_GRUB:-} $*" >>/var/lib/omarchy/mac-first-boot/boot.log
