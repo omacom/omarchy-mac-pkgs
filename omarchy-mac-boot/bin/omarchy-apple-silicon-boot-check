@@ -812,10 +812,12 @@ mounted_read_only() {
   [[ ,$options, == *,ro,* ]]
 }
 
+# mount's stdout carries only its fstab hint, which a boot clock set after
+# systemd loads units makes wrong on every update; its errors stay on stderr.
 bind_read_only() {
-  sudo mount --bind -o ro "$1" "$mountpoint" || return 1
+  sudo mount --bind -o ro "$1" "$mountpoint" >/dev/null || return 1
   mounted_read_only && return 0
-  sudo mount -o remount,bind,ro "$mountpoint" && mounted_read_only
+  sudo mount -o remount,bind,ro "$mountpoint" >/dev/null && mounted_read_only
 }
 
 esp_uuid=""
@@ -837,7 +839,7 @@ else
     [[ -d $existing ]] || fail "the system ESP ($esp) is mounted at $existing, which cannot be read"
     bind_read_only "$existing" || fail "cannot bind the system ESP ($esp) read-only from $existing"
   else
-    sudo mount -o ro "$esp" "$mountpoint" && mounted_read_only || fail "cannot mount the system ESP ($esp) read-only"
+    sudo mount -o ro "$esp" "$mountpoint" >/dev/null && mounted_read_only || fail "cannot mount the system ESP ($esp) read-only"
   fi
 fi
 
