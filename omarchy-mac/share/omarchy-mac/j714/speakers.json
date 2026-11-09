@@ -236,6 +236,7 @@
         ]
     },
     "capture.props": {
+        "node.always-process": "true",
         "node.name": "audio_effect.j714-convolver",
         "media.class": "Audio/Sink",
         "audio.channels": "2",
@@ -248,6 +249,7 @@
         "device.icon-name": "audio-speakers"
     },
     "playback.props": {
+        "node.always-process": "true",
         "node.name": "effect_output.j714-convolver",
         "node.description": "MacBook Pro J714 Speakers DSP Out",
         "media.name": "MacBook Pro J714 Speakers DSP Out",
