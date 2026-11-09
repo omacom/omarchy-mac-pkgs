@@ -337,7 +337,9 @@ restore_live_boot_files() {
   else
     failed=1
   fi
-  sync
+  # The saved copies are the only ones: keep them until Boot and the ESP report
+  # the restore written. A bare sync reports no write-back error; syncfs does.
+  sync -f "$LIVE_BOOT" "$LIVE_BOOT/${esp%/}" || failed=1
   (( failed == 0 )) || return 1
   log_step "Restored the previous boot files"
   rm -rf -- "$backup"
