@@ -198,7 +198,7 @@ def repos() -> Diagram:
         Node("build", 332, 190, "Signed builds", ["aarch64 only, edge first,", "rc and stable once qualified"], w=W),
         Node("repo", 332, 290, "[omarchy] for aarch64", ["pkgs.omarchy.org, signed", "with the Omarchy key"], w=W, tone="tone-blue"),
         Node("image", 628, 70, "Mac image", ["signed packages pinned", "to one commit"], w=W, tone="tone-blue"),
-        Node("app", 628, 190, "Installer app", ["notarized .pkg, signed", "channel catalogs"], w=W, tone="tone-brand"),
+        Node("app", 628, 190, "Installer app", ["notarized .dmg, signed", "channel catalogs"], w=W, tone="tone-brand"),
         Node("mac", 628, 290, "Your Mac", ["installs, first boot,", "then omarchy update"], w=W),
         Node("omarchy", 36, 410, "omacom/omarchy", ["the desktop: omarchy,", "omarchy-settings"], w=W, tone="tone-ext"),
         Node("upstreams", 36, 510, "Aurora and Asahi", ["aurora-silicon/linux, m1n1,", "U-Boot, installer engine"], w=W, tone="tone-ext"),
@@ -276,7 +276,7 @@ def trust_chain() -> Diagram:
     ]
     W = 380
     d.nodes = [
-        Node("apple", 36, 70, "Apple Developer ID", ["notarized installer .pkg and app"], w=W, tone="tone-brand"),
+        Node("apple", 36, 70, "Apple Developer ID", ["notarized installer .dmg and app"], w=W, tone="tone-brand"),
         Node("gk", 476, 70, "Gatekeeper", ["macOS refuses an unsigned or", "un-notarized installer"], w=W),
         Node("ed", 36, 170, "Ed25519 catalog key", ["held in a maintainer's Keychain,", "signs each channel catalog"], w=W, tone="tone-brand"),
         Node("root", 476, 170, "Trust root in the app bundle", ["catalog signature, and a sequence", "that may not go backwards"], w=W),

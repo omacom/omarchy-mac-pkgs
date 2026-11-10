@@ -13,7 +13,7 @@
 <g class="node tone-brand">
 <rect x="36" y="70" width="380" height="57"/>
 <text class="n-title" x="48" y="91">Apple Developer ID</text>
-<text class="n-sub" x="48" y="110">notarized installer .pkg and app</text>
+<text class="n-sub" x="48" y="110">notarized installer .dmg and app</text>
 </g>
 <g class="node">
 <rect x="476" y="70" width="380" height="74"/>
