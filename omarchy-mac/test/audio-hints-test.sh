@@ -20,7 +20,9 @@ def hides(name, present):
     if any(pattern.fullmatch(name) for pattern in hidden):
         return True
     return any(node.fullmatch(name) and any(other != name and by.fullmatch(other) for other in present) for node, by in replaced)
-laptops = '293 313 314 316 413 414 415 416 493 504 514 516 613 615'.split()
+# 716 is the 16-inch M5 Pro, which has no asahi-audio graph yet: one named like
+# the others needs no change here.
+laptops = '293 313 314 316 413 414 415 416 493 504 514 516 613 615 716'.split()
 for board in laptops:
     mic = 'effect_output.j%s-mic' % board
     assert hides('effect_output.j%s-convolver' % board, []), board

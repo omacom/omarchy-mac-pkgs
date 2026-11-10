@@ -25,8 +25,9 @@ def description(name):
     found = [value for names, value in rules if any(matched(pattern, name) for pattern in names)]
     assert len(found) <= 1, (name, found)
     return found[0] if found else None
-# Every node asahi-audio 4.x names, by the graphs its rules load.
-laptops = '293 313 314 316 413 414 415 416 493 504 514 516 613 615'.split()
+# Every node asahi-audio 4.x names, by the graphs its rules load, and the 16-inch
+# M5 Pro (716), whose graph is not in asahi-audio yet, under the same names.
+laptops = '293 313 314 316 413 414 415 416 493 504 514 516 613 615 716'.split()
 for board in laptops:
     assert description('audio_effect.j%s-convolver' % board) == 'MacBook Speakers', board
     assert description('effect_output.j%s-mic' % board) == 'MacBook Microphone (Mono)', board

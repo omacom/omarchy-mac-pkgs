@@ -907,16 +907,19 @@ with tempfile.TemporaryDirectory() as temporary:
         assert audio.default == DSP and not audio.existing
 print('ok - the DSP microphone is mapped from its AUX0 or MONO port, onto stereo or negotiated MONO capture')
 
-# The array is an Apple HPAI card (M1, M2), or the AOP card on J700, that
-# asahi-audio's rules build a DSP microphone for; a Mac mini's or a USB card
-# is none, nor is an array card the rules do not name, or unreadable files.
+# The array is an Apple HPAI card (M1, M2), or the AOP card on J700 and J716, that
+# asahi-audio's rules build a DSP microphone for; a Mac mini's, a USB card or the J716's
+# speaker card alone is none, nor is an array card the rules do not name, or unreadable files.
 with tempfile.TemporaryDirectory() as temporary:
     cards = Path(temporary) / 'cards'; conf = Path(temporary) / 'conf.d'; conf.mkdir()
-    (conf / '99-asahi.conf').write_text('{ api.alsa.path = "hw:AppleJ416HPAI,0" }\n{ api.alsa.path = "hw:AppleJ700AOP,1" }\n')
+    (conf / '99-asahi.conf').write_text('{ api.alsa.path = "hw:AppleJ416HPAI,0" }\n{ api.alsa.path = "hw:AppleJ700AOP,1" }\n'
+                                        '{ api.alsa.path = "hw:AppleJ716AOP,0" }\n')
     with mock.patch.object(m, 'ASOUND_CARDS', cards), mock.patch.object(m, 'WIREPLUMBER_CONF', conf):
         assert not m.Audio().array(), 'a missing cards file is no array'
         for text, expected in ((' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n 1 [AppleJ416      ]: macaudio - MacBook Pro J416\n', True),
                                (' 0 [AppleJ700AOP   ]: t8140_aop_audio - MacBook Neo J700 AOP\n', True),
+                               (' 0 [AppleJ716AOP   ]: t8140_aop_audio - MacBook Pro J716 AOP\n 1 [AppleJ716      ]: macaudio - MacBook Pro J716\n', True),
+                               (' 0 [AppleJ716      ]: macaudio - MacBook Pro J716\n', False),
                                (' 0 [AppleJ274HPAI  ]: aop_audio - Mac mini J274 HPAI\n', False),
                                (' 0 [AppleJ274      ]: macaudio - Mac mini J274\n 1 [Device         ]: USB-Audio - USB Audio Device\n', False)):
             cards.write_text(text)
