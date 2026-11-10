@@ -5,8 +5,6 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 "$ROOT/install" "$work/root"
 helper="$work/root/usr/lib/omarchy-mac/wait-for-display"
-# Root and unprivileged tests both run the installed helper against fixture roots.
-sed -i "s|^proc=/proc$|proc=$work/proc|;s|^dev=/dev$|dev=$work/dev|;s|^sys=/sys$|sys=$work/sys|" "$helper"
 export OMARCHY_PROC_ROOT="$work/proc" OMARCHY_DEV_ROOT="$work/dev" OMARCHY_SYS_ROOT="$work/sys"
 mkdir -p "$work/bin" "$work/proc/device-tree" "$work/dev/dri" "$work/sys/class/drm"
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'

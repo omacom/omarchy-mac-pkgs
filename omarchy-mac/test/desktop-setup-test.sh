@@ -46,8 +46,6 @@ for helper in electron-launchers electron-desktop-entries; do
 done
 pass 'the setup entrypoints, platform files and Electron helpers are staged'
 
-(( EUID != 0 )) || { pass 'fixture roots are ignored as root; behaviour cases skipped'; exit 0; }
-
 mkdir -p "$work/bin" "$work/apps"
 cat >"$work/bin/omarchy-hw-platform" <<'STUB'
 #!/bin/bash

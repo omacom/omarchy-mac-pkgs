@@ -10,8 +10,6 @@ grep -qx 'ExecStartPre=-/usr/lib/omarchy-mac/wait-for-display' "$dropin" || fail
 [[ -x $wait ]] || fail 'greeter wait helper is staged'
 pass 'greeter drop-in and helper are staged'
 
-(( EUID != 0 )) || { pass 'fixture roots are ignored as root; behaviour cases skipped'; exit 0; }
-
 mkdir -p "$work/bin"
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 #!/bin/bash

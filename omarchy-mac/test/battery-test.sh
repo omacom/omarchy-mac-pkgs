@@ -48,8 +48,8 @@ saved="$work/etc/udev/macsmc-battery.conf"
 mkdir -p "$battery" "${saved%/*}" "$work/bin"
 export BATTERY="$battery" SAVED="$saved" SUDO_LOG="$work/sudo.log"
 
-# Exercise the terminal sudo path even when the suite runs as root, against a
-# fixture battery and saved-limit file.
+# Point the commands at a fixture battery and saved-limit file, and mark the
+# charge-limit command's root branch so the root case below can turn it on.
 fixture() {
   sed -e "s|/sys/class/power_supply/macsmc-battery|$battery|" \
     -e "s|/etc/udev/macsmc-battery.conf|$saved|" \
