@@ -17,7 +17,7 @@ tr '\0' '\n' < /proc/device-tree/compatible
 
 In macOS, `sysctl hw.model` shows the model identifier, such as `MacBookPro18,3`.
 
-The first release is qualified on the MacBook Pro 14" M1 Pro (`apple,j314s`) and the MacBook Pro 16" M2 Max (`apple,j416c`). The signed catalog on each channel lists every identifier it admits, and the installer refuses any other Mac before touching the disk. M1 and M2 Macs only: M3 and M4 Macs are not supported.
+The first release is qualified on the MacBook Pro 14" M1 Pro (`apple,j314s`) and the MacBook Pro 16" M2 Max (`apple,j416c`). The signed catalog on each channel lists every identifier it admits, and the installer refuses any other Mac before touching the disk. The stable catalog admits M1 and M2 Macs, and also M3 Macs and the MacBook Neo, which it marks untested. M4 Macs are not supported.
 
 ## Reference machines
 
@@ -37,7 +37,7 @@ This is what the first release is qualified against on both reference Macs. <spa
 | Apple GPU | <span class="status ok">works</span> | Mesa `vulkan-asahi`, hardware acceleration. A desktop on `llvmpipe` means something is wrong. |
 | Internal display, brightness | <span class="status ok">works</span> | The panel includes the strip beside the notch |
 | Keyboard, backlight, trackpad | <span class="status ok">works</span> | Drivers loaded early, so they work at the passphrase prompt. The backlight follows the ambient light sensor. See [Keyboard and trackpad]({{page:keyboard}}). |
-| Wi-Fi, Bluetooth | <span class="status ok">works</span> | NetworkManager with the iwd backend. Wi-Fi on BCM4378 and BCM4387 chips recovers after resume. Wi-Fi 6E Macs join on 2.4 and 5 GHz: a 6 GHz join passes no traffic with the current firmware. On the MacBook Neo's MT7932, NetworkManager rather than iwd reconnects, so a connect the firmware rejects is retried. |
+| Wi-Fi, Bluetooth | <span class="status ok">works</span> | NetworkManager with the iwd backend. Wi-Fi on BCM4378, BCM4387 and BCM4388 chips recovers after resume. Wi-Fi 6E Macs join on 2.4 and 5 GHz: a 6 GHz join passes no traffic with the current firmware. On the MacBook Neo's MT7932, NetworkManager rather than iwd reconnects, so a connect the firmware rejects is retried. |
 | Speakers, microphone, headphones | <span class="status ok">works</span> | Asahi's DSP chain with `speakersafetyd` protecting the speakers. The microphone array is mapped, and a headset microphone takes priority when plugged in. If the microphone is still missing 30 s after the session starts, or when an update changes its DSP chain, one restart of the audio session is attempted to bring it back without a reboot. |
 | Suspend and resume | <span class="status ok">works</span> | Open the lid or press the power button to wake the Mac. A key press or trackpad click does not wake it: the kernel drivers for the built-in keyboard and trackpad do not register as a wakeup source on M1 or M2 MacBooks. Closed in a bag, it stays asleep. |
 | Battery, lid, power profiles | <span class="status ok">works</span> | |
@@ -59,9 +59,9 @@ Everything below the desktop is the Asahi Linux project's work, and the authorit
 - [M2 feature support](https://asahilinux.org/docs/platform/feature-support/m2/)
 - [Overview across chips](https://asahilinux.org/docs/platform/feature-support/overview/)
 
-### M3 MacBook Air (edge testers)
+### M3 MacBook Air (untested)
 
-M3 Macs are not part of the first release. On an M3 MacBook Air, 13-inch or 15-inch, m1n1 hands the built-in display and the GPU to Linux on every boot, as on M1 and M2 Macs, once `pacman -Q m1n1-aurora` reports 1.6.1.aurora21-1 or newer. Nothing in `/etc/m1n1.conf` is needed for that: m1n1 applies these defaults itself.
+On an M3 MacBook Air, 13-inch or 15-inch, m1n1 hands the built-in display and the GPU to Linux on every boot, as on M1 and M2 Macs, once `pacman -Q m1n1-aurora` reports 1.6.1.aurora21-1 or newer. Nothing in `/etc/m1n1.conf` is needed for that: m1n1 applies these defaults itself.
 
 ```
 chosen.asahi,t8122-dcp=1
