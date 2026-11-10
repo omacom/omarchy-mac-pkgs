@@ -264,14 +264,12 @@ grep -Fxq 'Type = Package' "$hook" && grep -Fxq 'Target = omarchy-mac-boot' "$ho
 order=(95-m1n1-install.hook "${hook##*/}")
 [[ $(printf '%s\n' "${order[@]}" | LC_ALL=C sort) == "$(printf '%s\n' "${order[@]}")" ]] ||
   fail "the hook runs after 95-m1n1-install.hook, so boot.bin is built last from the switches"
-if (( EUID != 0 )); then
-  staged=$work/staged
-  "$ROOT/install" "$staged"
-  [[ -x $staged/usr/share/libalpm/scripts/omarchy-mac-m3-air ]] || fail 'the hook script is installed executable'
-  leaf=$staged/usr/lib/omarchy-mac/boot/setup/m1n1-display.sh
-  printf 'echo "leaf PATH=$PATH" >>"%s"\nreturn 1\n' "$work/hook-ran" >"$leaf"
-  OMARCHY_MAC_BOOT_ROOT=$staged "$staged/usr/share/libalpm/scripts/omarchy-mac-m3-air" ||
-    fail 'a failing leaf never fails the pacman transaction'
-  grep -q '^leaf ' "$work/hook-ran" || fail 'the hook script runs the staged leaf'
-fi
+staged=$work/staged
+"$ROOT/install" "$staged"
+[[ -x $staged/usr/share/libalpm/scripts/omarchy-mac-m3-air ]] || fail 'the hook script is installed executable'
+leaf=$staged/usr/lib/omarchy-mac/boot/setup/m1n1-display.sh
+printf 'echo "leaf PATH=$PATH" >>"%s"\nreturn 1\n' "$work/hook-ran" >"$leaf"
+OMARCHY_MAC_BOOT_ROOT=$staged "$staged/usr/share/libalpm/scripts/omarchy-mac-m3-air" ||
+  fail 'a failing leaf never fails the pacman transaction'
+grep -q '^leaf ' "$work/hook-ran" || fail 'the hook script runs the staged leaf'
 pass 'an update of omarchy-mac-boot or m1n1-aurora runs the M3 Air leaf again, after the m1n1 rebuild, and never fails'
