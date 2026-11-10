@@ -22,7 +22,7 @@ for flags_dir in "${flag_dirs[@]}"; do
   for flags in "$flags_dir"/{chromium,chrome,microsoft-edge-stable,brave,brave-origin}-flags.conf; do
     [[ -f $flags ]] || continue
     if grep -q -- '^--disable-features=' "$flags"; then
-      sed -i -E '/^--disable-features=/{/[=,]AcceleratedVideoDecoder([,[:space:]]|$)/!s/^(--disable-features=[^[:space:]]*)/\1,AcceleratedVideoDecoder/;s/^--disable-features=,/--disable-features=/}' "$flags"
+      sed -i --follow-symlinks -E '/^--disable-features=/{/[=,]AcceleratedVideoDecoder([,[:space:]]|$)/!s/^(--disable-features=[^[:space:]]*)/\1,AcceleratedVideoDecoder/;s/^--disable-features=,/--disable-features=/}' "$flags"
     else
       [[ -z $(tail -c1 "$flags") ]] || echo >>"$flags"
       echo '--disable-features=AcceleratedVideoDecoder' >>"$flags"
