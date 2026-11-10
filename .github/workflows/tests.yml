@@ -106,6 +106,7 @@ jobs:
           for suite in tools/acceptance/test/mac-image-run-test.sh tools/acceptance/test/asahi-fresh-run-test.sh \
             tools/release/test/omacom-lane tools/release/test/candidate-set; do
             echo "::group::$suite"
-            docker exec -u tester -e HOME=/home/tester arch bash "$suite"
+            # With CI set, omacom-lane fails rather than skips without the full history.
+            docker exec -u tester -e HOME=/home/tester -e CI arch bash "$suite"
             echo "::endgroup::"
           done

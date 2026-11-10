@@ -578,8 +578,8 @@ GIT_CONFIG_GLOBAL=$tmp/hostile.gitconfig lib git_source_sha256 "$tmp/sum.git" "$
 echo "ok - a git source hashes to what makepkg -g records, whatever the operator's git settings"
 
 # omarchy-mac-pkgs commits and the checksums makepkg recorded for them in
-# omacom/omarchy-pkgs, when this checkout has their history (a shallow
-# checkout does not).
+# omacom/omarchy-pkgs. A shallow checkout lacks their history and skips,
+# except in CI, where a skip would hide the check.
 known=(
   5b2c815f007dd01a8ad9bb26f8af977c19e6a130 d44aadb3e396092d91e86cd5df24905bbcf7407ed7b33e7d6e47dd0671ba0bf3
   162f3599ee1144d7cf44b1ae12a7eb14ba758b8a 31be04e5cd902403997756660bb50494c7f7978f1de1192edad426b543c15e01
@@ -591,6 +591,7 @@ have_known=1
 for (( i = 0; i < ${#known[@]}; i += 2 )); do
   [[ -n $self ]] && git -C "$self" cat-file -e "${known[i]}^{commit}" 2>/dev/null || have_known=0
 done
+rm -f "$tmp/out"
 if (( have_known )); then
   # A clone sharing the objects, so hashing writes nothing into this checkout.
   git clone --quiet --bare --shared "$self" "$tmp/self.git"
@@ -599,6 +600,8 @@ if (( have_known )); then
       fail "the checksum of omarchy-mac-pkgs ${known[i]:0:12} is not the ${known[i + 1]:0:12} makepkg recorded"
   done
   echo "ok - omarchy-mac-pkgs commits hash to the checksums makepkg recorded in omarchy-pkgs"
+elif [[ ${CI:-} == "true" ]]; then
+  fail "CI's checkout lacks the omarchy-mac-pkgs history the recorded checksums name; check it out with fetch-depth: 0"
 else
   echo "ok - # skip: this checkout lacks the omarchy-mac-pkgs history the recorded checksums name"
 fi
