@@ -54,6 +54,6 @@ Nothing is trusted because of where it came from. Each artefact carries its own 
 | Packages in `[omarchy]`, the Mac packages included | Omarchy's package signing key, trusted through `omarchy-keyring` |
 | Channel catalogs the installer reads | One Ed25519 key held in a maintainer's Keychain. Its public half is compiled into the app, so rotating it means shipping a new app. |
 | The image | The SHA-256 of every part, listed in the signed catalog |
-| Installer app and `.pkg` | An Apple Developer ID, notarized |
+| Installer app and its `.dmg` | An Apple Developer ID, notarized |
 
 pacman runs with `SigLevel = Required`, so an unsigned package is refused. No repository on a Mac is configured with `TrustAll`.
