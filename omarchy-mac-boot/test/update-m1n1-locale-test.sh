@@ -32,13 +32,13 @@ c_order=$(printf '%s\n' "${names[@]}" | LC_ALL=C sort)
 utf8_order=$(printf '%s\n' "${names[@]}" | LC_ALL=$utf8_locale sort)
 [[ $c_order != "$utf8_order" ]] || fail "the fixture's device trees sort differently in C and $utf8_locale"
 
-# update-m1n1's own steps, as /bin/sh: source the defaults file when present,
-# fill DTBS, then concatenate the unquoted glob. Arguments are the defaults
-# file (or nothing) and the caller's locale environment.
+# update-m1n1's own steps under a Mac's /bin/sh, bash in POSIX mode, on any host:
+# source the defaults file when present, fill DTBS, then concatenate the unquoted
+# glob. Arguments are the defaults file (or nothing) and the caller's locale.
 update_m1n1_order() {
   local defaults=$1
   shift
-  env "$@" OMARCHY_DTB_OVERLAYS=0 sh -c '
+  env "$@" OMARCHY_DTB_OVERLAYS=0 bash --posix -c '
     [ -z "$1" ] || . "$1"
     : ${DTBS:="$2/*.dtb"}
     cat $DTBS
