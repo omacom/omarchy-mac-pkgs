@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# tools/release/mac-release --lane fork's options against a release in
+# progress in a temporary state root. gh, curl and ssh are stubs that fail and
+# git reaches only local repositories, so nothing leaves the machine.
+#
+#   tools/release/test/fork-lane
+
+set -euo pipefail
+
+TOOLS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+release=$TOOLS/mac-release
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "not ok - $1" >&2
+  [[ ! -f $tmp/out ]] || sed 's/^/  | /' "$tmp/out" >&2
+  exit 1
+}
+
+while read -r name; do unset "$name"; done < <(compgen -e | grep '^ASAHI_RELEASE_' || true)
+export HOME=$tmp/home XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/config
+export GIT_ALLOW_PROTOCOL=file
+export GIT_CONFIG_GLOBAL=$tmp/gitconfig GIT_CONFIG_NOSYSTEM=1
+export GIT_AUTHOR_NAME=Tester GIT_AUTHOR_EMAIL=tester@example.invalid GIT_COMMITTER_NAME=Tester GIT_COMMITTER_EMAIL=tester@example.invalid
+git config --global uploadpack.allowFilter true
+mkdir -p "$HOME" "$tmp/bin"
+for tool in gh curl ssh; do
+  printf '#!/bin/bash\necho "%s $*" >>%q\nexit 1\n' "$tool" "$tmp/network.log" >"$tmp/bin/$tool"
+  chmod +x "$tmp/bin/$tool"
+done
+export PATH=$tmp/bin:$PATH
+
+# omarchy-mx-mac with one commit on main; the omarchy-pkgs clone fails.
+git init --quiet -b main "$tmp/mx-work"
+git -C "$tmp/mx-work" commit --quiet --allow-empty -m change
+source_commit=$(git -C "$tmp/mx-work" rev-parse HEAD)
+git clone --quiet --bare "$tmp/mx-work" "$tmp/mx.git"
+export ASAHI_RELEASE_MX_GIT=$tmp/mx.git ASAHI_RELEASE_PKGS_GIT=$tmp/missing-pkgs.git
+
+state=$XDG_STATE_HOME/omarchy-release
+id=0123456789ab-20261110T000000Z
+seed() {
+  rm -rf "$state"
+  mkdir -p "$state/$id/steps"
+  echo "head=1" >"$state/$id/steps/resolve"
+  echo "$id" >"$state/active"
+}
+
+in_progress() {
+  [[ $(<"$state/active") == "$id" && -s $state/$id/steps/resolve ]] || fail "$1: the release in progress changed"
+  ! compgen -G "$state/$id.abandoned-*" >/dev/null || fail "$1: the release was abandoned"
+}
+
+for options in "--dry-run --abandon" "--abandon --dry-run"; do
+  seed
+  status=0
+  "$BASH" "$release" --lane fork $options >"$tmp/out" 2>&1 || status=$?
+  (( status == 64 )) || fail "$options exits 64 as a usage error (got $status)"
+  in_progress "$options"
+  echo "ok - $options is refused and leaves the release in progress"
+done
+
+seed
+"$BASH" "$release" --lane fork --abandon >"$tmp/out" 2>&1 || fail "--abandon alone exits 0"
+[[ ! -e $state/active && ! -d $state/$id ]] || fail "--abandon alone drops the release in progress"
+compgen -G "$state/$id.abandoned-*/steps/resolve" >/dev/null || fail "--abandon alone keeps its records"
+echo "ok - --abandon alone drops the release in progress"
+
+seed
+status=0
+"$BASH" "$release" --lane fork --dry-run "$source_commit" >"$tmp/out" 2>&1 || status=$?
+if (( status != 1 )) || ! grep -Fq "could not clone $tmp/missing-pkgs.git" "$tmp/out"; then
+  fail "--dry-run alone resolves its inputs (got $status)"
+fi
+in_progress "--dry-run alone"
+echo "ok - --dry-run alone resolves its inputs and leaves the release in progress"
+
+[[ ! -s $tmp/network.log ]] || fail "nothing calls gh, curl or ssh: $(<"$tmp/network.log")"
+echo "ok - nothing calls gh, curl or ssh"

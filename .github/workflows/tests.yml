@@ -104,7 +104,7 @@ jobs:
         if: ${{ !cancelled() && steps.arch.outcome == 'success' }}
         run: |
           for suite in tools/acceptance/test/mac-image-run-test.sh tools/acceptance/test/asahi-fresh-run-test.sh \
-            tools/release/test/omacom-lane tools/release/test/candidate-set; do
+            tools/release/test/omacom-lane tools/release/test/candidate-set tools/release/test/fork-lane; do
             echo "::group::$suite"
             docker exec -u tester -e HOME=/home/tester arch bash "$suite"
             echo "::endgroup::"
