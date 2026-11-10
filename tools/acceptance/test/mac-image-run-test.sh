@@ -55,11 +55,74 @@ done
 [[ ! -e $test_tmp/home ]] || fail "a refused host keeps no state"
 pass "valid selections reach the host checks, and a refused host keeps no state"
 
-# The cases that wait for an entrypoint probe the paths their skip reasons name.
-for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check /usr/lib/omarchy/mac-boot/reset-prepare; do
-  [[ $(grep -Fc -- "$path" "$harness") -ge 2 ]] || fail "$path is both probed and named in its skip reason"
+# The scenarios that drive an omarchy-mac-boot entrypoint or boot hook probe its path.
+entrypoints=(update:/usr/lib/omarchy/mac-boot/update-verify snapshot-restore:/etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check factory-reset:/usr/lib/omarchy/mac-boot/reset-prepare)
+for entry in "${entrypoints[@]}"; do
+  grep -Fq -- "$entry" "$harness" || fail "the image probe keys ${entry%%:*} to ${entry#*:}"
 done
-pass "each entrypoint case probes the path its skip reason names"
+pass "the image probe keys each entrypoint scenario to its path"
+
+# The harness's own result helpers and entrypoint scenarios, stopped at the
+# conversion they need, so a scenario that gets past its entrypoint check boots nothing.
+{
+  grep -E '^(record|not_ok|ok|skip)\(\) \{' "$harness"
+  awk '/^scenario_(update|snapshot_restore|factory_reset)\(\) \{/,/^}/' "$harness"
+} >"$test_tmp/entrypoint-scenarios.sh"
+run_entrypoint_scenario() {
+  rm -rf "$test_tmp/evidence"
+  mkdir -p "$test_tmp/evidence"
+  # shellcheck disable=SC2034 # read by the sourced harness functions
+  (
+    declare -A image_ships=()
+    [[ -z $2 ]] || image_ships[$1]=$2
+    evidence_dir=$test_tmp/evidence checks_failed=0
+    need_conversion() { echo "need_conversion $1" >>"$evidence_dir/run.txt"; exit 0; }
+    source "$test_tmp/entrypoint-scenarios.sh"
+    "scenario_${1//-/_}"
+    echo "checks_failed=$checks_failed" >>"$evidence_dir/run.txt"
+  ) >"$test_tmp/out" 2>&1
+}
+
+log=$test_tmp/evidence/run.txt
+for entry in "${entrypoints[@]}"; do
+  name=${entry%%:*} path=${entry#*:}
+  run_entrypoint_scenario "$name" "" || fail "$name without its entrypoint returns to the run" "$(cat "$test_tmp/out")"
+  grep -Eq "^not ok - $name: .*${path//./\\.}" "$log" || fail "$name without $path records not ok naming it" "$(cat "$log")"
+  ! grep -q '^skip - ' "$log" || fail "$name without $path records no skip" "$(cat "$log")"
+  grep -Fxq 'checks_failed=1' "$log" || fail "$name without $path fails the run" "$(cat "$log")"
+  ! grep -q '^need_conversion' "$log" || fail "$name without $path boots nothing" "$(cat "$log")"
+
+  run_entrypoint_scenario "$name" "$path" || fail "$name with its entrypoint reaches its conversion" "$(cat "$test_tmp/out")"
+  grep -Fxq "need_conversion $name" "$log" || fail "$name with $path goes on to its conversion" "$(cat "$log")"
+  ! grep -Eq '^(not ok|skip) - ' "$log" || fail "$name with $path records no failure or skip" "$(cat "$log")"
+done
+pass "a selected scenario fails the run when the image lacks its entrypoint, and runs when it has it"
+
+# The probe reads the image root, never the host, even through an absolute link
+# such as the snapshot check hook's; sudo runs the real test and readlink.
+grep -Fq '! image_has "$lower" "${path#*:}"' "$harness" || fail "the image probe goes through image_has"
+awk '/^image_has\(\) \{/,/^}/' "$harness" >"$test_tmp/image-has.sh"
+image_has_in_fixture() {
+  (
+    sudo() { [[ $1 != -n ]] || shift; "$@"; }
+    source "$test_tmp/image-has.sh"
+    image_has "$test_tmp/image" "$1"
+  )
+}
+mkdir -p "$test_tmp/image/usr/bin" "$test_tmp/image/usr/lib/omarchy/mac-boot" "$test_tmp/image/etc/boot/hooks/pre.d"
+: >"$test_tmp/image/usr/bin/omarchy-mac-snapshot-check"
+: >"$test_tmp/image/usr/lib/omarchy/mac-boot/update-verify"
+ln -s /usr/bin/omarchy-mac-snapshot-check "$test_tmp/image/etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check"
+ln -s /usr/bin/env "$test_tmp/image/etc/boot/hooks/pre.d/host-only"
+ln -s ../../../../usr/bin/omarchy-mac-snapshot-check "$test_tmp/image/etc/boot/hooks/pre.d/relative"
+ln -s missing "$test_tmp/image/etc/boot/hooks/pre.d/dangling"
+for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check /etc/boot/hooks/pre.d/relative; do
+  image_has_in_fixture "$path" || fail "the image has $path"
+done
+for path in /usr/lib/omarchy/mac-boot/reset-prepare /etc/boot/hooks/pre.d/host-only /etc/boot/hooks/pre.d/dangling; do
+  ! image_has_in_fixture "$path" || fail "the image lacks $path"
+done
+pass "the image probe finds files and links that resolve inside the image, and nothing only the host has"
 
 # Owner setup over a recorded console: the harness's own serial functions read
 # a log written in advance, and the guest has already exited, so a prompt that

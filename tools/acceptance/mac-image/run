@@ -61,9 +61,9 @@ declare -A about=(
   [conversion]="encrypted install: LUKS2 conversion in the initrd, first boot, owner setup re-keys to the owner password alone"
   [second-boot]="the re-keyed disk boots Limine's command line: a wrong password is refused, the owner's unlocks"
   [password-change]="omarchy-drive-password moves the disk to a new password; the next boot unlocks with it and the login password stays"
-  [update]="omarchy update -y on the re-keyed disk: packages upgrade, boot files verify, the updated disk boots (needs update-verify, omacom/omarchy-mac#543)"
-  [snapshot-restore]="omarchy-snapshot create adds a Limine entry that boots the snapshot; omarchy-snapshot restore puts it back (needs the snapshot boot check, ticket 36)"
-  [factory-reset]="omarchy-system-factory-reset wipes the owner, /etc drift and the old keys; owner setup runs again (needs reset-prepare, ticket 34)"
+  [update]="omarchy update -y on the re-keyed disk: packages upgrade, boot files verify, the updated disk boots (needs update-verify)"
+  [snapshot-restore]="omarchy-snapshot create adds a Limine entry that boots the snapshot; omarchy-snapshot restore puts it back (needs the snapshot restore check)"
+  [factory-reset]="omarchy-system-factory-reset wipes the owner, /etc drift and the old keys; owner setup runs again (needs reset-prepare)"
 )
 
 while (($#)); do
@@ -362,6 +362,18 @@ limine_cmdline() {
 # ── the generic kernel, the Apple device tree and the image's own initramfs ──
 declare -A image_ships=()
 
+# True when the image root $1 holds $2. An absolute link resolves inside that
+# root, not on the host: the snapshot check hook links to /usr/bin.
+image_has() {
+  local root=$1 path=$2 target
+  target=$(sudo -n readlink "$root$path" 2>/dev/null) || target=""
+  if [[ $target == /* ]]; then
+    sudo -n test -e "$root$target"
+  else
+    sudo -n test -e "$root$path"
+  fi
+}
+
 build_generic_kernel() {
   say "building the generic ALARM kernel and an initramfs from the image's mkinitcpio hooks"
   mkdir -p "$work/generic" "$work/dl"
@@ -393,7 +405,7 @@ build_generic_kernel() {
   for path in update:/usr/lib/omarchy/mac-boot/update-verify \
       snapshot-restore:/etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check \
       factory-reset:/usr/lib/omarchy/mac-boot/reset-prepare; do
-    ! sudo -n test -e "$lower${path#*:}" || image_ships[${path%%:*}]=${path#*:}
+    ! image_has "$lower" "${path#*:}" || image_ships[${path%%:*}]=${path#*:}
   done
   local image_kernel
   image_kernel=$(ls "$lower/usr/lib/modules")
@@ -1000,7 +1012,7 @@ runtime_versions() {
 # what update-verify checks, and a real Mac boots them.
 scenario_update() {
   if [[ -z ${image_ships[update]:-} ]]; then
-    skip "update: the image has no /usr/lib/omarchy/mac-boot/update-verify (post-update boot verification, omacom/omarchy-mac#543)"
+    not_ok "update: the image has no /usr/lib/omarchy/mac-boot/update-verify, omarchy-mac-boot's post-update boot verification"
     return 0
   fi
   need_conversion update
@@ -1080,7 +1092,7 @@ snapshot_cmdline() {
 # a Mac.
 scenario_snapshot_restore() {
   if [[ -z ${image_ships[snapshot-restore]:-} ]]; then
-    skip "snapshot-restore: the image has no /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check (snapshot boot and restore, ticket 36)"
+    not_ok "snapshot-restore: the image has no /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check, omarchy-mac-boot's snapshot restore check"
     return 0
   fi
   need_conversion snapshot-restore
@@ -1142,7 +1154,7 @@ scenario_snapshot_restore() {
 # unlocks with the new password.
 scenario_factory_reset() {
   if [[ -z ${image_ships[factory-reset]:-} ]]; then
-    skip "factory-reset: the image has no /usr/lib/omarchy/mac-boot/reset-prepare (factory reset through lifecycle dispatch, ticket 34)"
+    not_ok "factory-reset: the image has no /usr/lib/omarchy/mac-boot/reset-prepare, omarchy-mac-boot's factory reset entrypoint"
     return 0
   fi
   need_conversion factory-reset
