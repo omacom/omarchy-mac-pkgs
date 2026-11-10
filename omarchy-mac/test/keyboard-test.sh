@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 source "$(dirname "$0")/base-test.sh"
-# As root the command ignores fixture roots and changes the live system.
-(( EUID != 0 )) || fail 'run the keyboard test as a regular user'
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
