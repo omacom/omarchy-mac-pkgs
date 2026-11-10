@@ -3,6 +3,9 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 export ROOT
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf '%s\n' "not ok - $1" "${@:2}" >&2; exit 1; }
+# As root the entrypoints ignore fixture roots and act on the live system. The
+# suites that rerun themselves as root in a privileged container don't source this.
+(( EUID != 0 )) || fail 'run the tests as a regular user'
 require_command() { command -v "$1" >/dev/null || fail "required command is available: $1"; }
 # Fixture core helpers without requiring an installed desktop.
 export PATH="$ROOT/test/helpers:$PATH"

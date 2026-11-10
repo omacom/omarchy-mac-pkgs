@@ -5,7 +5,6 @@ source "$(dirname "$0")/base-test.sh"
 # setup-boot, omarchy-lifecycle-dispatch's boot setup operation: the GRUB
 # console leaf, then the Limine leaf, from the staged package, with the rebuild
 # request only on an image's first boot.
-(( EUID != 0 )) || { pass 'fixture roots are ignored as root; behaviour cases skipped'; exit 0; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 root=$work/root
