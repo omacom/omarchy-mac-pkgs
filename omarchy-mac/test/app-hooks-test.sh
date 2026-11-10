@@ -13,8 +13,6 @@ for entry in post-install pre-remove; do
 done
 pass 'the app hook entrypoints are staged'
 
-(( EUID != 0 )) || { pass 'fixture roots are ignored as root; behaviour cases skipped'; exit 0; }
-
 mkdir -p "$work/bin" "$work/home"
 for command in sudo omarchy-pkg-drop omarchy-launch-steam omarchy-hw-platform; do
   case $command in

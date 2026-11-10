@@ -3,6 +3,8 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 export ROOT
 pass() { printf 'ok - %s\n' "$1"; }
 fail() { printf 'not ok - %s %s\n' "$1" "${2:-}" >&2; exit 1; }
+# As root the commands ignore fixture roots and act on the live system.
+(( EUID != 0 )) || fail 'run the tests as a regular user'
 # The runtime's Apple predicate over the stubbed detector, which names a Mac
 # aarch64-apple, or apple-silicon on a runtime from before the platform rename.
 stub_apple_predicate() {
