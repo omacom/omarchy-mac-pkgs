@@ -8,7 +8,7 @@ On an Apple keyboard, Command is Omarchy's `Super` key, so every binding in [Hot
 
 The top row behaves as it does in macOS: press a key on its own for its media function, or hold `Fn` to send F1 to F12.
 
-External keyboards that are not Apple keyboards but use the same driver, such as Keychron boards, keep F1 to F12 first. To put F1 to F12 first on the Mac keyboard too, write `options hid_apple fnmode=2` to `/etc/modprobe.d/hid_apple.conf` and run `sudo omarchy-mac-boot-update`: the keyboard driver loads from the boot image, so the setting takes effect once that image is rebuilt. Updates keep a setting you made.
+External keyboards that are not Apple keyboards but use the same driver, such as Keychron boards, keep F1 to F12 first. To put F1 to F12 first on the Mac keyboard too, write `options hid_apple fnmode=2` to `/etc/modprobe.d/hid_apple.conf` and rebuild the boot image the keyboard driver loads from: run `sudo omarchy-mac-boot-update` on a Mac that boots Limine, or `sudo mkinitcpio -P` on an older Mac that still boots GRUB. The setting takes effect at the next boot. Updates keep a setting you made.
 
 ## Screenshots and recording
 

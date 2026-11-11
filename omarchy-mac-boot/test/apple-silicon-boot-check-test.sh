@@ -109,6 +109,11 @@ SH
 cat >"$stub_bin/mount" <<'SH'
 #!/bin/bash
 printf 'mount %s\n' "$*" >>"$TEST_CALLS"
+# What util-linux prints on stdout after a mount when the boot clock is stale.
+fstab_hint() {
+  echo "mount: (hint) your fstab has been modified, but systemd still uses"
+  echo "       the old version; use 'systemctl daemon-reload' to reload."
+}
 options="" bind=0 positional=()
 while (($#)); do
   case "$1" in
@@ -122,6 +127,7 @@ if [[ ,$options, == *,remount,* ]]; then
   [[ ${TEST_REMOUNT_FAILS:-0} != 1 ]] || exit 32
   sed -i "\|^$target |d" "$TEST_MOUNTS"
   echo "$target ro" >>"$TEST_MOUNTS"
+  fstab_hint
   exit 0
 fi
 state=rw
@@ -139,6 +145,7 @@ else
 fi
 cp -a "$source/." "$target/"
 echo "$target $state" >>"$TEST_MOUNTS"
+fstab_hint
 SH
 cat >"$stub_bin/umount" <<'SH'
 #!/bin/bash
@@ -359,9 +366,15 @@ mounts_were_read_only() {
   [[ ! -s $mounts && -z $(ls -A "$root/run") ]] || fail "$1 leaves nothing mounted" "$(cat "$mounts"; ls -A "$root/run")"
 }
 
+fstab_hint_hidden() {
+  ! grep -Fq 'daemon-reload' "$test_tmp/out" "$test_tmp/err" ||
+    fail "$1 keeps mount's fstab hint out of its output" "$(cat "$test_tmp/out" "$test_tmp/err")"
+}
+
 expect_pass() {
   (( status == 0 )) || fail "$1 passes" "status $status: $(cat "$test_tmp/err")"
   mounts_were_read_only "$1"
+  fstab_hint_hidden "$1"
 }
 
 expect_fail() {
@@ -369,6 +382,7 @@ expect_fail() {
   (( status == 1 )) || fail "$description fails the check" "status $status: $(cat "$test_tmp/err")"
   grep -Fq "$message" "$test_tmp/err" || fail "$description is explained" "$(cat "$test_tmp/err")"
   mounts_were_read_only "$description"
+  fstab_hint_hidden "$description"
 }
 
 # Both kernel and bootloader pairs, named or detected.
@@ -508,6 +522,7 @@ grep -Eq "^mount -o ro PARTUUID=$partuuid $root/run/omarchy-esp\.[A-Za-z0-9]{6}\
 TEST_RO_REFUSED=1 run_check
 expect_fail "an ESP the kernel will not mount read-only" "cannot mount the system ESP (PARTUUID=$partuuid) read-only"
 (( $(grep -c '^mount ' "$calls") == 1 )) || fail "a refused read-only mount is not retried writable" "$(cat "$calls")"
+grep -Fq "PARTUUID=$partuuid already mounted" "$test_tmp/err" || fail "mount's own error still reaches stderr" "$(cat "$test_tmp/err")"
 cp -a "$esp_device" "$existing"
 TEST_EXISTING_MOUNT="$existing" run_check
 expect_pass "an ESP that is already mounted"
@@ -527,7 +542,7 @@ cp "$esp_device/m1n1/boot.bin" "$esp/m1n1/"
 run_check
 expect_pass "a builder image"
 grep -Eq "^mount --bind -o ro $esp " "$calls" || fail "a builder image reads /boot/efi like mount_sys_esp" "$(cat "$calls")"
-pass "the ESP is mounted read-only, or its existing mount bound read-only, and never mounted writable"
+pass "the ESP is mounted read-only, or its existing mount bound read-only, never mounted writable, and mount's fstab hint is not shown"
 
 # What a failed hook after the transaction leaves behind.
 system linux-aurora
