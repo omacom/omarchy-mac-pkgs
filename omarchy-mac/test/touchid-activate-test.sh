@@ -22,6 +22,8 @@ grep -Fxq 'ConditionPathExists=/var/lib/aurora-sep-keybag.bin' "$unit" ||
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$unit" ||
   fail "the unit opens /dev/sep-bio only once the owner has agreed, whatever loaded the driver"
 grep -Fxq 'Before=fprintd.service' "$unit" || fail 'fprintd starts after the unit, not alongside it'
+grep -Fxq 'After=omarchy-mac-touchid-wait.service' "$unit" ||
+  fail 'the unit runs after the wait, so a fprintd start that pulls it in finds the node'
 ! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'
 ! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the rule pulls it in'
 pass 'the Touch ID rule, unit and script are staged, and the rule alone starts the unit'
@@ -127,6 +129,33 @@ activate && [[ $(<"$status") == "ready" && $(wc -l <"$fixture/sleeps") == 3 ]] |
 printf '#!/bin/sh\necho >>"%s"\nexit 0\n' "$fixture/sleeps" >"$fixture/bin/sleep"
 pass 'the wait follows the attach as it settles'
 
+# "ready" waits until a second opener would get the node: the driver can hold
+# the session a moment after activation's own open returned, and fprintd drops
+# a busy reader until it exits.
+proc_fixture=$fixture/proc
+mkdir -p "$proc_fixture"
+printf '#!/bin/sh\nn=$(cat "%s" 2>/dev/null || echo 0); echo $((n + 1)) >"%s"\n[ "$n" -ge 3 ] && exit 0\necho "line 1: sep-bio: Device or resource busy" >&2\nexit 1\n' \
+  "$fixture/opens" "$fixture/opens" >"$fixture/bin/open-busy-3"
+printf '#!/bin/sh\necho "line 1: sep-bio: Device or resource busy" >&2\nexit 1\n' >"$fixture/bin/open-busy"
+chmod +x "$fixture/bin/open-busy-3" "$fixture/bin/open-busy"
+attributes ready attached restored usable
+rm -f "$fixture/opens"
+OMARCHY_MAC_TOUCHID_OPEN=$fixture/bin/open-busy-3 OMARCHY_MAC_TOUCHID_PROC=$proc_fixture activate &&
+  [[ $(<"$status") == "ready" && $(wc -l <"$fixture/sleeps") == 3 ]] ||
+  fail 'a session the driver releases after three tries is ready once a second open succeeds' "$(wc -l <"$fixture/sleeps")"
+! OMARCHY_MAC_TOUCHID_OPEN=$fixture/bin/open-busy OMARCHY_MAC_TOUCHID_PROC=$proc_fixture OMARCHY_MAC_TOUCHID_PROBE_TRIES=5 activate &&
+  [[ $(<"$status") == "busy" && $(wc -l <"$fixture/sleeps") == 5 ]] ||
+  fail 'a session the driver keeps busy, with nobody holding the node, is never ready' "$(<"$status")"
+grep -q 'refused a second opener after 1 s (Device or resource busy), with no process holding it' "$fixture/journal" ||
+  fail 'the journal says the node stayed busy and that no process held it' "$(<"$fixture/journal")"
+mkdir -p "$proc_fixture/4242/fd"
+ln -s "$fixture/sep-bio" "$proc_fixture/4242/fd/7"
+OMARCHY_MAC_TOUCHID_OPEN=$fixture/bin/open-busy OMARCHY_MAC_TOUCHID_PROC=$proc_fixture activate &&
+  [[ $(<"$status") == "ready" && $(wc -l <"$fixture/sleeps") == 0 ]] ||
+  fail 'a node a client such as fprintd holds, on a Touch ID that is ready, is ready at once' "$(<"$status")"
+rm -rf "$proc_fixture/4242"
+pass 'ready waits until a second opener would get the node, and a node the driver keeps busy fails, saying so'
+
 # An update runs the unit again: a later bring-up that fell short does not undo
 # this boot's "ready", but a final failure does.
 attributes ready attached restored usable
@@ -181,6 +210,8 @@ wait_unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-wait.service
 grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
   grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service' "$dropin" ||
   fail 'fprintd starts after the wait and the activation'
+grep -Fxq 'Wants=omarchy-mac-touchid-activate.service' "$dropin" ||
+  fail 'fprintd pulls the activation into its own start, so the order holds whichever is queued first'
 ! grep -qE '^(DeviceAllow|DevicePolicy|ExecStartPre)=' "$dropin" ||
   fail "the drop-in leaves fprintd's devices to libfprint-git, which owns the allowance"
 grep -Fxq 'After=omarchy-mac-touchid-load.service' "$wait_unit" ||
