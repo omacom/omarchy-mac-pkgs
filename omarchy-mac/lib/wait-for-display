@@ -90,9 +90,10 @@ if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
     "$native_display" "$native_gpu" "$((SECONDS - started))"
 else
   # Connectors are no test: simpledrm has one, and so does the GPU's own card.
-  if [[ -e $proc/device-tree/soc/display-subsystem ]]; then
+  # t6031 puts the node at the DT root, and its by-path link has no soc: prefix.
+  if [[ -e $proc/device-tree/soc/display-subsystem || -e $proc/device-tree/display-subsystem ]]; then
     for _ in {1..200}; do
-      [[ -e $dev/dri/by-path/platform-soc:display-subsystem-card ]] && break
+      [[ -e $dev/dri/by-path/platform-soc:display-subsystem-card || -e $dev/dri/by-path/platform-display-subsystem-card ]] && break
       sleep 0.05
     done
   fi

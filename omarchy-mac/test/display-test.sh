@@ -48,6 +48,18 @@ fi
 wait "$waiter" || fail 'the wait never fails the greeter'
 pass 'greeter waits for the display controller and starts when its card appears'
 
+# t6031 layout: node at the DT root, by-path link without the soc: prefix
+rmdir "$node"
+rm -f "$card"
+node="$work/proc/device-tree/display-subsystem"
+card="$work/dev/dri/by-path/platform-display-subsystem-card"
+mkdir -p "$node"
+rc=0; timeout 1 "$wait" || rc=$?
+(( rc == 124 )) || fail 'a t6031 root-level display node makes the greeter wait' "rc=$rc"
+touch "$card"
+timeout 2 "$wait" || fail 'the t6031 greeter starts once its card exists'
+pass 'root-level display node (t6031) is waited for'
+
 stage="$work/root"
 user_setup="$stage/usr/bin/omarchy-mac-setup-user"
 export HOME="$work/home" XDG_RUNTIME_DIR="$work/no-session"
