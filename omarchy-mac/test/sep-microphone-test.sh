@@ -20,6 +20,19 @@ grep -Fq 'arguments+=("$option=0")' "$work/root/usr/lib/omarchy-mac/sep-load" ||
   fail 'the helper loads the driver read-only: it never writes the xART store shared with macOS and makes no keybag'
 ! grep -Eq 'xart_writes=1|provision_keybag=1' "$unit" "$helper" "$work/root/usr/lib/omarchy-mac/sep-load" ||
   fail 'nothing here turns the writes or the provisioning on'
+grep -Eq '^After=.*\bomarchy-mac-touchid-status\.service\b' "$unit" ||
+  fail 'the unit starts after the Touch ID status, which records whether the owner has agreed'
+grep -Fxq 'ConditionPathExists=!/etc/omarchy-mac/touchid-on' "$unit" ||
+  fail "once the owner has turned Touch ID on, its own load owns the driver"
+grep -Fxq 'ExecCondition=/usr/bin/omarchy-hw-apple-silicon' "$unit" && grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/sep-for-microphone' "$unit" ||
+  fail 'the unit runs only on an Apple Silicon Mac whose microphone needs the enclave'
+grep -Fxq 'ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer' "$unit" ||
+  fail "the driver loads after the iBoot System Container's link it opens as it probes"
+! grep -Eq '^(Wants|Requires|BindsTo|After)=.*\.device' "$unit" ||
+  fail 'the load waits for the link only once its conditions hold: a device dependency holds up every boot'
+grep -Fxq 'Before=display-manager.service' "$unit" && grep -Fxq 'Type=oneshot' "$unit" && grep -Fxq 'TimeoutStartSec=30s' "$unit" ||
+  fail "the enclave is up before the session's first capture, within a bounded time"
+! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the wants link pulls it in'
 pass 'the package boots the Secure Enclave read-only at boot, only while Touch ID is off'
 
 # The helper reads only the device tree: an M1-family Mac whose tree enables
@@ -51,7 +64,7 @@ for board in 'apple,j313 apple,t8103 apple,arm-platform' 'apple,j314s apple,t600
   tree "$fixture/tree" "$board" disabled
   ! needs || fail 'a tree that disables the enclave never loads its driver' "$board"
 done
-for board in 'apple,j413 apple,t8112 apple,arm-platform' 'apple,j414s apple,t6020 apple,arm-platform' 'apple,j613 apple,t8122 apple,arm-platform'; do
+for board in 'apple,j413 apple,t8112 apple,arm-platform' 'apple,j414s apple,t6020 apple,arm-platform' 'apple,j613 apple,t8122 apple,arm-platform' 'apple,j700 apple,t8140 apple,arm-platform'; do
   tree "$fixture/tree" "$board"
   ! needs || fail 'a later Mac records without the enclave, so its driver stays unloaded' "$board"
 done
