@@ -4,6 +4,8 @@
 # parameters can be set once and a second one refuses the load with EEXIST.
 # The load never leaves a write enabled; omarchy-mac-sep-load.service runs it.
 
+omarchy-hw-apple-silicon || exit 1
+
 sysfs=${OMARCHY_MAC_SEP_SYSFS:-/sys/module}
 cmdline=${OMARCHY_MAC_SEP_CMDLINE:-/proc/cmdline}
 
