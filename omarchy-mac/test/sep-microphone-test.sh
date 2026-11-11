@@ -14,20 +14,12 @@ helper=$work/root/usr/lib/omarchy-mac/sep-for-microphone
 [[ -f $unit && -x $helper && -L $units/multi-user.target.wants/omarchy-mac-sep-load.service &&
   $(readlink "$units/multi-user.target.wants/omarchy-mac-sep-load.service") == "../omarchy-mac-sep-load.service" ]] ||
   fail 'the unit and its helper are staged, and the unit is pulled in at boot without enabling'
-grep -Fxq 'ExecStart=/usr/bin/modprobe apple-sep xart_writes=0 provision_keybag=0' "$unit" ||
-  fail 'the driver loads read-only: it never writes the xART store shared with macOS and makes no keybag'
-! grep -Eq 'xart_writes=1|provision_keybag=1' "$unit" "$helper" || fail 'nothing here turns the writes or the provisioning on'
-grep -Fxq 'ConditionPathExists=!/etc/omarchy-mac/touchid-on' "$unit" ||
-  fail "once the owner has turned Touch ID on, its own load owns the driver"
-grep -Fxq 'ExecCondition=/usr/bin/omarchy-hw-apple-silicon' "$unit" && grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/sep-for-microphone' "$unit" ||
-  fail 'the unit runs only on an Apple Silicon Mac whose microphone needs the enclave'
-grep -Fxq 'ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer' "$unit" ||
-  fail "the driver loads after the iBoot System Container's link it opens as it probes"
-! grep -Eq '^(Wants|Requires|BindsTo|After)=.*\.device' "$unit" ||
-  fail 'the load waits for the link only once its conditions hold: a device dependency holds up every boot'
-grep -Fxq 'Before=display-manager.service' "$unit" && grep -Fxq 'Type=oneshot' "$unit" && grep -Fxq 'TimeoutStartSec=30s' "$unit" ||
-  fail "the enclave is up before the session's first capture, within a bounded time"
-! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the wants link pulls it in'
+grep -Fxq 'ExecStart=/usr/lib/omarchy-mac/sep-load' "$unit" && [[ -x $work/root/usr/lib/omarchy-mac/sep-load ]] ||
+  fail 'the driver loads through the helper that keeps it read-only'
+grep -Fq 'arguments+=("$option=0")' "$work/root/usr/lib/omarchy-mac/sep-load" ||
+  fail 'the helper loads the driver read-only: it never writes the xART store shared with macOS and makes no keybag'
+! grep -Eq 'xart_writes=1|provision_keybag=1' "$unit" "$helper" "$work/root/usr/lib/omarchy-mac/sep-load" ||
+  fail 'nothing here turns the writes or the provisioning on'
 pass 'the package boots the Secure Enclave read-only at boot, only while Touch ID is off'
 
 # The helper reads only the device tree: an M1-family Mac whose tree enables
@@ -73,11 +65,59 @@ PATH="$fixture/bin:$PATH" OMARCHY_MAC_SEP_TREE=$fixture/missing "$ROOT/lib/sep-f
 (( status == 1 )) || fail 'without a device tree the unit is skipped, not failed' "$status"
 pass 'only an M1-family Mac whose device tree enables its enclave boots it'
 
+# The load passes each write option once as 0, and leaves alone what the owner
+# set elsewhere: a second setting makes the driver refuse to load (EEXIST).
+# Writes are never enabled; a driver already loaded is left as it is.
+loader=$work/root/usr/lib/omarchy-mac/sep-load
+mkdir -p "$fixture/loadbin"
+cat >"$fixture/loadbin/modprobe" <<'STUB'
+#!/bin/bash
+if [[ ${1:-} == -c ]]; then
+  cat "$FIXTURE_CONFIG"
+else
+  echo "$*" >"$FIXTURE_CALL"
+fi
+STUB
+chmod +x "$fixture/loadbin/modprobe"
+load() {
+  # $1 is modprobe's configuration, $2 the kernel command line, $3 "loaded" for a running driver
+  printf '%s' "$1" >"$fixture/config"
+  printf '%s\n' "$2" >"$fixture/cmdline"
+  rm -rf "$fixture/sys" "$fixture/call"
+  mkdir -p "$fixture/sys"
+  if [[ ${3:-} == loaded ]]; then mkdir "$fixture/sys/apple_sep"; fi
+  loaded_status=0
+  PATH="$fixture/loadbin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CALL=$fixture/call OMARCHY_MAC_SEP_SYSFS=$fixture/sys \
+    OMARCHY_MAC_SEP_CMDLINE=$fixture/cmdline "$loader" >/dev/null 2>&1 || loaded_status=$?
+  loaded_call=$(cat "$fixture/call" 2>/dev/null || true)
+}
+load '' 'quiet splash'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'with nothing set, the load passes both options as 0' "$loaded_call"
+load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep' ]] || fail 'options already at 0 elsewhere are used as they are, so a Mac nothing else loads still boots it' "$loaded_call"
+load $'options apple-sep xart_writes=0\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'only the option still missing is passed' "$loaded_call"
+load '' 'quiet apple_sep.provision_keybag=0'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'an option on the kernel command line counts as set' "$loaded_call"
+load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'apple_sep.xart_writes=0'
+[[ $loaded_status == 1 && -z $loaded_call ]] || fail 'a duplicate zero would fail with EEXIST: the unit says so instead of passing it on' "$loaded_status $loaded_call"
+for conflict in $'options apple_sep xart_writes=1 provision_keybag=1\n' $'options apple_sep xart_writes=0 provision_keybag=1\n'; do
+  load "$conflict" 'quiet'
+  [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled elsewhere are left to their owner, and never loaded here' "$conflict $loaded_call"
+done
+load '' 'quiet apple_sep.xart_writes=1'
+[[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled on the command line are never loaded here' "$loaded_call"
+load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'quiet' loaded
+[[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a driver someone else loaded is left alone' "$loaded_call"
+load $'options snd_soc_aop mic_check_123=1\noptions apple_sepx xart_writes=1\n' 'quiet snd.xart_writes=1'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'other modules options never count as the drivers' "$loaded_call"
+pass 'the load passes each write option once as 0 and never enables a write'
+
 # Verified inside the staged root, whose stub commands stand in for the
 # runtime's platform check, so the result never depends on the host.
 if command -v systemd-analyze >/dev/null; then
   mkdir -p "$work/root/usr/bin"
-  for command in omarchy-hw-apple-silicon modprobe udevadm; do
+  for command in omarchy-hw-apple-silicon udevadm; do
     printf '#!/bin/sh\nexit 0\n' >"$work/root/usr/bin/$command"
     chmod +x "$work/root/usr/bin/$command"
   done
