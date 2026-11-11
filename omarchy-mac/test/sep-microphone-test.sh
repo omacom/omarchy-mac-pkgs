@@ -100,7 +100,7 @@ load() {
   mkdir -p "$fixture/sys"
   if [[ ${3:-} == loaded ]]; then mkdir "$fixture/sys/apple_sep"; fi
   loaded_status=0
-  PATH="$fixture/loadbin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CALL=$fixture/call OMARCHY_MAC_SEP_SYSFS=$fixture/sys \
+  PATH="$fixture/loadbin:$fixture/bin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CALL=$fixture/call OMARCHY_MAC_SEP_SYSFS=$fixture/sys \
     OMARCHY_MAC_SEP_CMDLINE=$fixture/cmdline "$loader" >/dev/null 2>&1 || loaded_status=$?
   loaded_call=$(cat "$fixture/call" 2>/dev/null || true)
 }
