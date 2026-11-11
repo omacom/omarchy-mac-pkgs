@@ -1,0 +1,50 @@
+#!/bin/bash
+# Boots the Secure Enclave read-only for the microphone, whatever options the
+# owner already set: a setting is never given twice, since the driver's
+# parameters can be set once and a second one refuses the load with EEXIST.
+# The load never leaves a write enabled; omarchy-mac-sep-load.service runs it.
+
+sysfs=${OMARCHY_MAC_SEP_SYSFS:-/sys/module}
+cmdline=${OMARCHY_MAC_SEP_CMDLINE:-/proc/cmdline}
+
+if [[ -d $sysfs/apple_sep ]]; then
+  echo 'apple_sep is already loaded; its options stay as it loaded with'
+  exit 0
+fi
+
+# Every setting of the two write options from modprobe's configuration, which
+# comes before the command line in the order modprobe hands them over.
+settings=$({
+  modprobe -c | while read -r keyword module options; do
+    if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
+      printf '%s\n' $options
+    fi
+  done
+  for word in $(<"$cmdline"); do
+    if [[ ${word//-/_} == apple_sep.* ]]; then
+      echo "${word#*.}"
+    fi
+  done
+} | grep -E '^(xart_writes|provision_keybag)=' || true)
+
+arguments=()
+for option in xart_writes provision_keybag; do
+  count=0
+  while read -r name value; do
+    if [[ $name == $option ]]; then
+      if [[ $value != 0 ]]; then
+        echo "apple_sep $option=$value is set elsewhere: its owner loads the driver"
+        exit 0
+      fi
+      count=$((count + 1))
+    fi
+  done < <(sed 's/=/ /' <<<"$settings")
+  if (( count > 1 )); then
+    echo "apple_sep $option is set $count times, and a second setting makes the load fail with EEXIST: set it once" >&2
+    exit 1
+  elif (( count == 0 )); then
+    arguments+=("$option=0")
+  fi
+done
+
+exec modprobe apple-sep "${arguments[@]}"
