@@ -41,7 +41,7 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 
 On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
 
-Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.
+Turning Touch ID off later removes your fingerprints and stops the Touch ID load of the driver. The key store stays. On M1, M1 Pro and M1 Max Macs the read-only load for the microphone then still runs at every boot. To opt out of it, run `sudo systemctl mask omarchy-mac-sep-load.service`; the built-in microphones then stay silent until you run `sudo systemctl unmask omarchy-mac-sep-load.service`.
 
 ## Resetting the Mac for a new owner
 
