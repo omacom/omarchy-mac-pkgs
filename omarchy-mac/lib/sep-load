@@ -7,7 +7,6 @@
 omarchy-hw-apple-silicon || exit 1
 
 sysfs=${OMARCHY_MAC_SEP_SYSFS:-/sys/module}
-cmdline=${OMARCHY_MAC_SEP_CMDLINE:-/proc/cmdline}
 
 if [[ -d $sysfs/apple_sep ]]; then
   echo 'apple_sep is already loaded; its options stay as it loaded with'
@@ -15,19 +14,12 @@ if [[ -d $sysfs/apple_sep ]]; then
 fi
 
 # Every setting of the two write options from modprobe's configuration, which
-# comes before the command line in the order modprobe hands them over.
-settings=$({
-  modprobe -c | while read -r keyword module options; do
-    if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
-      printf '%s\n' $options
-    fi
-  done
-  for word in $(<"$cmdline"); do
-    if [[ ${word//-/_} == apple_sep.* ]]; then
-      echo "${word#*.}"
-    fi
-  done
-} | grep -E '^(xart_writes|provision_keybag)=' || true)
+# kmod fills with the apple_sep words of the kernel command line after the files.
+settings=$(modprobe -c | while read -r keyword module options; do
+  if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
+    printf '%s\n' $options
+  fi
+done | grep -E '^(xart_writes|provision_keybag)=' || true)
 
 arguments=()
 for option in xart_writes provision_keybag; do
