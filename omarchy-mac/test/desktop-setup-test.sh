@@ -35,12 +35,24 @@ while IFS= read -r line || [[ -n $line ]]; do
     [[ -n $argument && -z $extra && $argument != */* && $argument != . && $argument != .. ]] ||
       fail "displays.conf: $directive takes one name" "$line" ;;
   ddc-require-connector-ddc) [[ -z $argument ]] || fail "displays.conf: $directive takes no argument" "$line" ;;
+  panel)
+    read -r mode settings <<<"$extra"
+    [[ -n $argument && $argument != */* && $argument != . && $argument != .. && $mode =~ ^[0-9]+x[0-9]+$ && -n $settings ]] ||
+      fail "displays.conf: $directive takes a connector, a mode and settings" "$line"
+    for setting in $settings; do
+      [[ $setting =~ ^bitdepth=(8|10)$ || $setting =~ ^cm=(srgb|dp3|dcip3|adobe|wide|edid)$ ]] ||
+        fail "displays.conf: $directive sets bitdepth (8 or 10) or cm (a Hyprland SDR preset)" "$line"
+    done
+    # Only a panel the bar also knows: the same connector and mode as a cutout.
+    python3 -c 'import json, sys; c, w, h = sys.argv[2], *map(int, sys.argv[3].split("x")); sys.exit(not any(p["connector"] == c and p["width"] == w and p["height"] == h for p in json.load(open(sys.argv[1]))["panels"]))' \
+      "$platform/display-cutouts.json" "$argument" "$mode" || fail "displays.conf: $directive names a panel display-cutouts.json describes" "$line"
+    argument="$argument $extra" ;;
   *) fail 'displays.conf: unknown directive' "$line" ;;
   esac
   directives+=("$directive${argument:+ $argument}")
 done <"$platform/displays.conf"
-[[ ${directives[*]} == 'backlight-skip display-pipe backlight-skip 228600000.dsi.0 backlight-prefer apple-panel-bl ddc-require-connector-ddc' ]] ||
-  fail 'displays.conf skips the Touch Bar backlights, prefers the Retina panel and probes DDC only where a connector has it' "${directives[*]}"
+[[ ${directives[*]} == 'backlight-skip display-pipe backlight-skip 228600000.dsi.0 backlight-prefer apple-panel-bl ddc-require-connector-ddc panel eDP 3024x1964 bitdepth=10 cm=dp3' ]] ||
+  fail 'displays.conf skips the Touch Bar backlights, prefers the Retina panel, probes DDC only where a connector has it and runs the 14" MacBook Pro panel at 10 bits in Display P3' "${directives[*]}"
 for helper in electron-launchers electron-desktop-entries; do
   [[ -x $stage/usr/lib/omarchy-mac/$helper ]] || fail "$helper is staged"
 done
