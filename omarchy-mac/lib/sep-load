@@ -1,8 +1,7 @@
 #!/bin/bash
-# Boots the Secure Enclave read-only for the microphone, whatever options the
-# owner already set: a setting is never given twice, since the driver's
-# parameters can be set once and a second one refuses the load with EEXIST.
-# The load never leaves a write enabled; omarchy-mac-sep-load.service runs it.
+# Boots the Secure Enclave read-only for the microphone, passing each write option as 0
+# unless the owner already set it: a second setting fails the load with EEXIST.
+# It never enables a write; omarchy-mac-sep-load.service runs it.
 
 omarchy-hw-apple-silicon || exit 1
 
