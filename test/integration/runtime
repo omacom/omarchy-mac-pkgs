@@ -2,4 +2,4 @@
 # Move it deliberately, like a recipe pin. Today the head of the omacom/omarchy pull
 # request that adds built-in panel settings (default/hypr/panel-defaults.lua), on
 # quattro 36b70f1b; its merge commit once it merges.
-omacom/omarchy cc96ed111309e3e0abd62619fdc581ef174d1562
+omacom/omarchy 52d735da59e72d2a010870cfd37eab162f5c31c1
