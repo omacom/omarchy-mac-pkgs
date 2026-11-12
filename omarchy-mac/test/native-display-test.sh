@@ -17,6 +17,8 @@ cat >"$work/bin/udevadm" <<'STUB'
 #!/bin/bash
 [[ $* == 'settle --timeout=10' ]] || exit 2
 printf 'settle\n' >>"$SETTLE_LOG"
+# Optionally bind a device during the settle, as a probe finishing then would.
+[[ -z ${SETTLE_BIND:-} ]] || ln -sfn "$SETTLE_BIND_TARGET" "$SETTLE_BIND"
 exit "${SETTLE_STATUS:-0}"
 STUB
 chmod +x "$work/bin/"*
@@ -121,17 +123,32 @@ pass 'a missing native GPU never blocks login indefinitely'
 
 # asahi-g15 registered with nothing bound: its probe failed, as on unsupported firmware.
 gpu_driver="$work/sys/bus/platform/drivers/asahi-g15"
-mkdir -p "$gpu_driver" "$work/sys/module/asahi"
+gpu_device="$work/sys/devices/platform/soc/40a400000.gpu"
+mkdir -p "$gpu_driver" "$gpu_device" "$work/sys/module/asahi"
 touch "$gpu_driver/bind" "$gpu_driver/unbind" "$gpu_driver/uevent"
 ln -s "$work/sys/module/asahi" "$gpu_driver/module"
 rm -r "$work/sys/class/drm/renderD128"
 : >"$SETTLE_LOG"
-timeout 2 "$helper" >"$work/output" || fail 'a failed GPU probe ends the wait once the display is ready'
-grep -q 'native_display=true native_gpu=false gpu_probe_failed=true' "$work/output" || fail 'the failed GPU probe is logged'
-[[ -s $SETTLE_LOG ]] || fail 'a failed GPU probe is confirmed only after udev settles'
+timeout 2 "$helper" >"$work/output" || fail 'an unbound GPU ends the wait once the display is ready'
+grep -q 'native_display=true native_gpu=false gpu_unbound=true' "$work/output" || fail 'the unbound GPU is logged'
+[[ -s $SETTLE_LOG ]] || fail 'an unbound GPU is confirmed only after udev settles'
+SETTLE_STATUS=1 waiting 'an unbound GPU after a failed settle keeps the bounded wait'
 driver card0 simpledrm
-waiting 'a failed GPU probe never skips the wait for the native display'
+waiting 'an unbound GPU never skips the wait for the native display'
 driver card0 apple-drm
-ln -s "$work/sys/devices/platform/soc/40a400000.gpu" "$gpu_driver/40a400000.gpu"
+SETTLE_BIND="$work/sys/class/drm/card0/device/driver" SETTLE_BIND_TARGET="$work/sys/drivers/simpledrm" \
+  waiting 'a display card lost during the settle is still waited for'
+driver card0 apple-drm
+pass 'an unbound GPU waits only for the native display, after a completed settle'
+
+SETTLE_BIND="$gpu_driver/40a400000.gpu" SETTLE_BIND_TARGET="$gpu_device" "$helper" >"$work/output" &
+waiter=$!
+sleep 0.3
+kill -0 "$waiter" 2>/dev/null || fail 'a GPU bound during the settle is still waited for'
+[[ -L $gpu_driver/40a400000.gpu ]] || fail 'the settle bound the GPU'
 waiting 'a bound GPU is waited for until its render device exists'
-pass 'a failed GPU probe waits only for the native display'
+driver renderD128 asahi-g15
+touch "$work/dev/dri/renderD128"
+wait "$waiter" || fail 'the render device of a GPU bound during the settle permits the greeter'
+grep -q 'native_gpu=true gpu_unbound=false' "$work/output" || fail 'a GPU bound during the settle never logs the unbound shortcut'
+pass 'a GPU bound during the settle is rechecked and waited for'
