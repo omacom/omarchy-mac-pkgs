@@ -1,6 +1,7 @@
 #!/bin/bash
 # Let Apple's native display replace simpledrm before the greeter opens its VT.
-# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU.
+# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU
+# unless that GPU's probe has failed.
 # A timeout never fails the greeter.
 omarchy-hw-apple-silicon || exit 0
 proc=/proc
@@ -25,6 +26,16 @@ native_ready() {
     fi
   done
   [[ $native_display == "true" && $native_gpu == "true" ]]
+}
+# The driver core links a device into its driver's directory before probing it,
+# so a registered asahi-g15 with nothing linked has failed (or deferred) its probe.
+gpu_probe_failed() {
+  local path
+  [[ -d $sys/bus/platform/drivers/asahi-g15 ]] || return 1
+  for path in "$sys"/bus/platform/drivers/asahi-g15/*; do
+    [[ -L $path && ${path##*/} != "module" ]] && return 1
+  done
+  return 0
 }
 # Only a boot whose loader handed both over can bring native graphics up. Without
 # that (an owner opt-out, a refused check, an older m1n1) waiting only delays login.
@@ -79,15 +90,24 @@ if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
   handed_over || exit 0
   started=$SECONDS
   deadline=$((SECONDS + 30))
+  gpu_failed=false
   while (( SECONDS < deadline )); do
     if native_ready; then
       udevadm settle --timeout=10 || true
       native_ready && break
+    elif [[ $native_display == "true" ]] && gpu_probe_failed; then
+      # Settle first, so a probe still to start after the driver loaded is not taken for a failure.
+      udevadm settle --timeout=10 || true
+      native_ready && break
+      if gpu_probe_failed; then
+        gpu_failed=true
+        break
+      fi
     fi
     sleep 0.05
   done
-  printf 'J514C graphics readiness: native_display=%s native_gpu=%s wait_seconds=%s\n' \
-    "$native_display" "$native_gpu" "$((SECONDS - started))"
+  printf 'J514C graphics readiness: native_display=%s native_gpu=%s gpu_probe_failed=%s wait_seconds=%s\n' \
+    "$native_display" "$native_gpu" "$gpu_failed" "$((SECONDS - started))"
 else
   # Connectors are no test: simpledrm has one, and so does the GPU's own card.
   if [[ -e $proc/device-tree/soc/display-subsystem ]]; then

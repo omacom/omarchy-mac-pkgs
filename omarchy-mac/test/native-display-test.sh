@@ -118,3 +118,20 @@ rm "$work/dev/dri/renderD128"
 timeout 35 "$helper" >"$work/output" || fail 'missing native GPU reaches a bounded nonfatal timeout'
 grep -q 'native_display=true native_gpu=false' "$work/output" || fail 'timeout records missing GPU'
 pass 'a missing native GPU never blocks login indefinitely'
+
+# asahi-g15 registered with nothing bound: its probe failed, as on unsupported firmware.
+gpu_driver="$work/sys/bus/platform/drivers/asahi-g15"
+mkdir -p "$gpu_driver" "$work/sys/module/asahi"
+touch "$gpu_driver/bind" "$gpu_driver/unbind" "$gpu_driver/uevent"
+ln -s "$work/sys/module/asahi" "$gpu_driver/module"
+rm -r "$work/sys/class/drm/renderD128"
+: >"$SETTLE_LOG"
+timeout 2 "$helper" >"$work/output" || fail 'a failed GPU probe ends the wait once the display is ready'
+grep -q 'native_display=true native_gpu=false gpu_probe_failed=true' "$work/output" || fail 'the failed GPU probe is logged'
+[[ -s $SETTLE_LOG ]] || fail 'a failed GPU probe is confirmed only after udev settles'
+driver card0 simpledrm
+waiting 'a failed GPU probe never skips the wait for the native display'
+driver card0 apple-drm
+ln -s "$work/sys/devices/platform/soc/40a400000.gpu" "$gpu_driver/40a400000.gpu"
+waiting 'a bound GPU is waited for until its render device exists'
+pass 'a failed GPU probe waits only for the native display'
