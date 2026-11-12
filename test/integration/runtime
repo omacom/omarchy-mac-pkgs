@@ -1,4 +1,5 @@
 # The Omarchy runtime CI tests the packages against: a repository and a full commit.
-# Move it deliberately, like a recipe pin. Today upstream quattro at the merge of
-# omacom/omarchy#14675, the fingerprint-readers detector.
-omacom/omarchy 81fd2d23ca6e3462183a4dc8360de3113fa8d80c
+# Move it deliberately, like a recipe pin. Today the head of the omacom/omarchy pull
+# request that adds built-in panel settings (default/hypr/panel-defaults.lua), on
+# quattro 36b70f1b; its merge commit once it merges.
+omacom/omarchy 580305a0e813b89ebd98ffd67cfb5200e0d49cb6

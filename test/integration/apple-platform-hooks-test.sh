@@ -85,3 +85,32 @@ if grep -qF /usr/share/omarchy-platform "$runtime/bin/omarchy-brightness-display
   probes_ddc "$tmpdir/none" || fail "the runtime alone probes every external monitor; displays.conf limits it"
 fi
 pass "a Mac probes an external monitor over DDC only where its connector has a ddc node"
+
+# The 14" MacBook Pro panel gets 10-bit frames in Display P3: the runtime's monitor
+# rules give it the settings omarchy-mac's displays.conf names, and nothing
+# else. The copy reads the staged root.
+mkdir -p "$tmpdir/lua/default/hypr"
+sed "s|/usr/share/omarchy-platform|$platform_root|g" "$runtime/default/hypr/panel-defaults.lua" >"$tmpdir/lua/default/hypr/panel-defaults.lua"
+LUA_PATH="$tmpdir/lua/?.lua;;" lua - <<'LUA' || fail "the 14-inch MacBook Pro panel gets bitdepth 10 and Display P3, nothing else does"
+local applied, monitors = {}, {
+  { name = "eDP-1", width = 3024, height = 1964 },
+  { name = "DP-1", width = 3024, height = 1964 },
+}
+hl = {
+  get_monitors = function() return monitors end,
+  monitor = function(spec) applied[#applied + 1] = spec end,
+  on = function() end,
+}
+require("default.hypr.panel-defaults")
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+hl.monitor({ output = "DP-1", scale = 1 })
+local function last(name) local r for _, s in ipairs(applied) do if s.output == name then r = s end end return r end
+assert(applied[1].bitdepth == nil and applied[1].cm == nil, "the catch-all gets neither")
+assert(last("eDP-1") and last("eDP-1").bitdepth == 10 and last("eDP-1").cm == "dp3", "the panel gets bitdepth 10 and Display P3")
+assert(last("DP-1").bitdepth == nil and last("DP-1").cm == nil, "an external monitor gets neither")
+monitors[1].width, monitors[1].height = 3456, 2234
+applied = {}
+hl.monitor({ output = "eDP-1", scale = 2 })
+assert(last("eDP-1").bitdepth == nil and last("eDP-1").cm == nil, "a panel not listed gets neither")
+LUA
+pass "the 14-inch MacBook Pro panel gets bitdepth 10 and Display P3, other monitors keep the defaults"
