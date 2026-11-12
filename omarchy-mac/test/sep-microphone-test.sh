@@ -127,6 +127,15 @@ for conflict in $'options apple_sep xart_writes=1 provision_keybag=1\n' $'option
 done
 load '' 'quiet apple_sep.xart_writes=1'
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled on the command line are never loaded here' "$loaded_call"
+# The kernel treats - and _ in a parameter name alike.
+load $'options apple_sep xart-writes=0\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'a hyphenated option name counts as the underscored one, so it is not passed again' "$loaded_status $loaded_call"
+load '' 'quiet apple_sep.provision-keybag=0'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'a hyphenated name on the command line counts as set' "$loaded_status $loaded_call"
+load $'options apple_sep xart-writes=0\noptions apple_sep xart_writes=0\n' 'quiet'
+[[ $loaded_status == 1 && -z $loaded_call ]] || fail 'the hyphenated and underscored names are one parameter, so both is a duplicate' "$loaded_status $loaded_call"
+load $'options apple_sep provision-keybag=1\n' 'quiet'
+[[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a hyphenated name enabling a write is left to its owner' "$loaded_status $loaded_call"
 load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'quiet' loaded
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a driver someone else loaded is left alone' "$loaded_call"
 load $'options snd_soc_aop mic_check_123=1\noptions apple_sepx xart_writes=1\n' 'quiet snd.xart_writes=1'

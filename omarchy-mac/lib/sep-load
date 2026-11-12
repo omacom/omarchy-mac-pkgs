@@ -17,9 +17,12 @@ fi
 # kmod fills with the apple_sep words of the kernel command line after the files.
 settings=$(modprobe -c | while read -r keyword module options; do
   if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
-    printf '%s\n' $options
+    for word in $options; do
+      name=${word%%=*}
+      printf '%s %s\n' "${name//-/_}" "${word#*=}"
+    done
   fi
-done | grep -E '^(xart_writes|provision_keybag)=' || true)
+done | grep -E '^(xart_writes|provision_keybag) ' || true)
 
 arguments=()
 for option in xart_writes provision_keybag; do
@@ -32,7 +35,7 @@ for option in xart_writes provision_keybag; do
       fi
       count=$((count + 1))
     fi
-  done < <(sed 's/=/ /' <<<"$settings")
+  done <<<"$settings"
   if (( count > 1 )); then
     echo "apple_sep $option is set $count times, and a second setting makes the load fail with EEXIST: set it once" >&2
     exit 1
