@@ -73,6 +73,26 @@ grep -Fq '/run/omarchy-vendorfw-initrd.status' "$early_sh" ||
   fail "the early helper records /run/omarchy-vendorfw-initrd.status when firmware is missing"
 grep -Fq 'missing' "$early_sh" ||
   fail "the early helper records status=missing"
+# The passphrase prompt waits for this helper, so it waits only for the
+# events it replays, never for the whole udev queue (a display driver can be
+# probing for seconds).
+if grep -Eq '^[[:space:]]*[^#]*udevadm settle' "$early_sh"; then
+  fail "the early helper must not wait for the whole udev queue"
+fi
+settled=$(grep -E '^[[:space:]]*[^#]*udevadm trigger .*--settle' "$early_sh" || true)
+[[ $(grep -c . <<<"$settled") == 1 ]] ||
+  fail "the early helper waits for exactly one replay" "$settled"
+for subsystem in hid input spi; do
+  grep -Fq -- "--subsystem-match=$subsystem" <<<"$settled" ||
+    fail "the early helper waits for the replayed $subsystem events (keyboard path)" "$settled"
+done
+if grep -Fq -- '--subsystem-match=platform' <<<"$settled"; then
+  fail "the early helper must not wait for replayed platform events" "$settled"
+fi
+grep -Eq '^[[:space:]]*udevadm trigger --action=add --subsystem-match=platform' "$early_sh" ||
+  fail "the early helper still replays platform devices"
+grep -Fq 'add_binary timeout' "$install_hook" ||
+  fail "the install hook adds timeout, which bounds the replay wait"
 grep -Fq 'menci/archlinuxarm:latest' "${BASH_SOURCE[0]}" ||
   fail "the container image is Arch Linux ARM"
 if grep -Eq '[|][|] image=' "${BASH_SOURCE[0]}"; then
@@ -590,4 +610,33 @@ OMARCHY_VENDORFW_DEVICE_TREE_ESP=$tmp/device-tree-esp PATH="$tmp/helper-bin:$PAT
 grep -Fq "$esp_partuuid" "$tmp/noesp-dt.err" ||
   fail "a missing ESP names the device tree's PARTUUID" "$(cat "$tmp/noesp-dt.err")"
 echo 'ok - missing ESP records status=missing and exits 0'
+
+# A udev queue that does not empty (a display driver still probing) must not
+# hold the helper: it waits for the replayed input side only.
+reset_helper
+rm -f "$tmp/helper-bin/sleep"
+touch /dev/disk/by-uuid/4F4D-5801
+(cd "$cpiosrc" && find . -print | cpio -o -H newc --quiet) >"$esp/vendorfw/firmware.cpio"
+cat >"$tmp/helper-bin/udevadm" <<SH
+#!/bin/sh
+printf 'udevadm %s\n' "\$*" >>"$calls"
+case " \$* " in
+  *" settle "*|*" --settle "*"--subsystem-match=platform"*) exec sleep 30 ;;
+esac
+exit 0
+SH
+chmod +x "$tmp/helper-bin/udevadm"
+started=$(date +%s)
+PATH="$tmp/helper-bin:$PATH" /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh \
+  >"$tmp/scoped.out" 2>"$tmp/scoped.err" ||
+  fail "the helper ran with a busy udev queue" "$(cat "$tmp/scoped.err")"
+elapsed=$(($(date +%s) - started))
+((elapsed < 5)) || fail "a busy udev queue held the helper for ${elapsed}s" "$(cat "$calls")"
+grep -Fxq 'udevadm trigger --settle --action=add --subsystem-match=hid --subsystem-match=input --subsystem-match=spi' "$calls" ||
+  fail "the helper waited for the replayed keyboard and trackpad events" "$(cat "$calls")"
+grep -Fxq 'udevadm trigger --action=add --subsystem-match=platform' "$calls" ||
+  fail "the helper still replays platform devices" "$(cat "$calls")"
+[[ $(grep '^udevadm' "$calls" | tail -1) == 'udevadm trigger --action=add --subsystem-match=platform' ]] ||
+  fail "platform devices are replayed after the waited-for input replay" "$(cat "$calls")"
+echo 'ok - the helper waits for its own input replay, not for the whole udev queue'
 echo 'ok - omarchy-mac-hid-initramfs'
