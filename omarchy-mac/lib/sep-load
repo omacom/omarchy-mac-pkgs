@@ -19,7 +19,8 @@ settings=$(modprobe -c | while read -r keyword module options; do
   if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
     for word in $options; do
       name=${word%%=*}
-      printf '%s %s\n' "${name//-/_}" "${word#*=}"
+      value=${word#*=}
+      printf '%s %s\n' "${name//-/_}" "${value//\"/}"
     done
   fi
 done | grep -E '^(xart_writes|provision_keybag) ' || true)
@@ -30,14 +31,14 @@ for option in xart_writes provision_keybag; do
   while read -r name value; do
     if [[ $name == $option ]]; then
       if [[ $value != 0 ]]; then
-        echo "apple_sep $option=$value is set elsewhere: its owner loads the driver"
+        echo "apple_sep $option=$value is set elsewhere: its owner loads the driver, and until it does the built-in microphones stay silent" >&2
         exit 0
       fi
       count=$((count + 1))
     fi
   done <<<"$settings"
   if (( count > 1 )); then
-    echo "apple_sep $option is set $count times, and a second setting makes the load fail with EEXIST: set it once" >&2
+    echo "apple_sep $option is set $count times, and a second setting makes the load fail with EEXIST: set it once; until then the built-in microphones stay silent" >&2
     exit 1
   elif (( count == 0 )); then
     arguments+=("$option=0")

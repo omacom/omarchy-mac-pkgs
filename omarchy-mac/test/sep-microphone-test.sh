@@ -108,8 +108,9 @@ load() {
   if [[ ${3:-} == loaded ]]; then mkdir "$fixture/sys/apple_sep"; fi
   loaded_status=0
   PATH="$fixture/loadbin:$fixture/bin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CMDLINE=$fixture/cmdline FIXTURE_CALL=$fixture/call \
-    OMARCHY_MAC_SEP_SYSFS=$fixture/sys "$loader" >/dev/null 2>&1 || loaded_status=$?
+    OMARCHY_MAC_SEP_SYSFS=$fixture/sys "$loader" >"$fixture/log" 2>&1 || loaded_status=$?
   loaded_call=$(cat "$fixture/call" 2>/dev/null || true)
+  loaded_log=$(cat "$fixture/log")
 }
 load '' 'quiet splash'
 [[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'with nothing set, the load passes both options as 0' "$loaded_call"
@@ -127,6 +128,17 @@ for conflict in $'options apple_sep xart_writes=1 provision_keybag=1\n' $'option
 done
 load '' 'quiet apple_sep.xart_writes=1'
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled on the command line are never loaded here' "$loaded_call"
+# The kernel strips the quotes of a value, so a quoted zero is a zero.
+load $'options apple_sep xart_writes="0"\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'a quoted zero counts as zero' "$loaded_status $loaded_call"
+load '' 'quiet apple_sep.provision_keybag="0"'
+[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'a quoted zero on the command line counts as zero' "$loaded_status $loaded_call"
+load $'options apple_sep xart_writes="1"\n' 'quiet'
+[[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a quoted one still enables writes and is left to its owner' "$loaded_status $loaded_call"
+# Whenever the helper leaves the load to someone else or fails, it says the microphones stay silent.
+[[ $loaded_log == *'microphones stay silent'* ]] || fail 'a skipped load says the built-in microphones stay silent' "$loaded_log"
+load $'options apple_sep xart_writes=0\n' 'apple_sep.xart_writes=0'
+[[ $loaded_status == 1 && $loaded_log == *'microphones stay silent'* ]] || fail 'a failed duplicate says the built-in microphones stay silent' "$loaded_log"
 # The kernel treats - and _ in a parameter name alike.
 load $'options apple_sep xart-writes=0\n' 'quiet'
 [[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'a hyphenated option name counts as the underscored one, so it is not passed again' "$loaded_status $loaded_call"
