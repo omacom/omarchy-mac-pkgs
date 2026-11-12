@@ -1,11 +1,6 @@
-# On M1-family Macs the built-in microphones sit on the Secure Enclave's data
-# path and record only a filter transient and zeros until it boots. The
-# installed kernel's module has no alias (omacom/linux-aurora#141), so nothing
-# loads it; #180 makes it load on its own, which makes this unit redundant.
-# sep-load passes xart_writes=0 provision_keybag=0, which is read-only: the anti-replay store shared
-# with macOS is never written, and Touch ID stays off. As the Touch ID load,
-# it waits for the iBoot System Container's link, which the driver opens as it
-# probes, in the service, so a Mac that skips the unit never waits.
+# Boots the Secure Enclave read-only on M1-family Macs, where the built-in microphones
+# record zeros until it runs and the module has no alias (omacom/linux-aurora#141).
+# Redundant once omacom/linux-aurora#180 loads it; see sep-load and the README.
 [Unit]
 Description=Boot the Secure Enclave read-only for the microphone
 # Once the owner has turned Touch ID on, its load owns the driver and its options.
