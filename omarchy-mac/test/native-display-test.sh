@@ -141,14 +141,13 @@ SETTLE_BIND="$work/sys/class/drm/card0/device/driver" SETTLE_BIND_TARGET="$work/
 driver card0 apple-drm
 pass 'an unbound GPU waits only for the native display, after a completed settle'
 
-SETTLE_BIND="$gpu_driver/40a400000.gpu" SETTLE_BIND_TARGET="$gpu_device" "$helper" >"$work/output" &
+SETTLE_BIND="$gpu_driver/40a400000.gpu" SETTLE_BIND_TARGET="$gpu_device" "$helper" >"$work/bound-output" &
 waiter=$!
 sleep 0.3
 kill -0 "$waiter" 2>/dev/null || fail 'a GPU bound during the settle is still waited for'
 [[ -L $gpu_driver/40a400000.gpu ]] || fail 'the settle bound the GPU'
-waiting 'a bound GPU is waited for until its render device exists'
 driver renderD128 asahi-g15
 touch "$work/dev/dri/renderD128"
 wait "$waiter" || fail 'the render device of a GPU bound during the settle permits the greeter'
-grep -q 'native_gpu=true gpu_unbound=false' "$work/output" || fail 'a GPU bound during the settle never logs the unbound shortcut'
+grep -q 'native_gpu=true gpu_unbound=false' "$work/bound-output" || fail 'a GPU bound during the settle never logs the unbound shortcut'
 pass 'a GPU bound during the settle is rechecked and waited for'
