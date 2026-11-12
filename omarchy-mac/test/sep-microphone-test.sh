@@ -86,7 +86,14 @@ mkdir -p "$fixture/loadbin"
 cat >"$fixture/loadbin/modprobe" <<'STUB'
 #!/bin/bash
 if [[ ${1:-} == -c ]]; then
+  # Like kmod: the configuration files first, then one options line per module
+  # parameter word of the kernel command line (modprobe.* words are not options).
   cat "$FIXTURE_CONFIG"
+  for word in $(<"$FIXTURE_CMDLINE"); do
+    if [[ $word =~ ^([^.=]+)\.([^=]+=.*)$ && ${BASH_REMATCH[1]} != modprobe ]]; then
+      echo "options ${BASH_REMATCH[1]//-/_} ${BASH_REMATCH[2]}"
+    fi
+  done
 else
   echo "$*" >"$FIXTURE_CALL"
 fi
@@ -100,8 +107,8 @@ load() {
   mkdir -p "$fixture/sys"
   if [[ ${3:-} == loaded ]]; then mkdir "$fixture/sys/apple_sep"; fi
   loaded_status=0
-  PATH="$fixture/loadbin:$fixture/bin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CALL=$fixture/call OMARCHY_MAC_SEP_SYSFS=$fixture/sys \
-    OMARCHY_MAC_SEP_CMDLINE=$fixture/cmdline "$loader" >/dev/null 2>&1 || loaded_status=$?
+  PATH="$fixture/loadbin:$fixture/bin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CMDLINE=$fixture/cmdline FIXTURE_CALL=$fixture/call \
+    OMARCHY_MAC_SEP_SYSFS=$fixture/sys "$loader" >/dev/null 2>&1 || loaded_status=$?
   loaded_call=$(cat "$fixture/call" 2>/dev/null || true)
 }
 load '' 'quiet splash'
@@ -113,7 +120,7 @@ load $'options apple-sep xart_writes=0\n' 'quiet'
 load '' 'quiet apple_sep.provision_keybag=0'
 [[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'an option on the kernel command line counts as set' "$loaded_call"
 load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'apple_sep.xart_writes=0'
-[[ $loaded_status == 1 && -z $loaded_call ]] || fail 'a duplicate zero would fail with EEXIST: the unit says so instead of passing it on' "$loaded_status $loaded_call"
+[[ $loaded_status == 1 && -z $loaded_call ]] || fail 'the same option in modprobe.d and on the command line is listed twice, which fails with EEXIST: the unit says so instead of passing it on' "$loaded_status $loaded_call"
 for conflict in $'options apple_sep xart_writes=1 provision_keybag=1\n' $'options apple_sep xart_writes=0 provision_keybag=1\n'; do
   load "$conflict" 'quiet'
   [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled elsewhere are left to their owner, and never loaded here' "$conflict $loaded_call"
