@@ -11,6 +11,9 @@ ConditionPathExists=/dev/sep-bio
 # only once the kernel has made this Mac's keybag.
 ConditionPathExists=/var/lib/aurora-sep-keybag.bin
 Before=fprintd.service
+# fprintd pulls this in as well as the wait: after the wait, the node is there
+# when fprintd's own start runs it.
+After=omarchy-mac-touchid-wait.service
 
 [Service]
 Type=oneshot

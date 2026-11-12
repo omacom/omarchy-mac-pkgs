@@ -7,6 +7,9 @@ node=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
 driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
 attempts=${OMARCHY_MAC_TOUCHID_ATTEMPTS:-90}
+proc=${OMARCHY_MAC_TOUCHID_PROC:-/proc}
+# Tries of a second open, 0.2 s apart, before "ready" (10 s).
+probe_tries=${OMARCHY_MAC_TOUCHID_PROBE_TRIES:-50}
 omarchy-hw-apple-silicon || exit 0
 
 attribute() {
@@ -37,6 +40,45 @@ finish() {
   fi
 }
 
+# The error of an open of the node, empty when it opened (and closed again).
+open_error() {
+  if [[ -n ${OMARCHY_MAC_TOUCHID_OPEN:-} ]]; then
+    "$OMARCHY_MAC_TOUCHID_OPEN" 2>&1 >/dev/null
+    return
+  fi
+  { : <"$node"; } 2>&1
+}
+
+# Whether a process, fprintd for one, holds the node open.
+held_by_a_client() {
+  local fd
+  for fd in "$proc"/[0-9]*/fd/*; do
+    [[ $(readlink "$fd" 2>/dev/null) == "$node" ]] && return 0
+  done
+  return 1
+}
+
+# The node takes one opener at a time, and the driver still holds the session
+# for a moment after activation's own open has returned. fprintd treats a busy
+# node as an unusable reader until it exits, so "ready" waits until a second
+# open would succeed: it opens, or a client already holds it, or it is gone and
+# the attributes decide as before. A node the driver keeps busy is not ready.
+second_opener() {
+  local try err
+  for ((try = 1; try <= probe_tries; try++)); do
+    err=$(open_error)
+    [[ -z $err || $err != *"Device or resource busy"* ]] && return 0
+    held_by_a_client && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+ready() {
+  second_opener && finish ready
+  finish busy "$node still refused a second opener after $((probe_tries / 5)) s (Device or resource busy), with no process holding it"
+}
+
 # An update re-runs this, and touchid follows every later bring-up, which can
 # fail once and recover: a "ready" from earlier this boot stands unless it ends.
 previous=$(cat "$status_file" 2>/dev/null)
@@ -61,7 +103,7 @@ for ((attempt = 1; attempt <= attempts && SECONDS < 45; attempt++)); do
   elif [[ $matching == "blocked" ]]; then
     finish blocked "a match could not save its state (matching blocked)"
   elif [[ $sensor_attach == "attached" && ($previous == "ready" || ($touchid == "ready" && ($restore == "restored" || $restore == "empty") && ($matching == "usable" || $matching == "unverified"))) ]]; then
-    finish ready
+    ready
   elif [[ $sensor_attach == "not-ready" ]]; then
     finish not-ready "the sensor did not come online (sensor_attach not-ready)"
   fi
