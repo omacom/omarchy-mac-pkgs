@@ -7,6 +7,8 @@ trap 'rm -rf "$work"' EXIT
 helper="$work/root/usr/lib/omarchy-mac/wait-for-display"
 # Root and unprivileged tests both run the installed helper against fixture roots.
 sed -i "s|^proc=/proc$|proc=$work/proc|;s|^dev=/dev$|dev=$work/dev|;s|^sys=/sys$|sys=$work/sys|" "$helper"
+# A shorter GPU grace keeps the timed cases quick.
+sed -i 's|^gpu_grace_seconds=5$|gpu_grace_seconds=2|' "$helper"
 export OMARCHY_PROC_ROOT="$work/proc" OMARCHY_DEV_ROOT="$work/dev" OMARCHY_SYS_ROOT="$work/sys"
 mkdir -p "$work/bin" "$work/proc/device-tree" "$work/dev/dri" "$work/sys/class/drm"
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
@@ -17,8 +19,6 @@ cat >"$work/bin/udevadm" <<'STUB'
 #!/bin/bash
 [[ $* == 'settle --timeout=10' ]] || exit 2
 printf 'settle\n' >>"$SETTLE_LOG"
-# Optionally bind a device during the settle, as a probe finishing then would.
-[[ -z ${SETTLE_BIND:-} ]] || ln -sfn "$SETTLE_BIND_TARGET" "$SETTLE_BIND"
 exit "${SETTLE_STATUS:-0}"
 STUB
 chmod +x "$work/bin/"*
@@ -116,38 +116,53 @@ touch "$work/dev/dri/renderD128"
 wait "$waiter" || fail 'late GPU readiness permits the greeter'
 pass 'the greeter proceeds when native devices arrive'
 
-rm "$work/dev/dri/renderD128"
-timeout 35 "$helper" >"$work/output" || fail 'missing native GPU reaches a bounded nonfatal timeout'
-grep -q 'native_display=true native_gpu=false' "$work/output" || fail 'timeout records missing GPU'
-pass 'a missing native GPU never blocks login indefinitely'
-
-# asahi-g15 registered with nothing bound: its probe failed, as on unsupported firmware.
+# asahi-g15 defers its probe until the display is published, so a healthy GPU
+# is unbound, with its driver loaded, for a moment after the display card appears.
 gpu_driver="$work/sys/bus/platform/drivers/asahi-g15"
 gpu_device="$work/sys/devices/platform/soc/40a400000.gpu"
 mkdir -p "$gpu_driver" "$gpu_device" "$work/sys/module/asahi"
 touch "$gpu_driver/bind" "$gpu_driver/unbind" "$gpu_driver/uevent"
 ln -s "$work/sys/module/asahi" "$gpu_driver/module"
-rm -r "$work/sys/class/drm/renderD128"
-: >"$SETTLE_LOG"
-timeout 2 "$helper" >"$work/output" || fail 'an unbound GPU ends the wait once the display is ready'
-grep -q 'native_display=true native_gpu=false gpu_unbound=true' "$work/output" || fail 'the unbound GPU is logged'
-[[ -s $SETTLE_LOG ]] || fail 'an unbound GPU is confirmed only after udev settles'
-SETTLE_STATUS=1 waiting 'an unbound GPU after a failed settle keeps the bounded wait'
-driver card0 simpledrm
-waiting 'an unbound GPU never skips the wait for the native display'
-driver card0 apple-drm
-SETTLE_BIND="$work/sys/class/drm/card0/device/driver" SETTLE_BIND_TARGET="$work/sys/drivers/simpledrm" \
-  waiting 'a display card lost during the settle is still waited for'
-driver card0 apple-drm
-pass 'an unbound GPU waits only for the native display, after a completed settle'
-
-SETTLE_BIND="$gpu_driver/40a400000.gpu" SETTLE_BIND_TARGET="$gpu_device" "$helper" >"$work/bound-output" &
+rm -r "$work/sys/class/drm/renderD128" "$work/dev/dri/renderD128"
+"$helper" >"$work/output" &
 waiter=$!
-sleep 0.3
-kill -0 "$waiter" 2>/dev/null || fail 'a GPU bound during the settle is still waited for'
-[[ -L $gpu_driver/40a400000.gpu ]] || fail 'the settle bound the GPU'
+sleep 0.5
+kill -0 "$waiter" 2>/dev/null || fail 'a GPU that binds after the display card is still waited for'
+ln -s "$gpu_device" "$gpu_driver/40a400000.gpu"
 driver renderD128 asahi-g15
 touch "$work/dev/dri/renderD128"
-wait "$waiter" || fail 'the render device of a GPU bound during the settle permits the greeter'
-grep -q 'native_gpu=true gpu_unbound=false' "$work/bound-output" || fail 'a GPU bound during the settle never logs the unbound shortcut'
-pass 'a GPU bound during the settle is rechecked and waited for'
+wait "$waiter" || fail 'a GPU that binds after the display card permits the greeter'
+grep -q 'native_display=true native_gpu=true' "$work/output" || fail 'a GPU that binds after the display card is used'
+pass 'a GPU that binds after the display card is waited for'
+
+rm "$gpu_driver/40a400000.gpu" "$work/dev/dri/renderD128"
+rm -r "$work/sys/class/drm/renderD128"
+grep -qx 'gpu_grace_seconds=2' "$helper" || fail 'the GPU grace is one named constant'
+waiting 'a GPU missing when the display card appears still gets its grace'
+timeout 5 "$helper" >"$work/output" || fail 'the GPU grace ends the wait once the display is ready'
+grep -q 'native_display=true native_gpu=false gpu_grace_expired=true' "$work/output" || fail 'the expired GPU grace is logged'
+rm -r "$gpu_driver"
+timeout 5 "$helper" >"$work/output" || fail 'a GPU without its driver gets the same grace'
+pass 'a GPU still missing after its grace leaves only the display to wait for'
+
+"$helper" >"$work/output" &
+waiter=$!
+sleep 0.3
+driver card0 simpledrm
+sleep 3.5
+kill -0 "$waiter" 2>/dev/null || fail 'the GPU grace never ends a wait for the native display'
+driver card0 apple-drm
+sleep 1
+kill -0 "$waiter" 2>/dev/null || fail 'the GPU grace starts over when the display card returns'
+wait "$waiter" || fail 'the returning display card permits the greeter'
+grep -q 'native_display=true native_gpu=false gpu_grace_expired=true' "$work/output" || fail 'the grace restarts with the display card'
+pass 'the GPU grace runs only while the native display is up'
+
+mkdir -p "$work/sys/kernel/debug"
+printf 'other.device\t\n' >"$work/sys/kernel/debug/devices_deferred"
+timeout 5 "$helper" >/dev/null || fail 'another deferred device never holds the wait'
+printf '40a400000.gpu\tasahi-g15: waiting for the display\n' >>"$work/sys/kernel/debug/devices_deferred"
+timeout 35 "$helper" >"$work/output" || fail 'a deferred GPU never blocks login indefinitely'
+grep -Eq 'native_display=true native_gpu=false gpu_grace_expired=false wait_seconds=(29|30)$' "$work/output" ||
+  fail 'a deferred GPU is waited for up to the bound'
+pass 'a GPU the kernel lists as deferred is waited for up to the bound'
