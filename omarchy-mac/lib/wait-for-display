@@ -1,11 +1,13 @@
 #!/bin/bash
-# Let Apple's native display replace simpledrm before the greeter opens its VT.
-# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU.
-# A timeout never fails the greeter.
+# Let Apple's native display replace simpledrm before the greeter opens its VT; a timeout never fails it.
+# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU, for
+# gpu_grace_seconds once the display is up, longer while the kernel lists it as deferred.
 omarchy-hw-apple-silicon || exit 0
 proc=/proc
 dev=/dev
 sys=/sys
+# Provisional until display-ready to render node is measured on a J514C (#129).
+gpu_grace_seconds=5
 if (( EUID != 0 )); then
   proc=${OMARCHY_PROC_ROOT:-/proc}
   dev=${OMARCHY_DEV_ROOT:-/dev}
@@ -25,6 +27,29 @@ native_ready() {
     fi
   done
   [[ $native_display == "true" && $native_gpu == "true" ]]
+}
+# A kernel that lists the GPU as deferred will retry it, so its grace starts over.
+# The list proves nothing once the GPU drops off it, so it only ever extends the wait.
+gpu_deferred() {
+  local node device _
+  if [[ ! -r $sys/kernel/debug/devices_deferred ]]; then
+    [[ $deferred_state == "unchecked" ]] && deferred_state=unreadable
+    return 1
+  fi
+  [[ $deferred_state == "seen" ]] || deferred_state=never
+  node=$(tr -d '\0' <"$proc/device-tree/aliases/gpu" 2>/dev/null) || return 1
+  node=${node##*/}
+  while read -r device _; do
+    if [[ $device == "${node#*@}.${node%%@*}" ]]; then
+      deferred_state=seen
+      return 0
+    fi
+  done <"$sys/kernel/debug/devices_deferred"
+  return 1
+}
+# A kernel signal that the GPU was refused would also end the GPU wait here.
+gpu_grace_over() {
+  (( SECONDS > gpu_deadline ))
 }
 # Only a boot whose loader handed both over can bring native graphics up. Without
 # that (an owner opt-out, a refused check, an older m1n1) waiting only delays login.
@@ -79,15 +104,26 @@ if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
   handed_over || exit 0
   started=$SECONDS
   deadline=$((SECONDS + 30))
+  gpu_deadline=''
+  grace_expired=false
+  deferred_state=unchecked
   while (( SECONDS < deadline )); do
     if native_ready; then
       udevadm settle --timeout=10 || true
       native_ready && break
     fi
+    if [[ $native_display != "true" ]]; then
+      gpu_deadline=''
+    elif [[ -z $gpu_deadline ]] || gpu_deferred; then
+      gpu_deadline=$((SECONDS + gpu_grace_seconds))
+    elif gpu_grace_over; then
+      grace_expired=true
+      break
+    fi
     sleep 0.05
   done
-  printf 'J514C graphics readiness: native_display=%s native_gpu=%s wait_seconds=%s\n' \
-    "$native_display" "$native_gpu" "$((SECONDS - started))"
+  printf 'J514C graphics readiness: native_display=%s native_gpu=%s gpu_grace_expired=%s gpu_deferred=%s wait_seconds=%s\n' \
+    "$native_display" "$native_gpu" "$grace_expired" "$deferred_state" "$((SECONDS - started))"
 else
   # Connectors are no test: simpledrm has one, and so does the GPU's own card.
   if [[ -e $proc/device-tree/soc/display-subsystem ]]; then
