@@ -1,0 +1,22 @@
+#!/bin/bash
+# Says whether this Mac's built-in microphones need the Secure Enclave booted:
+# true on an M1-family Mac (M1, M1 Pro and M1 Max) whose device tree enables
+# its enclave. Later Macs record without it. omarchy-mac-sep-load.service asks.
+
+tree=${OMARCHY_MAC_SEP_TREE:-/proc/device-tree}
+omarchy-hw-apple-silicon || exit 1
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+if ! compatible apple,t8103 && ! compatible apple,t6000 && ! compatible apple,t6001; then
+  exit 1
+fi
+for node in "$tree"/soc/sep@*; do
+  if [[ -r $node/compatible ]] && tr '\0' '\n' <"$node/compatible" | grep -Fxq apple,sep &&
+    [[ ! -r $node/status || $(tr -d '\0' <"$node/status") == "okay" ]]; then
+    exit 0
+  fi
+done
+exit 1

@@ -1,0 +1,17 @@
+# Boots the Secure Enclave read-only on M1-family Macs, where the built-in microphones
+# record zeros until it runs and the module has no alias (omacom/linux-aurora#141).
+# Redundant once omacom/linux-aurora#180 loads it; see sep-load and the README.
+[Unit]
+Description=Boot the Secure Enclave read-only for the microphone
+# Once the owner has turned Touch ID on, its load owns the driver and its options.
+ConditionPathExists=!/etc/omarchy-mac/touchid-on
+After=local-fs.target omarchy-mac-touchid-status.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecCondition=/usr/lib/omarchy-mac/sep-for-microphone
+ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer
+ExecStart=/usr/lib/omarchy-mac/sep-load
+TimeoutStartSec=30s
