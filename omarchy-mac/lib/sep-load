@@ -9,39 +9,50 @@ sysfs=${OMARCHY_MAC_SEP_SYSFS:-/sys/module}
 
 if [[ -d $sysfs/apple_sep ]]; then
   echo 'apple_sep is already loaded; its options stay as it loaded with'
-  exit 0
-fi
-
-# Every setting of the two write options from modprobe's configuration, which
-# kmod fills with the apple_sep words of the kernel command line after the files.
-settings=$(modprobe -c | while read -r keyword module options; do
-  if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
-    for word in $options; do
-      name=${word%%=*}
-      value=${word#*=}
-      printf '%s %s\n' "${name//-/_}" "${value//\"/}"
-    done
-  fi
-done | grep -E '^(xart_writes|provision_keybag) ' || true)
-
-arguments=()
-for option in xart_writes provision_keybag; do
-  count=0
-  while read -r name value; do
-    if [[ $name == $option ]]; then
-      if [[ $value != 0 ]]; then
-        echo "apple_sep $option=$value is set elsewhere: its owner loads the driver, and until it does the built-in microphones stay silent" >&2
-        exit 0
-      fi
-      count=$((count + 1))
+else
+  # Every setting of the two write options from modprobe's configuration, which
+  # kmod fills with the apple_sep words of the kernel command line after the files.
+  settings=$(modprobe -c | while read -r keyword module options; do
+    if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
+      for word in $options; do
+        name=${word%%=*}
+        value=${word#*=}
+        printf '%s %s\n' "${name//-/_}" "${value//\"/}"
+      done
     fi
-  done <<<"$settings"
-  if (( count > 1 )); then
-    echo "apple_sep $option is set $count times, and a second setting makes the load fail with EEXIST: set it once; until then the built-in microphones stay silent" >&2
-    exit 1
-  elif (( count == 0 )); then
-    arguments+=("$option=0")
-  fi
-done
+  done | grep -E '^(xart_writes|provision_keybag) ' || true)
 
-exec modprobe apple-sep "${arguments[@]}"
+  # A write enabled elsewhere leaves the load to its owner; an option set twice
+  # would fail it. The first of either, in option order, settles the outcome.
+  arguments=()
+  elsewhere=""
+  repeated=""
+  for option in xart_writes provision_keybag; do
+    count=0
+    while read -r name value; do
+      if [[ $name == $option && $value != 0 ]]; then
+        elsewhere="$option=$value"
+        break
+      elif [[ $name == $option ]]; then
+        count=$((count + 1))
+      fi
+    done <<<"$settings"
+    if [[ -n $elsewhere ]]; then
+      break
+    elif (( count > 1 )); then
+      repeated="$option is set $count times"
+      break
+    elif (( count == 0 )); then
+      arguments+=("$option=0")
+    fi
+  done
+
+  if [[ -n $elsewhere ]]; then
+    echo "apple_sep $elsewhere is set elsewhere: its owner loads the driver, and until it does the built-in microphones stay silent" >&2
+  elif [[ -n $repeated ]]; then
+    echo "apple_sep $repeated, and a second setting makes the load fail with EEXIST: set it once; until then the built-in microphones stay silent" >&2
+    exit 1
+  else
+    exec modprobe apple-sep "${arguments[@]}"
+  fi
+fi
