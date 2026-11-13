@@ -140,7 +140,8 @@ rm -r "$work/sys/class/drm/renderD128"
 grep -qx 'gpu_grace_seconds=2' "$helper" || fail 'the GPU grace is one named constant'
 waiting 'a GPU missing when the display card appears still gets its grace'
 timeout 5 "$helper" >"$work/output" || fail 'the GPU grace ends the wait once the display is ready'
-grep -q 'native_display=true native_gpu=false gpu_grace_expired=true' "$work/output" || fail 'the expired GPU grace is logged'
+grep -q 'native_display=true native_gpu=false gpu_grace_expired=true gpu_deferred=unreadable' "$work/output" ||
+  fail 'the expired GPU grace is logged, with no deferred list to read'
 rm -r "$gpu_driver"
 timeout 5 "$helper" >"$work/output" || fail 'a GPU without its driver gets the same grace'
 pass 'a GPU still missing after its grace leaves only the display to wait for'
@@ -158,11 +159,25 @@ wait "$waiter" || fail 'the returning display card permits the greeter'
 grep -q 'native_display=true native_gpu=false gpu_grace_expired=true' "$work/output" || fail 'the grace restarts with the display card'
 pass 'the GPU grace runs only while the native display is up'
 
-mkdir -p "$work/sys/kernel/debug"
-printf 'other.device\t\n' >"$work/sys/kernel/debug/devices_deferred"
-timeout 5 "$helper" >/dev/null || fail 'another deferred device never holds the wait'
-printf '40a400000.gpu\tasahi-g15: waiting for the display\n' >>"$work/sys/kernel/debug/devices_deferred"
+deferred="$work/sys/kernel/debug/devices_deferred"
+mkdir -p "${deferred%/*}"
+printf 'other.device\t\n' >"$deferred"
+timeout 5 "$helper" >"$work/output" || fail 'another deferred device never holds the wait'
+grep -q 'gpu_grace_expired=true gpu_deferred=never' "$work/output" || fail 'a list without the GPU is logged'
+printf '40a400000.gpu\tasahi-g15: waiting for the display\n' >>"$deferred"
+"$helper" >"$work/output" &
+waiter=$!
+sleep 3.5
+kill -0 "$waiter" 2>/dev/null || fail 'a GPU listed past its grace is still waited for'
+printf 'other.device\t\n' >"$deferred"
+sleep 1
+kill -0 "$waiter" 2>/dev/null || fail 'a GPU retried after its grace gets a fresh grace'
+wait "$waiter" || fail 'a GPU that stays missing after leaving the list permits the greeter'
+grep -q 'gpu_grace_expired=true gpu_deferred=seen' "$work/output" || fail 'a GPU seen on the list is logged'
+pass 'a GPU that leaves the deferred list gets a fresh grace'
+
+printf '40a400000.gpu\tasahi-g15: waiting for the display\n' >>"$deferred"
 timeout 35 "$helper" >"$work/output" || fail 'a deferred GPU never blocks login indefinitely'
-grep -Eq 'native_display=true native_gpu=false gpu_grace_expired=false wait_seconds=(29|30)$' "$work/output" ||
+grep -Eq 'native_display=true native_gpu=false gpu_grace_expired=false gpu_deferred=seen wait_seconds=(29|30)$' "$work/output" ||
   fail 'a deferred GPU is waited for up to the bound'
 pass 'a GPU the kernel lists as deferred is waited for up to the bound'
