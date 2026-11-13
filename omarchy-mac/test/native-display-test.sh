@@ -164,6 +164,13 @@ mkdir -p "${deferred%/*}"
 printf 'other.device\t\n' >"$deferred"
 timeout 5 "$helper" >"$work/output" || fail 'another deferred device never holds the wait'
 grep -q 'gpu_grace_expired=true gpu_deferred=never' "$work/output" || fail 'a list without the GPU is logged'
+driver renderD128 asahi-g15
+touch "$work/dev/dri/renderD128"
+timeout 5 "$helper" >"$work/output" || fail 'a GPU ready with the display permits the greeter'
+grep -q 'native_gpu=true gpu_grace_expired=false gpu_deferred=unchecked' "$work/output" ||
+  fail 'a list never read is logged as unchecked, not unreadable'
+rm "$work/dev/dri/renderD128"
+rm -r "$work/sys/class/drm/renderD128"
 printf '40a400000.gpu\tasahi-g15: waiting for the display\n' >>"$deferred"
 "$helper" >"$work/output" &
 waiter=$!

@@ -1,8 +1,7 @@
 #!/bin/bash
-# Let Apple's native display replace simpledrm before the greeter opens its VT.
+# Let Apple's native display replace simpledrm before the greeter opens its VT; a timeout never fails it.
 # Keep the existing 10 s wait on other Macs; J514C also needs its native GPU, for
 # gpu_grace_seconds once the display is up, longer while the kernel lists it as deferred.
-# A timeout never fails the greeter.
 omarchy-hw-apple-silicon || exit 0
 proc=/proc
 dev=/dev
@@ -33,8 +32,11 @@ native_ready() {
 # The list proves nothing once the GPU drops off it, so it only ever extends the wait.
 gpu_deferred() {
   local node device _
-  [[ -r $sys/kernel/debug/devices_deferred ]] || return 1
-  [[ $deferred_state == "unreadable" ]] && deferred_state=never
+  if [[ ! -r $sys/kernel/debug/devices_deferred ]]; then
+    [[ $deferred_state == "unchecked" ]] && deferred_state=unreadable
+    return 1
+  fi
+  [[ $deferred_state == "seen" ]] || deferred_state=never
   node=$(tr -d '\0' <"$proc/device-tree/aliases/gpu" 2>/dev/null) || return 1
   node=${node##*/}
   while read -r device _; do
@@ -104,7 +106,7 @@ if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
   deadline=$((SECONDS + 30))
   gpu_deadline=''
   grace_expired=false
-  deferred_state=unreadable
+  deferred_state=unchecked
   while (( SECONDS < deadline )); do
     if native_ready; then
       udevadm settle --timeout=10 || true
