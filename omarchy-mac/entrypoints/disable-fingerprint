@@ -24,5 +24,8 @@ if [[ -e /etc/omarchy-mac/touchid-on || -e /etc/modprobe.d/omarchy-mac-touchid.c
     exit 1
   fi
   echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
+  # The reload brings back the drop-in that keeps fprintd off /dev/sep-bio without the record.
+  systemctl daemon-reload 2>/dev/null
+  systemctl try-restart fprintd.service 2>/dev/null
 fi
 exit 0

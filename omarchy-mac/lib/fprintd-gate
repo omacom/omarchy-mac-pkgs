@@ -1,0 +1,14 @@
+#!/bin/bash
+# A systemd generator: until the owner's Touch ID record exists, fprintd cannot open
+# /dev/sep-bio when it probes its readers, since an open activates Touch ID.
+# touchid-enable and disable-fingerprint reload systemd so this follows the record.
+
+omarchy-hw-apple-silicon || exit 0
+
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+directory=${1:?Usage: fprintd-gate NORMAL_DIR}/fprintd.service.d
+
+if [[ ! -e $agreed ]]; then
+  mkdir -p "$directory" &&
+    printf '%s\n' '[Service]' 'InaccessiblePaths=-/dev/sep-bio' >"$directory/50-omarchy-mac-touchid-gate.conf"
+fi

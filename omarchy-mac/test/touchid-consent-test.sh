@@ -30,6 +30,33 @@ done
   fail 'the package itself never turns Touch ID on'
 pass 'the status and load units and the enable and disable entrypoints are staged, and nothing turns Touch ID on'
 
+# fprintd's probe of its readers opens /dev/sep-bio, and an open activates Touch ID,
+# so a generator keeps the node out of fprintd's reach until the owner's record exists.
+generator=$work/root/usr/lib/systemd/system-generators/omarchy-mac-fprintd-gate
+[[ -x $generator && -x $work/root/usr/lib/omarchy-mac/fprintd-gate ]] ||
+  fail 'the fprintd gate is staged as a systemd generator'
+gate_dir=$work/generated
+rm -rf "$gate_dir" "$work/gate-record"
+mkdir -p "$gate_dir" "$work/gatebin"
+printf '#!/bin/sh\nexit 0\n' >"$work/gatebin/omarchy-hw-apple-silicon"
+chmod +x "$work/gatebin/"*
+PATH="$work/gatebin:$PATH" OMARCHY_MAC_TOUCHID_AGREED=$work/gate-record "$generator" "$gate_dir" "$gate_dir" "$gate_dir"
+grep -Fxq 'InaccessiblePaths=-/dev/sep-bio' "$gate_dir/fprintd.service.d/50-omarchy-mac-touchid-gate.conf" &&
+  grep -Fxq '[Service]' "$gate_dir/fprintd.service.d/50-omarchy-mac-touchid-gate.conf" ||
+  fail "without the owner's record, fprintd gets a drop-in that makes /dev/sep-bio inaccessible"
+rm -rf "$gate_dir"
+mkdir -p "$gate_dir"
+touch "$work/gate-record"
+PATH="$work/gatebin:$PATH" OMARCHY_MAC_TOUCHID_AGREED=$work/gate-record "$generator" "$gate_dir" "$gate_dir" "$gate_dir"
+[[ -z $(find "$gate_dir" -type f) ]] || fail "with the owner's record, fprintd gets no drop-in"
+! PATH="$work/gatebin:$PATH" "$work/root/usr/lib/omarchy-mac/fprintd-gate" 2>/dev/null || fail 'the generator needs the directory systemd gives it'
+printf '#!/bin/sh\nexit 1\n' >"$work/gatebin/omarchy-hw-apple-silicon"
+rm -rf "$gate_dir"
+mkdir -p "$gate_dir"
+PATH="$work/gatebin:$PATH" OMARCHY_MAC_TOUCHID_AGREED=$work/gate-absent "$generator" "$gate_dir" "$gate_dir" "$gate_dir"
+[[ -z $(find "$gate_dir" -type f) ]] || fail 'off Apple Silicon the generator writes nothing'
+pass "fprintd cannot open /dev/sep-bio without the owner's record, and is left alone with it"
+
 fixture=$work/fixture
 tree=$fixture/tree
 mkdir -p "$fixture/bin" "$fixture/extractors"
@@ -246,8 +273,8 @@ out=$(run touchid-enable 2>&1) || fail 'an available Mac whose activation reads 
 grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/options-at-load" &&
   [[ $(stat -c %a "$fixture/etc/modprobe.conf") == 644 ]] ||
   fail "the driver is loaded with the options that let it write, which a read-only default needs"
-[[ $(<"$fixture/calls") == $'calibration\nmodprobe apple-sep\nsystemctl start omarchy-mac-touchid-activate.service\nsystemctl try-restart fprintd.service' ]] ||
-  fail 'it carves, loads the driver, waits for the activation, then restarts a running fprintd' "$(<"$fixture/calls")"
+[[ $(<"$fixture/calls") == $'calibration\nmodprobe apple-sep\nsystemctl start omarchy-mac-touchid-activate.service\nsystemctl daemon-reload\nsystemctl try-restart fprintd.service' ]] ||
+  fail 'it carves, loads the driver, waits for the activation, reloads systemd, then restarts a running fprintd' "$(<"$fixture/calls")"
 [[ $out == *"Touch ID is on."* ]] || fail 'it says so' "$out"
 # A Neo's sensor key is rebuilt only now, from its factory records on the ESP,
 # byte for byte, root-only, and nowhere else.
@@ -610,9 +637,14 @@ without_status available n && ! grep -qE 'experimental|stays off' "$fixture/out"
   fail 'an agreed Mac with no status is told to restart, not asked again' "$(<"$fixture/out")"
 rm -f "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+: >"$fixture/calls"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 && [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] &&
   grep -q 'key store for Linux stays' "$fixture/out" || fail "turning it off removes the owner's agreement and says the key store stays"
+[[ $(<"$fixture/calls") == $'systemctl daemon-reload\nsystemctl try-restart fprintd.service' ]] ||
+  fail "turning it off reloads systemd, so the generated gate comes back, and restarts fprintd" "$(<"$fixture/calls")"
+: >"$fixture/calls"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 || fail 'turning it off twice is fine'
+[[ ! -s $fixture/calls ]] || fail 'with no record to remove, nothing is reloaded or restarted' "$(<"$fixture/calls")"
 # A Neo's sensor key goes too, since turning Touch ID on again rebuilds it.
 mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
 cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
@@ -660,6 +692,7 @@ mkdir -p "$fixture/etc/touchid-on/in-the-way"
   fail "a record that can't be removed fails and never says Touch ID stops loading" "$(<"$fixture/out")"
 rm -rf "$fixture/etc/touchid-on"
 touch "$fixture/keybag"
+: >"$fixture/calls"
 run touchid-status
 [[ $(<"$fixture/run/touchid") == "available" && ! -s $fixture/calls ]] ||
   fail 'after turning it off, the next boot leaves it off and only offers it again'
