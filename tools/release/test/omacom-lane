@@ -541,28 +541,21 @@ has "promotion:       rc -> stable on aarch64" "promotion to stable"
 has "set:             linux-aurora m1n1-aurora" "the Aurora set"
 echo "ok - mac-aurora-pin pins omacom's linux-aurora forward only and promotes through mac-release"
 
-# ── mac-aurora-pin on a macOS PATH ──────────────────────────────────────────
-# Every command on PATH but sha256sum, as on macOS, and a curl that serves one
-# kernel archive. Where the host has no shasum, sha256sum stands in for it.
-macos_path=$tmp/macos-path
-mkdir "$macos_path"
+# ── mac-aurora-pin with one digest command ──────────────────────────────────
+# Every command on PATH but sha256sum or shasum, and a curl that serves one
+# kernel archive. macOS 14 and earlier have no sha256sum. Where the host lacks
+# the command a run keeps, the other one stands in for it.
+digest_path=$tmp/digest-path
+mkdir "$digest_path"
 IFS=: read -ra path_dirs <<<"$PATH"
 for dir in "${path_dirs[@]}"; do
   if [[ -d $dir ]]; then
-    ln -s "$dir"/* "$macos_path/" 2>/dev/null || true
+    ln -s "$dir"/* "$digest_path/" 2>/dev/null || true
   fi
 done
-rm -f "$macos_path/sha256sum" "$macos_path/curl"
-if [[ ! -e $macos_path/shasum ]]; then
-  cat >"$macos_path/shasum" <<EOF
-#!/bin/bash
-[[ \$1 == "-a" && \$2 == "256" ]] || exit 64
-shift 2
-exec "$(command -v sha256sum)" "\$@"
-EOF
-  chmod +x "$macos_path/shasum"
-fi
-cat >"$macos_path/curl" <<'STUB'
+declare -A host_digest=([sha256sum]=$(command -v sha256sum || true) [shasum]=$(command -v shasum || true))
+rm -f "$digest_path/curl"
+cat >"$digest_path/curl" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 out="" url=""
@@ -571,16 +564,11 @@ printf '%s\n' "$url" >>"$FAKE_WORLD/curl.log"
 cp "$FAKE_WORLD/kernel.tar.gz" "$out"
 printf 200
 STUB
-chmod +x "$macos_path/curl"
+chmod +x "$digest_path/curl"
 mkdir -p "$tmp/kernel/linux-$k2"
 printf 'VERSION = 7\nPATCHLEVEL = 1\nSUBLEVEL = 13\n' >"$tmp/kernel/linux-$k2/Makefile"
 tar -czf "$tmp/world/kernel.tar.gz" -C "$tmp/kernel" "linux-$k2"
 kernel_sum=$(file_sha "$tmp/world/kernel.tar.gz")
-PATH=$macos_path FAKE_KERNEL_HEAD=$k2 run "$pin" pin --dry-run || fail "the pin dry run on a macOS PATH failed"
-has "+sha256sums=('$kernel_sum'" "the downloaded archive's digest on a macOS PATH"
-downloads=$(wc -l <"$tmp/world/curl.log")
-(( downloads == 1 )) || fail "the pin on a macOS PATH downloaded the archive $downloads times"
-# The fork lane, with the archive digest published in the lane's INPUTS.
 fork_recipe=$tmp/fork-pkgbuilds/linux-aurora-edge
 mkdir -p "$fork_recipe"
 cat >"$fork_recipe/PKGBUILD" <<EOF
@@ -594,15 +582,33 @@ source=(
 sha256sums=('$kernel_sum'
             'SKIP')
 EOF
-printf 'source=linux-aurora|https://github.com/aurora-silicon/linux/archive/%s.tar.gz|%s\n' "$k2" "$kernel_sum" >"$tmp/world/INPUTS"
-PATH=$macos_path FAKE_KERNEL_HEAD=$k2 run "$pin" --lane fork edge --dry-run --recipe "$fork_recipe" &&
-  fail "the fork lane on a macOS PATH pinned what its published INPUTS records"
-has "nothing changed: aurora-edge-20261101 records input digest $(file_sha "$tmp/world/INPUTS") for aurora-wip $k2" "the published INPUTS digest on a macOS PATH"
-rm "$tmp/world/INPUTS"
-PATH=$macos_path FAKE_KERNEL_HEAD=$k2 run "$pin" --lane fork edge --dry-run --recipe "$fork_recipe" &&
-  fail "the fork lane on a macOS PATH pinned a recipe that already has the archive's digest"
-has "nothing changed: $fork_recipe/PKGBUILD is already pinned to aurora-wip $k2" "the archive digest on the fork lane on a macOS PATH"
-echo "ok - mac-aurora-pin hashes with shasum where there is no sha256sum, as on macOS"
+for kept in shasum sha256sum; do
+  rm -f "$digest_path/shasum" "$digest_path/sha256sum"
+  # A wrapper, not a link: macOS's shasum picks its perl from its own path.
+  if [[ -n ${host_digest[$kept]} ]]; then
+    printf '#!/bin/bash\nexec "%s" "$@"\n' "${host_digest[$kept]}" >"$digest_path/$kept"
+  elif [[ $kept == "shasum" ]]; then
+    printf '#!/bin/bash\n[[ $1 == "-a" && $2 == "256" ]] || exit 64\nshift 2\nexec "%s" "$@"\n' "${host_digest[sha256sum]}" >"$digest_path/shasum"
+  else
+    printf '#!/bin/bash\nexec "%s" -a 256 "$@"\n' "${host_digest[shasum]}" >"$digest_path/sha256sum"
+  fi
+  chmod +x "$digest_path/$kept"
+  : >"$tmp/world/curl.log"
+  PATH=$digest_path FAKE_KERNEL_HEAD=$k2 run "$pin" pin --dry-run || fail "the pin dry run with only $kept failed"
+  has "+sha256sums=('$kernel_sum'" "the downloaded archive's digest with only $kept"
+  downloads=$(wc -l <"$tmp/world/curl.log")
+  (( downloads == 1 )) || fail "the pin with only $kept downloaded the archive $downloads times"
+  # The fork lane, with the archive digest published in the lane's INPUTS.
+  printf 'source=linux-aurora|https://github.com/aurora-silicon/linux/archive/%s.tar.gz|%s\n' "$k2" "$kernel_sum" >"$tmp/world/INPUTS"
+  PATH=$digest_path FAKE_KERNEL_HEAD=$k2 run "$pin" --lane fork edge --dry-run --recipe "$fork_recipe" &&
+    fail "the fork lane with only $kept pinned what its published INPUTS records"
+  has "nothing changed: aurora-edge-20261101 records input digest $(file_sha "$tmp/world/INPUTS") for aurora-wip $k2" "the published INPUTS digest with only $kept"
+  rm "$tmp/world/INPUTS"
+  PATH=$digest_path FAKE_KERNEL_HEAD=$k2 run "$pin" --lane fork edge --dry-run --recipe "$fork_recipe" &&
+    fail "the fork lane with only $kept pinned a recipe that already has the archive's digest"
+  has "nothing changed: $fork_recipe/PKGBUILD is already pinned to aurora-wip $k2" "the archive digest on the fork lane with only $kept"
+done
+echo "ok - mac-aurora-pin hashes with shasum where there is no sha256sum, and with sha256sum where there is no shasum"
 
 MAC_RELEASE_DB_BASE="file://localhost$tmp/world/db" run "$release" --dry-run && fail "a file URL with a host was read as empty channels"
 has "must be file:///<absolute path>" "an unsupported file URL"
