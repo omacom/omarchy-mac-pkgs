@@ -22,6 +22,12 @@ done
   fail 'the platform names Touch ID by its status: ready to enrol and match, or available to turn on'
 python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$platform/display-cutouts.json" ||
   fail 'the cutout description is valid JSON'
+python3 - "$platform/display-cutouts.json" <<'PY' || fail 'each named cutout width is a whole number of columns, positive and narrower than its panel'
+import json, sys
+for panel in json.load(open(sys.argv[1]))["panels"]:
+    width = panel.get("cutoutWidth")
+    assert width is None or (isinstance(width, int) and 0 < width < panel["width"]), panel
+PY
 [[ ! -e $stage/usr/share/omarchy ]] || fail "nothing is staged in the omarchy package's tree"
 # displays.conf follows the runtime's grammar (docs/file-layout.md): one
 # directive per line, a name with no "/", comments on whole lines only. Nothing
