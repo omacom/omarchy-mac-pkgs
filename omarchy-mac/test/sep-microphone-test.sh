@@ -86,6 +86,7 @@ mkdir -p "$fixture/loadbin"
 cat >"$fixture/loadbin/modprobe" <<'STUB'
 #!/bin/bash
 if [[ ${1:-} == -c ]]; then
+  [[ ! -e $FIXTURE_CONFIG.fails ]] || exit 1
   # Like kmod: the configuration files first, then one options line per module
   # parameter word of the kernel command line (modprobe.* words are not options).
   cat "$FIXTURE_CONFIG"
@@ -103,9 +104,10 @@ load() {
   # $1 is modprobe's configuration, $2 the kernel command line, $3 "loaded" for a running driver
   printf '%s' "$1" >"$fixture/config"
   printf '%s\n' "$2" >"$fixture/cmdline"
-  rm -rf "$fixture/sys" "$fixture/call"
+  rm -rf "$fixture/sys" "$fixture/call" "$fixture/config.fails"
   mkdir -p "$fixture/sys"
   if [[ ${3:-} == loaded ]]; then mkdir "$fixture/sys/apple_sep"; fi
+  if [[ ${3:-} == config-fails ]]; then touch "$fixture/config.fails"; fi
   loaded_status=0
   PATH="$fixture/loadbin:$fixture/bin:$PATH" FIXTURE_CONFIG=$fixture/config FIXTURE_CMDLINE=$fixture/cmdline FIXTURE_CALL=$fixture/call \
     OMARCHY_MAC_SEP_SYSFS=$fixture/sys "$loader" >"$fixture/log" 2>&1 || loaded_status=$?
@@ -113,13 +115,13 @@ load() {
   loaded_log=$(cat "$fixture/log")
 }
 load '' 'quiet splash'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'with nothing set, the load passes both options as 0' "$loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'with nothing set, the load passes both options as 0' "$loaded_call"
 load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'quiet'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep' ]] || fail 'options already at 0 elsewhere are used as they are, so a Mac nothing else loads still boots it' "$loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep' ]] || fail 'options already at 0 elsewhere are used as they are, so a Mac nothing else loads still boots it' "$loaded_call"
 load $'options apple-sep xart_writes=0\n' 'quiet'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'only the option still missing is passed' "$loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep provision_keybag=0' ]] || fail 'only the option still missing is passed' "$loaded_call"
 load '' 'quiet apple_sep.provision_keybag=0'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'an option on the kernel command line counts as set' "$loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0' ]] || fail 'an option on the kernel command line counts as set' "$loaded_call"
 load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'apple_sep.xart_writes=0'
 [[ $loaded_status == 1 && -z $loaded_call ]] || fail 'the same option in modprobe.d and on the command line is listed twice, which fails with EEXIST: the unit says so instead of passing it on' "$loaded_status $loaded_call"
 for conflict in $'options apple_sep xart_writes=1 provision_keybag=1\n' $'options apple_sep xart_writes=0 provision_keybag=1\n'; do
@@ -130,9 +132,9 @@ load '' 'quiet apple_sep.xart_writes=1'
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'writes enabled on the command line are never loaded here' "$loaded_call"
 # The kernel strips the quotes of a value, so a quoted zero is a zero.
 load $'options apple_sep xart_writes="0"\n' 'quiet'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'a quoted zero counts as zero' "$loaded_status $loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep provision_keybag=0' ]] || fail 'a quoted zero counts as zero' "$loaded_status $loaded_call"
 load '' 'quiet apple_sep.provision_keybag="0"'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'a quoted zero on the command line counts as zero' "$loaded_status $loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0' ]] || fail 'a quoted zero on the command line counts as zero' "$loaded_status $loaded_call"
 load $'options apple_sep xart_writes="1"\n' 'quiet'
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a quoted one still enables writes and is left to its owner' "$loaded_status $loaded_call"
 # Whenever the helper leaves the load to someone else or fails, it says the microphones stay silent.
@@ -141,17 +143,35 @@ load $'options apple_sep xart_writes=0\n' 'apple_sep.xart_writes=0'
 [[ $loaded_status == 1 && $loaded_log == *'microphones stay silent'* ]] || fail 'a failed duplicate says the built-in microphones stay silent' "$loaded_log"
 # The kernel treats - and _ in a parameter name alike.
 load $'options apple_sep xart-writes=0\n' 'quiet'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep provision_keybag=0' ]] || fail 'a hyphenated option name counts as the underscored one, so it is not passed again' "$loaded_status $loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep provision_keybag=0' ]] || fail 'a hyphenated option name counts as the underscored one, so it is not passed again' "$loaded_status $loaded_call"
 load '' 'quiet apple_sep.provision-keybag=0'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0' ]] || fail 'a hyphenated name on the command line counts as set' "$loaded_status $loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0' ]] || fail 'a hyphenated name on the command line counts as set' "$loaded_status $loaded_call"
 load $'options apple_sep xart-writes=0\noptions apple_sep xart_writes=0\n' 'quiet'
 [[ $loaded_status == 1 && -z $loaded_call ]] || fail 'the hyphenated and underscored names are one parameter, so both is a duplicate' "$loaded_status $loaded_call"
 load $'options apple_sep provision-keybag=1\n' 'quiet'
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a hyphenated name enabling a write is left to its owner' "$loaded_status $loaded_call"
+# The kernel stops reading options at --, and reads a quoted value with spaces as
+# one word, so the appended zeros would not apply: anything but name=value skips the load.
+for odd in $'options apple_sep --\n' $'options apple_sep xart_writes=0 -- provision_keybag=0\n' \
+  $'options apple_sep foo="a provision_keybag=0"\n' $'options apple_sep xart_writes="0\n' $'options apple_sep foo\n' \
+  $'options apple_sep foo=a"b\n' $'options apple_sep xart_writes=0\noptions apple_sep --\n'; do
+  load "$odd" 'quiet'
+  [[ $loaded_status == 1 && -z $loaded_call && $loaded_log == *'microphones stay silent'* ]] ||
+    fail 'an option that is not a plain name=value skips the load and says the microphones stay silent' "$odd $loaded_status $loaded_call $loaded_log"
+done
+load '' 'quiet apple_sep.foo="a'
+[[ $loaded_status == 1 && -z $loaded_call ]] || fail 'an odd word on the command line skips the load too' "$loaded_status $loaded_call"
+load $'options other_module foo="a b" --\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0 provision_keybag=0' ]] || fail "another module's odd options do not matter" "$loaded_status $loaded_call"
+load $'options apple_sep foo=bar baz="qux"\n' 'quiet'
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'plain name=value options for other parameters load as usual' "$loaded_status $loaded_call"
+# Without modprobe's configuration nothing is known about the options, so nothing is appended blind.
+load '' 'quiet' config-fails
+[[ $loaded_status == 1 && -z $loaded_call && $loaded_log == *'microphones stay silent'* ]] || fail 'a failing modprobe -c skips the load and says the microphones stay silent' "$loaded_status $loaded_call $loaded_log"
 load $'options apple_sep xart_writes=0 provision_keybag=0\n' 'quiet' loaded
 [[ $loaded_status == 0 && -z $loaded_call ]] || fail 'a driver someone else loaded is left alone' "$loaded_call"
 load $'options snd_soc_aop mic_check_123=1\noptions apple_sepx xart_writes=1\n' 'quiet snd.xart_writes=1'
-[[ $loaded_status == 0 && $loaded_call == 'apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'other modules options never count as the drivers' "$loaded_call"
+[[ $loaded_status == 0 && $loaded_call == '-b apple-sep xart_writes=0 provision_keybag=0' ]] || fail 'other modules options never count as the drivers' "$loaded_call"
 pass 'the load passes each write option once as 0 and never enables a write'
 
 # Verified inside the staged root, whose stub commands stand in for the

@@ -12,15 +12,26 @@ if [[ -d $sysfs/apple_sep ]]; then
 else
   # Every setting of the two write options from modprobe's configuration, which
   # kmod fills with the apple_sep words of the kernel command line after the files.
-  settings=$(modprobe -c | while read -r keyword module options; do
-    if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
-      for word in $options; do
-        name=${word%%=*}
-        value=${word#*=}
-        printf '%s %s\n' "${name//-/_}" "${value//\"/}"
-      done
-    fi
-  done | grep -E '^(xart_writes|provision_keybag) ' || true)
+  # The kernel reads the words its own way: any that is not a plain name=value is unread here.
+  plain='^([A-Za-z0-9_-]+)=("[^"[:space:]]*"|[^"[:space:]]*)$'
+  settings=""
+  unreadable=""
+  if ! configuration=$(modprobe -c); then
+    unreadable="modprobe -c failed, so the options set for apple_sep are unknown"
+  else
+    while read -r keyword module options; do
+      if [[ $keyword == options && ${module//-/_} == apple_sep ]]; then
+        read -ra words <<<"$options"
+        for word in "${words[@]}"; do
+          if [[ ! $word =~ $plain ]]; then
+            unreadable="apple_sep option '$word' is not a plain name=value, which the kernel may read differently"
+          elif [[ ${BASH_REMATCH[1]//-/_} == @(xart_writes|provision_keybag) ]]; then
+            settings+="${BASH_REMATCH[1]//-/_} ${BASH_REMATCH[2]//\"/}"$'\n'
+          fi
+        done
+      fi
+    done <<<"$configuration"
+  fi
 
   # A write enabled elsewhere leaves the load to its owner; an option set twice
   # would fail it. The first of either, in option order, settles the outcome.
@@ -47,12 +58,15 @@ else
     fi
   done
 
-  if [[ -n $elsewhere ]]; then
+  if [[ -n $unreadable ]]; then
+    echo "$unreadable, so the driver is not loaded here and the built-in microphones stay silent" >&2
+    exit 1
+  elif [[ -n $elsewhere ]]; then
     echo "apple_sep $elsewhere is set elsewhere: its owner loads the driver, and until it does the built-in microphones stay silent" >&2
   elif [[ -n $repeated ]]; then
     echo "apple_sep $repeated, and a second setting makes the load fail with EEXIST: set it once; until then the built-in microphones stay silent" >&2
     exit 1
   else
-    exec modprobe apple-sep "${arguments[@]}"
+    exec modprobe -b apple-sep "${arguments[@]}"
   fi
 fi
