@@ -169,6 +169,23 @@ ln -sfn ../dotfiles/brave-flags.conf "$flags"
 [[ -L $flags ]] || fail 'a linked flags file stays a link' "$(stat -c %F "$flags")"
 [[ $(<"$dotfile") == $'--disable-features=SomeOtherThing,AcceleratedVideoDecoder\n--ozone-platform=wayland' ]] ||
   fail "a linked flags file's target gets the workaround" "$(cat "$dotfile")"
+# The link's target is written through the link, so its directory need not be
+# writable, and a second run with nothing to change still passes.
+printf '%s\n' '--disable-features=SomeOtherThing' >"$dotfile"
+chmod a-w "$HOME/dotfiles"
+status=0
+"$setup_user" "$stage" && "$setup_user" "$stage" || status=$?
+chmod u+w "$HOME/dotfiles"
+(( status == 0 )) || fail 'a flags link into a read-only directory does not stop user setup'
+[[ -L $flags && $(<"$dotfile") == '--disable-features=SomeOtherThing,AcceleratedVideoDecoder' ]] ||
+  fail 'a flags link into a read-only directory stays a link and its target gets the workaround' "$(cat "$dotfile")"
+printf '%s\n' '--disable-features=SomeOtherThing' >"$dotfile"
+chmod a-w "$dotfile"
+output=$("$setup_user" "$stage") || fail 'a flags link to a read-only file does not stop user setup'
+[[ $output == *"Preserving read-only browser flags link: $flags"* ]] ||
+  fail 'user setup says it keeps a flags link to a read-only file' "$output"
+[[ -L $flags && $(<"$dotfile") == '--disable-features=SomeOtherThing' ]] ||
+  fail 'a flags link to a read-only file is left as it is' "$(cat "$dotfile")"
 ln -sfn ../dotfiles/missing-flags.conf "$flags"
 "$setup_user" "$stage" || fail 'a dangling flags link does not stop user setup'
 [[ -L $flags && ! -e $flags ]] || fail 'a dangling flags link is left alone'

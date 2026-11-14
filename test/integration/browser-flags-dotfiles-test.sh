@@ -8,7 +8,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-test.sh"
 require_platform_fixtures "browser installs through lifecycle dispatch"
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'chmod -R u+w "$tmp"; rm -rf "$tmp"' EXIT
 fake_platform "$tmp/apple" "$(runtime_platform aarch64-apple)"
 "$MAC/install" "$tmp/package" >/dev/null
 
@@ -49,6 +49,9 @@ dotfile=$HOME/dotfiles/brave-flags.conf
 : >"$dotfile"
 ln -s ../dotfiles/brave-flags.conf "$HOME/.config/brave-flags.conf"
 install_browser brave
+# The second install edits Brave's flags through the link, which needs no
+# write access to the dotfiles directory.
+chmod a-w "$HOME/dotfiles"
 install_browser chromium
 [[ -L $HOME/.config/brave-flags.conf ]] ||
   fail 'a linked flags file stays a link through later browser installs' "$(stat -c %F "$HOME/.config/brave-flags.conf")"
