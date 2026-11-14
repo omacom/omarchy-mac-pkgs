@@ -26,7 +26,7 @@ python3 - "$platform/display-cutouts.json" <<'PY' || fail 'each named cutout wid
 import json, sys
 for panel in json.load(open(sys.argv[1]))["panels"]:
     width = panel.get("cutoutWidth")
-    assert width is None or (isinstance(width, int) and 0 < width < panel["width"]), panel
+    assert width is None or (type(width) is int and 0 < width < panel["width"]), panel
 PY
 [[ ! -e $stage/usr/share/omarchy ]] || fail "nothing is staged in the omarchy package's tree"
 # displays.conf follows the runtime's grammar (docs/file-layout.md): one
