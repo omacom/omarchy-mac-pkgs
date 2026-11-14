@@ -18,11 +18,24 @@ config=${XDG_CONFIG_HOME:-$HOME/.config}
 # XDG_CONFIG_HOME, which may be another directory.
 flag_dirs=("$config")
 [[ $config == "$HOME/.config" ]] || flag_dirs+=("$HOME/.config")
+join_decode_feature='/^--disable-features=/{/[=,]AcceleratedVideoDecoder([,[:space:]]|$)/!s/^(--disable-features=[^[:space:]]*)/\1,AcceleratedVideoDecoder/;s/^--disable-features=,/--disable-features=/}'
 for flags_dir in "${flag_dirs[@]}"; do
   for flags in "$flags_dir"/{chromium,chrome,microsoft-edge-stable,brave,brave-origin}-flags.conf; do
     [[ -f $flags ]] || continue
-    if grep -q -- '^--disable-features=' "$flags"; then
-      sed -i --follow-symlinks -E '/^--disable-features=/{/[=,]AcceleratedVideoDecoder([,[:space:]]|$)/!s/^(--disable-features=[^[:space:]]*)/\1,AcceleratedVideoDecoder/;s/^--disable-features=,/--disable-features=/}' "$flags"
+    # A link, such as a dotfiles manager's, stays a link: sed -i would put a
+    # regular file in its place, so its target is written through it, and a
+    # target the user cannot write is left as it is.
+    if [[ -L $flags && ! -w $flags ]]; then
+      echo "Preserving read-only browser flags link: $flags"
+    elif grep -q -- '^--disable-features=' "$flags"; then
+      if [[ -L $flags ]]; then
+        joined=$(mktemp)
+        sed -E "$join_decode_feature" "$flags" >"$joined"
+        cat "$joined" >"$flags"
+        rm -f "$joined"
+      else
+        sed -i -E "$join_decode_feature" "$flags"
+      fi
     else
       [[ -z $(tail -c1 "$flags") ]] || echo >>"$flags"
       echo '--disable-features=AcceleratedVideoDecoder' >>"$flags"
