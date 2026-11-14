@@ -160,6 +160,35 @@ printf '%s\n' '--disable-features=SomeOtherThing' '--ozone-platform=wayland' >"$
 printf '%s\n' '--disable-features=' >"$flags"
 "$setup_user" "$stage"
 [[ $(<"$flags") == '--disable-features=AcceleratedVideoDecoder' ]] || fail 'an empty list takes the feature alone' "$(cat "$flags")"
+[[ -f $flags && ! -L $flags ]] || fail 'a plain flags file stays a plain file'
+mkdir -p "$HOME/dotfiles"
+dotfile="$HOME/dotfiles/brave-flags.conf"
+printf '%s\n' '--disable-features=SomeOtherThing' '--ozone-platform=wayland' >"$dotfile"
+ln -sfn ../dotfiles/brave-flags.conf "$flags"
+"$setup_user" "$stage"
+[[ -L $flags ]] || fail 'a linked flags file stays a link' "$(stat -c %F "$flags")"
+[[ $(<"$dotfile") == $'--disable-features=SomeOtherThing,AcceleratedVideoDecoder\n--ozone-platform=wayland' ]] ||
+  fail "a linked flags file's target gets the workaround" "$(cat "$dotfile")"
+# The link's target is written through the link, so its directory need not be
+# writable, and a second run with nothing to change still passes.
+printf '%s\n' '--disable-features=SomeOtherThing' >"$dotfile"
+chmod a-w "$HOME/dotfiles"
+status=0
+"$setup_user" "$stage" && "$setup_user" "$stage" || status=$?
+chmod u+w "$HOME/dotfiles"
+(( status == 0 )) || fail 'a flags link into a read-only directory does not stop user setup'
+[[ -L $flags && $(<"$dotfile") == '--disable-features=SomeOtherThing,AcceleratedVideoDecoder' ]] ||
+  fail 'a flags link into a read-only directory stays a link and its target gets the workaround' "$(cat "$dotfile")"
+printf '%s\n' '--disable-features=SomeOtherThing' >"$dotfile"
+chmod a-w "$dotfile"
+output=$("$setup_user" "$stage") || fail 'a flags link to a read-only file does not stop user setup'
+[[ $output == *"Preserving read-only browser flags link: $flags"* ]] ||
+  fail 'user setup says it keeps a flags link to a read-only file' "$output"
+[[ -L $flags && $(<"$dotfile") == '--disable-features=SomeOtherThing' ]] ||
+  fail 'a flags link to a read-only file is left as it is' "$(cat "$dotfile")"
+ln -sfn ../dotfiles/missing-flags.conf "$flags"
+"$setup_user" "$stage" || fail 'a dangling flags link does not stop user setup'
+[[ -L $flags && ! -e $flags ]] || fail 'a dangling flags link is left alone'
 for browser in chromium chrome microsoft-edge-stable brave-origin; do
   printf '%s\n' '--ozone-platform=wayland' >"$HOME/.config/$browser-flags.conf"
 done
@@ -167,7 +196,7 @@ done
 for browser in chromium chrome microsoft-edge-stable brave-origin; do
   grep -Fxq -- '--disable-features=AcceleratedVideoDecoder' "$HOME/.config/$browser-flags.conf" || fail "$browser gets the decode workaround"
 done
-pass 'Chromium-family browsers decode in software on Apple Silicon, once, joining existing lists'
+pass 'Chromium-family browsers decode in software on Apple Silicon, once, joining existing lists, through a symlink too'
 
 : >"$CALLS"
 OMARCHY_MAC_ROOT=$stage "$stage/usr/lib/omarchy/mac/setup-user" || fail 'the setup-user entrypoint runs user setup'
