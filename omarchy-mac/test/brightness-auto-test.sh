@@ -280,7 +280,7 @@ pass 'seed refuses an unreadable max_brightness'
 
 # No connected internal panel and no config: on refuses before it starts or writes anything, since wluma on its
 # defaults would capture the screen and dim on idle. The unit's start condition stays false for the same reason,
-# and prepare still seeds the keyboard but says the screen gets no config.
+# and prepare fails and says why, so a start that got past the condition still does not run wluma on its defaults.
 rm -rf "$work/state" "$work/config"
 : >"$SYSTEMCTL_LOG"
 echo 123 >"$sys/bus/iio/devices/iio:device0/in_illuminance_input"
@@ -290,8 +290,9 @@ grep -qi 'panel' "$work/err" || fail 'on says why' "$(cat "$work/err")"
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 [[ ! -e $work/state && ! -e $work/config ]] || fail 'a refused on writes nothing' "$(find "$work/state" "$work/config" 2>&1)"
 if run ready >/dev/null 2>&1; then fail 'ready stays false without a panel and without a config'; fi
-run prepare >/dev/null 2>"$work/err" || fail 'prepare still runs with only a keyboard backlight' "$(cat "$work/err")"
-grep -qi 'panel' "$work/err" || fail 'prepare says the panel was not configured' "$(cat "$work/err")"
+if run prepare >/dev/null 2>"$work/err"; then fail 'prepare fails without a panel and without a config'; fi
+grep -qi 'panel' "$work/err" || fail 'prepare says why it left no config' "$(cat "$work/err")"
+[[ ! -e $work/config/wluma/config.toml ]] || fail 'a failed prepare writes no config'
 # A config of the user's own is enough: on then runs with it and the keyboard curve.
 mkdir -p "$work/config/wluma"
 echo '# mine' >"$work/config/wluma/config.toml"
@@ -303,6 +304,15 @@ grep -Fxq -- '--user start wluma.service' "$SYSTEMCTL_LOG" || fail 'on starts wl
 echo connected >"$sys/class/drm/card1-eDP-1/status"
 pass 'a missing panel and a missing config keep wluma stopped, before touching anything'
 
+# The panel is there when ready runs and gone when prepare runs: prepare must fail, not leave a start on defaults.
+rm -rf "$work/state" "$work/config"
+run ready >/dev/null 2>&1 || fail 'ready is true while the panel is connected'
+echo disconnected >"$sys/class/drm/card1-eDP-1/status"
+if run prepare >/dev/null 2>"$work/err"; then fail 'prepare fails when the panel goes away after ready'; fi
+grep -qi 'panel' "$work/err" || fail 'prepare says why when the panel goes away after ready' "$(cat "$work/err")"
+[[ ! -e $work/config/wluma/config.toml ]] || fail 'prepare writes no config for a panel that went away'
+echo connected >"$sys/class/drm/card1-eDP-1/status"
+pass 'a panel that goes away between ready and prepare stops the start'
 
 # Touch Bar backlights are skipped, and the panel is preferred over any other.
 rm -rf "$work/state"
@@ -343,6 +353,6 @@ user_units="$work/root/usr/lib/systemd/user"
 [[ $(readlink "$user_units/graphical-session.target.wants/wluma.service") == ../wluma.service ]] || fail 'the package links wluma.service into graphical-session.target.wants'
 dropin="$user_units/wluma.service.d/omarchy-mac.conf"
 grep -Fxq 'ExecCondition=/usr/bin/omarchy-brightness-auto ready' "$dropin" || fail 'the drop-in starts wluma only with a sensor'
-grep -Fxq 'ExecStartPre=-/usr/bin/omarchy-brightness-auto prepare' "$dropin" || fail 'the drop-in seeds and configures before a start'
+grep -Fxq 'ExecStartPre=/usr/bin/omarchy-brightness-auto prepare' "$dropin" || fail 'the drop-in runs prepare before a start, and a failed prepare stops the start'
 [[ -x $work/root/usr/bin/omarchy-brightness-auto ]] || fail 'the drop-in names an installed command'
 pass 'the package enables wluma by default'

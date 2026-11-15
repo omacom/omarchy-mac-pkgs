@@ -163,8 +163,8 @@ write_config() {
     return 0
   fi
   if ! connector=$(panel_connector); then
-    echo "No internal panel is connected, so the screen gets no wluma config." >&2
-    return 0
+    echo "No internal panel is connected and there is no wluma config, so wluma does not start." >&2
+    return 1
   fi
   mkdir -p "${config_file%/*}"
   printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
@@ -193,7 +193,7 @@ ready() {
 
 # Run by the unit before every start: the starting curves and the config, each only where none exists yet.
 prepare() {
-  write_config
+  write_config || return 1
   seed || return 0
 }
 
