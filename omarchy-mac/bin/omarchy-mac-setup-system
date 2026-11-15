@@ -93,6 +93,28 @@ if [[ ! -f $safety_marker ]]; then
   fi
 fi
 
+# schedutil ramps too slowly for bursty work on Apple Silicon; the runtime's
+# omarchy-powerprofiles-floor gives users' processes a floor that follows the
+# profile. Enabled once, so a later disable or mask stays the administrator's.
+floor=omarchy-mac-powerprofiles-floor.service
+floor_marker="$root/var/lib/omarchy-mac/powerprofiles-floor-configured"
+if [[ ! -f $floor_marker ]]; then
+  if [[ ! -x $root/usr/bin/omarchy-powerprofiles-floor ]]; then
+    echo "Deferring the CPU frequency floor: this Omarchy has no omarchy-powerprofiles-floor"
+  elif ! grep -q smallest-core "$root/usr/bin/omarchy-powerprofiles-floor"; then
+    echo "Deferring the CPU frequency floor: this Omarchy's floor cannot follow the efficiency cores"
+  elif [[ $(systemctl --root="${root:-/}" is-enabled "$floor" 2>/dev/null) == masked* ]]; then
+    echo "Preserving masked CPU frequency floor unit: $floor"
+  else
+    # A failed enable must not stop the rest of setup; no marker, so the next run tries again.
+    if systemctl --root="${root:-/}" enable "$floor"; then
+      install -Dm644 /dev/null "$floor_marker"
+    else
+      echo "Warning: the CPU frequency floor could not be enabled; the next setup run tries again." >&2
+    fi
+  fi
+fi
+
 if [[ -z $root && -d /run/systemd/system ]]; then
   systemctl daemon-reload
   # cat exits nonzero for an intentional mask; report it without failing setup.
@@ -103,6 +125,10 @@ if [[ -z $root && -d /run/systemd/system ]]; then
   if systemctl is-enabled --quiet "$safety" && ! systemctl is-active --quiet "$safety"; then
     systemctl reset-failed "$safety" || true
     systemctl start "$safety" || echo "Warning: speakersafetyd did not start; the speakers stay muted." >&2
+  fi
+  # An image's first boot has queued its start jobs already, so start it there too.
+  if systemctl is-enabled --quiet "$floor" && ! systemctl is-active --quiet "$floor"; then
+    systemctl start --no-block "$floor" || echo "Warning: the CPU frequency floor did not start." >&2
   fi
 fi
 
