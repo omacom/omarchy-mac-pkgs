@@ -8,12 +8,15 @@ command_source="$ROOT/bin/omarchy-brightness-auto"
 
 # A fixture sysfs: the ambient light sensor, the panel and keyboard backlights, a connected eDP-1 connector.
 sys="$work/sys"
-mkdir -p "$sys/bus/iio/devices/iio:device0" "$sys/class/backlight/apple-panel-bl" \
+mkdir -p "$sys/bus/iio/devices/iio:device0" "$sys/class/backlight/apple-panel-bl" "$sys/class/backlight/228600000.dsi.0" "$sys/class/backlight/display-pipe" \
   "$sys/class/leds/apple::kbd_backlight" "$sys/class/drm/card1-eDP-1" "$sys/class/drm/card1-DP-1" "$work/bin" "$work/state" "$work/config"
 echo aop-sensors-als >"$sys/bus/iio/devices/iio:device0/name"
 echo 123 >"$sys/bus/iio/devices/iio:device0/in_illuminance_input"
 echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
 echo 255 >"$sys/class/leds/apple::kbd_backlight/max_brightness"
+# The Touch Bar's backlights sort before the panel's and must never be taken for it (displays.conf skips them).
+echo 100 >"$sys/class/backlight/228600000.dsi.0/max_brightness"
+echo 100 >"$sys/class/backlight/display-pipe/max_brightness"
 echo connected >"$sys/class/drm/card1-eDP-1/status"
 echo disconnected >"$sys/class/drm/card1-DP-1/status"
 
@@ -41,7 +44,7 @@ export XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 : >"$SYSTEMCTL_LOG"
 
 command="$work/bin/omarchy-brightness-auto"
-sed "s|^sys_root=.*|sys_root=$sys|" "$command_source" >"$command"
+sed -e "s|^sys_root=.*|sys_root=$sys|" -e "s|^displays_conf=.*|displays_conf=$ROOT/share/omarchy-platform/displays.conf|" "$command_source" >"$command"
 chmod +x "$command"
 run() { PATH="$work/bin:$PATH" "$command" "$@"; }
 
@@ -133,6 +136,19 @@ rm "$sys/bus/iio/devices/iio:device0/in_illuminance_input"
 [[ $(run status --json) == '{"enabled":false,"lux":null}' ]] || fail 'status --json reports a missing reading as null' "$(run status --json)"
 pass 'status reports state and lux, plain and JSON'
 
+# The menu pipes status --json through grep for '"enabled":true' (omacom/omarchy), so that substring and a zero exit
+# have to hold even with no sensor and no wluma.
+touch "$ENABLED_FLAG"
+[[ $(run status --json) == *'"enabled":true'* ]] || fail 'status --json carries "enabled":true when on' "$(run status --json)"
+rm -f "$ENABLED_FLAG"
+mkdir -p "$work/nowluma"
+for tool in bash cat awk mkdir mv paste; do ln -sf "$(command -v "$tool")" "$work/nowluma/$tool"; done
+ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
+ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
+out=$(PATH="$work/nowluma" "$command" status --json) || fail 'status --json exits 0 with no wluma and no reading'
+[[ $out == '{"enabled":false,"lux":null}' ]] || fail 'status --json still prints JSON with no wluma and no reading' "$out"
+pass 'status --json keeps the menu contract'
+
 if run bogus >/dev/null 2>&1; then fail 'unknown commands fail'; fi
 pass 'rejects unknown commands'
 
@@ -154,14 +170,45 @@ grep -q 'max_brightness' "$work/err" || fail 'seed names the bad maximum' "$(cat
 echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
 pass 'seed refuses an unreadable max_brightness'
 
-# No connected internal panel: on still seeds the keyboard but says the screen gets no config.
+# No connected internal panel and no config: on refuses before it starts or writes anything, since wluma on its
+# defaults would capture the screen and dim on idle.
 rm -rf "$work/state" "$work/config"
+: >"$SYSTEMCTL_LOG"
 echo 123 >"$sys/bus/iio/devices/iio:device0/in_illuminance_input"
 echo disconnected >"$sys/class/drm/card1-eDP-1/status"
-run on >/dev/null 2>"$work/err" || fail 'on still runs with only a keyboard backlight' "$(cat "$work/err")"
-grep -qi 'panel' "$work/err" || fail 'on says the panel was not configured' "$(cat "$work/err")"
+if run on >/dev/null 2>"$work/err"; then fail 'on refuses without a panel and without a config'; fi
+grep -qi 'panel' "$work/err" || fail 'on says why' "$(cat "$work/err")"
+[[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
+[[ ! -e $work/state && ! -e $work/config ]] || fail 'a refused on writes nothing' "$(find "$work/state" "$work/config" 2>&1)"
+# A config of the user's own is enough: on then runs with it and the keyboard curve.
+mkdir -p "$work/config/wluma"
+echo '# mine' >"$work/config/wluma/config.toml"
+run on >/dev/null 2>&1 || fail 'on runs with the user config and no panel'
+grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on starts wluma with the user config'
+[[ $(cat "$work/config/wluma/config.toml") == '# mine' ]] || fail 'on leaves the user config alone'
 echo connected >"$sys/class/drm/card1-eDP-1/status"
-pass 'on says when no panel is configured'
+pass 'on refuses without a panel or a config, before touching anything'
+
+# Touch Bar backlights are skipped, and the panel is preferred over any other.
+rm -rf "$work/state"
+run seed >/dev/null
+(( $(tail -1 < <(values "$panel" | tr ' ' '\n')) == 1000 )) || fail 'the panel curve is not scaled to a Touch Bar backlight' "$(values "$panel")"
+mv "$sys/class/backlight/apple-panel-bl" "$work/panel-away"
+rm -rf "$work/state"
+run seed >/dev/null
+[[ ! -e $panel ]] || fail 'with only Touch Bar backlights no panel curve is written'
+mkdir -p "$sys/class/backlight/intel_backlight"
+echo 500 >"$sys/class/backlight/intel_backlight/max_brightness"
+run seed >/dev/null
+(( $(tail -1 < <(values "$panel" | tr ' ' '\n')) == 500 )) || fail 'another backlight serves when the panel one is missing' "$(values "$panel")"
+mkdir "$sys/class/backlight/a-other"
+echo 77 >"$sys/class/backlight/a-other/max_brightness"
+mv "$work/panel-away" "$sys/class/backlight/apple-panel-bl"
+rm -rf "$work/state"
+run seed >/dev/null
+(( $(tail -1 < <(values "$panel" | tr ' ' '\n')) == 1000 )) || fail 'the preferred backlight wins' "$(values "$panel")"
+rm -rf "$sys/class/backlight/intel_backlight" "$sys/class/backlight/a-other"
+pass 'seed skips Touch Bar backlights and prefers the panel'
 
 # Off Apple Silicon every verb refuses and touches nothing.
 touch "$NOT_APPLE_FLAG"

@@ -7,6 +7,7 @@
 set -euo pipefail
 
 sys_root=/sys
+displays_conf=/usr/share/omarchy-platform/displays.conf
 unit=wluma.service
 state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/wluma
 config_file=${XDG_CONFIG_HOME:-$HOME/.config}/wluma/config.toml
@@ -54,6 +55,37 @@ first_dir() {
   return 1
 }
 
+# The built-in panel's backlight, by the platform's displays.conf: skip the listed Touch Bar backlights, take the preferred
+# one when present, else the first left.
+panel_backlight() {
+  local dir name skip=" " prefer="" kind value first=""
+  if [[ -r $displays_conf ]]; then
+    while read -r kind value _; do
+      case "$kind" in
+        "backlight-skip") skip+="$value " ;;
+        "backlight-prefer") prefer=$value ;;
+      esac
+    done <"$displays_conf"
+  fi
+  for dir in "$sys_root"/class/backlight/*; do
+    name=${dir##*/}
+    if [[ ! -d $dir || $skip == *" $name "* ]]; then
+      continue
+    fi
+    if [[ $name == "$prefer" ]]; then
+      echo "$dir"
+      return 0
+    fi
+    if [[ -z $first ]]; then
+      first=$dir
+    fi
+  done
+  if [[ -z $first ]]; then
+    return 1
+  fi
+  echo "$first"
+}
+
 # wluma names the panel after its DRM connector.
 panel_connector() {
   local dir name
@@ -75,7 +107,7 @@ write_curve() {
     echo "Cannot read max_brightness for $name, so no curve is seeded for it." >&2
     exit 1
   fi
-  if [[ -e $file && $force != 1 ]]; then
+  if [[ -e $file ]] && (( force != 1 )); then
     return 0
   fi
   mkdir -p "$state_dir"
@@ -104,7 +136,7 @@ seed() {
   elif [[ -n ${1:-} ]]; then
     usage
   fi
-  if panel=$(first_dir "$sys_root"/class/backlight/*) && connector=$(panel_connector); then
+  if panel=$(panel_backlight) && connector=$(panel_connector); then
     write_curve "$connector" "$(<"$panel/max_brightness")" "$panel_curve" "$force"
     seeded=1
   fi
@@ -124,10 +156,7 @@ write_config() {
   if [[ -e $config_file ]]; then
     return 0
   fi
-  if ! connector=$(panel_connector); then
-    echo "No internal panel is connected, so the screen gets no wluma config." >&2
-    return 0
-  fi
+  connector=$(panel_connector)
   mkdir -p "${config_file%/*}"
   printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
 }
@@ -138,11 +167,16 @@ enabled() {
 
 turn_on() {
   if ! command -v wluma >/dev/null; then
-    echo "wluma is not installed." >&2
+    echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
     exit 1
   fi
   if ! sensor_dir >/dev/null; then
     echo "No ambient light sensor found." >&2
+    exit 1
+  fi
+  # Without a config wluma runs on its defaults: it captures the screen and dims on idle.
+  if [[ ! -e $config_file ]] && ! panel_connector >/dev/null; then
+    echo "No internal panel is connected and there is no wluma config, so wluma would run on its defaults. Wake the panel, or write $config_file first." >&2
     exit 1
   fi
   seed
