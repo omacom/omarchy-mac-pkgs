@@ -189,6 +189,18 @@ grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on st
 echo connected >"$sys/class/drm/card1-eDP-1/status"
 pass 'on refuses without a panel or a config, before touching anything'
 
+# A panel that goes away after on's check, while the curves are written: on must say why, not exit silently.
+rm -rf "$work/state" "$work/config"
+: >"$SYSTEMCTL_LOG"
+printf '#!/bin/bash\necho disconnected >"%s"\nexec /usr/bin/mv "$@"\n' "$sys/class/drm/card1-eDP-1/status" >"$work/bin/mv"
+chmod +x "$work/bin/mv"
+if run on >/dev/null 2>"$work/err"; then fail 'on fails when the panel goes away before the config is written'; fi
+grep -qi 'panel' "$work/err" || fail 'on says why when the panel goes away' "$(cat "$work/err")"
+[[ ! -s $SYSTEMCTL_LOG ]] || fail 'on starts nothing when the panel goes away' "$(cat "$SYSTEMCTL_LOG")"
+rm "$work/bin/mv"
+echo connected >"$sys/class/drm/card1-eDP-1/status"
+pass 'on says why when the panel goes away mid-run'
+
 # Touch Bar backlights are skipped, and the panel is preferred over any other.
 rm -rf "$work/state"
 run seed >/dev/null
