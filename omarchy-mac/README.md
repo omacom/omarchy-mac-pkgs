@@ -65,7 +65,7 @@ asahi-scripts' path unit starts `macsmc-battery-charge-control-end-threshold.ser
 
 wluma learns from manual brightness changes and does nothing until it has data, so before each start the drop-in runs `omarchy-brightness-auto prepare`, which seeds one starting curve per device in `~/.local/state/wluma/`, named as wluma names them: the panel's DRM connector and the keyboard LED. The panel's backlight is picked by the platform's `displays.conf`: the listed Touch Bar backlights are skipped and the preferred one wins. The panel curve climbs from 5% of `max_brightness` in the dark to 100% at 10000 lux; the keyboard is at half of its maximum in the dark and off from 50 lux. A seed never overwrites a file wluma has written; `seed --force` does. `prepare` also writes `~/.config/wluma/config.toml` when none exists, and never replaces one: the panel with ambient light only, and wluma's idle dimming off, since Omarchy's own idle chain handles an idle screen and would otherwise fight wluma over the keyboard backlight.
 
-`status` reports whether the unit is running (a stopped or skipped unit reads off) and the current lux reading, which stays empty until the sensor reports.
+`status` reports whether the unit is running (a stopped or skipped unit reads off; while the unit waits for the sensor it reads starting) and the current lux reading, which stays empty until the sensor reports.
 
 ## Keyboard function-key mode
 

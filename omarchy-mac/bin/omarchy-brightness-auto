@@ -226,9 +226,10 @@ turn_off() {
 status() {
   local lux state=off
   lux=$(read_lux)
-  if enabled; then
-    state=on
-  fi
+  case $(systemctl --user is-active "$unit" 2>/dev/null || true) in
+    active) state=on ;;
+    activating) state=starting ;;
+  esac
   if [[ ${1:-} == "--json" ]]; then
     printf '{"enabled":%s,"lux":%s}\n' "$([[ $state == "on" ]] && echo true || echo false)" "${lux:-null}"
   elif [[ -z ${1:-} ]]; then

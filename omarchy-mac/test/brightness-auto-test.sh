@@ -33,6 +33,10 @@ case $* in
   "--user is-active --quiet wluma.service")
     [[ -f $MASKED_FLAG || -f $STOPPED_FLAG ]] && exit 3
     exit 0 ;;
+  "--user is-active wluma.service")
+    if [[ -f $MASKED_FLAG || -f $STOPPED_FLAG ]]; then echo inactive; exit 3; fi
+    if [[ -f $STARTING_FLAG ]]; then echo activating; exit 3; fi
+    echo active; exit 0 ;;
   "--user is-enabled wluma.service")
     echo disabled; exit 1 ;;
 esac
@@ -46,7 +50,7 @@ cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 STUB
 chmod +x "$work/bin/wluma" "$work/bin/systemctl" "$work/bin/sleep" "$work/bin/omarchy-hw-apple-silicon"
 export NOT_APPLE_FLAG="$work/not-apple" SLEEP_LOG="$work/sleep.log"
-export SYSTEMCTL_LOG="$work/systemctl.log" MASKED_FLAG="$work/masked" STOPPED_FLAG="$work/stopped"
+export SYSTEMCTL_LOG="$work/systemctl.log" MASKED_FLAG="$work/masked" STOPPED_FLAG="$work/stopped" STARTING_FLAG="$work/starting"
 export XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 : >"$SYSTEMCTL_LOG"
 
@@ -210,6 +214,9 @@ run on >/dev/null
 run toggle >/dev/null
 grep -Fxq -- '--user start wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle starts a unit that is not running'
 rm -f "$STOPPED_FLAG"
+: >"$STARTING_FLAG"
+[[ $(run status | sed -n 1p) == 'Automatic brightness: starting' && $(enabled_json) == false ]] || fail 'status says starting while the unit activates' "$(run status)"
+rm -f "$STARTING_FLAG"
 pass 'off, on and toggle work from both states'
 
 [[ $(run status --json) == '{"enabled":true,"lux":123}' ]] || fail 'status --json reports state and lux' "$(run status --json)"
@@ -256,6 +263,19 @@ if run seed >/dev/null 2>"$work/err"; then fail 'seed refuses an unreadable maxi
 grep -q 'max_brightness' "$work/err" || fail 'seed names the bad maximum' "$(cat "$work/err")"
 [[ ! -e $work/state/wluma/eDP-1.yaml ]] || fail 'seed writes no curve for it'
 echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
+kbd=$(find "$sys/class/leds" -maxdepth 1 -name '*kbd_backlight*' | head -1)
+: >"$kbd/max_brightness"
+rm -rf "$work/state"
+if run seed >/dev/null 2>"$work/err"; then fail 'seed fails when the keyboard maximum cannot be read'; fi
+grep -q 'max_brightness' "$work/err" || fail 'seed names the bad keyboard maximum' "$(cat "$work/err")"
+echo 255 >"$kbd/max_brightness"
+mv "$sys/class/backlight/apple-panel-bl" "$work/panel-gone"
+mv "$kbd" "$work/kbd-gone"
+rm -rf "$work/state"
+if run seed >/dev/null 2>"$work/err"; then fail 'seed fails with nothing to seed'; fi
+grep -q 'No internal display backlight or keyboard backlight' "$work/err" || fail 'seed says there is nothing to seed' "$(cat "$work/err")"
+mv "$work/panel-gone" "$sys/class/backlight/apple-panel-bl"
+mv "$work/kbd-gone" "$kbd"
 pass 'seed refuses an unreadable max_brightness'
 
 # No connected internal panel and no config: on refuses before it starts or writes anything, since wluma on its
