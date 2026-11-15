@@ -78,6 +78,16 @@ USB-C and DisplayPort external displays stay off on an M3 Air for now, since the
 
 Anything marked work in progress there, Thunderbolt device support among them, is work in progress here too. The Aurora kernel adds the display, camera and USB4 work described above.
 
+### M4 Macs (edge testers)
+
+M4 Macs are not part of the first release. On an M4 Mac (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
+
+```
+apple_dart.j713_dcp=1 apple_dart.j713_display=1
+```
+
+When the running kernel has these options, Omarchy adds both to `GRUB_CMDLINE_LINUX` in `/etc/default/grub` at install, which feeds Limine and GRUB alike. A kernel without them gets nothing. To keep the display with the boot loader, set `apple_dart.j713_dcp=0` in `/etc/default/grub` and run `sudo omarchy-mac-boot-update`; Omarchy then adds neither option and never changes the one you set.
+
 ### Experimental J514C login
 
 The 14-inch M3 Max J514C bring-up remains outside the supported release. On a J514C/T6031 install whose boot loader handed the native display and GPU over, the login manager waits for them before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
