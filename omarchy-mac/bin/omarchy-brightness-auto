@@ -58,10 +58,11 @@ first_dir() {
 panel_connector() {
   local dir name
   for dir in "$sys_root"/class/drm/card*-eDP-*; do
-    [[ -f $dir/status && $(<"$dir/status") == connected ]] || continue
-    name=${dir##*/}
-    echo "${name#*-}"
-    return 0
+    if [[ -f $dir/status && $(<"$dir/status") == "connected" ]]; then
+      name=${dir##*/}
+      echo "${name#*-}"
+      return 0
+    fi
   done
   return 1
 }
@@ -70,6 +71,10 @@ panel_connector() {
 write_curve() {
   local name=$1 maximum=$2 curve=$3 force=$4
   local file=$state_dir/$name.yaml
+  if [[ ! $maximum =~ ^[1-9][0-9]*$ ]]; then
+    echo "Cannot read max_brightness for $name, so no curve is seeded for it." >&2
+    exit 1
+  fi
   if [[ -e $file && $force != 1 ]]; then
     return 0
   fi
@@ -94,7 +99,7 @@ write_curve() {
 
 seed() {
   local force=0 panel keyboard connector seeded=0
-  if [[ ${1:-} == --force ]]; then
+  if [[ ${1:-} == "--force" ]]; then
     force=1
   elif [[ -n ${1:-} ]]; then
     usage
@@ -116,8 +121,13 @@ seed() {
 # Ambient light only: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle chain.
 write_config() {
   local connector
-  [[ -e $config_file ]] && return 0
-  connector=$(panel_connector) || return 0
+  if [[ -e $config_file ]]; then
+    return 0
+  fi
+  if ! connector=$(panel_connector); then
+    echo "No internal panel is connected, so the screen gets no wluma config." >&2
+    return 0
+  fi
   mkdir -p "${config_file%/*}"
   printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
 }
@@ -147,12 +157,18 @@ turn_off() {
 status() {
   local lux state=off
   lux=$(read_lux)
-  enabled && state=on
-  if [[ ${1:-} == --json ]]; then
-    printf '{"enabled":%s,"lux":%s}\n' "$([[ $state == on ]] && echo true || echo false)" "${lux:-null}"
+  if enabled; then
+    state=on
+  fi
+  if [[ ${1:-} == "--json" ]]; then
+    printf '{"enabled":%s,"lux":%s}\n' "$([[ $state == "on" ]] && echo true || echo false)" "${lux:-null}"
   elif [[ -z ${1:-} ]]; then
     echo "Automatic brightness: $state"
-    echo "Ambient light: ${lux:+$lux lux}${lux:-no reading}"
+    if [[ -n $lux ]]; then
+      echo "Ambient light: $lux lux"
+    else
+      echo "Ambient light: no reading"
+    fi
   else
     usage
   fi
@@ -163,11 +179,18 @@ if ! omarchy-hw-apple-silicon; then
   exit 1
 fi
 
+# A verb takes at most this many words after it.
+arguments_at_most() {
+  if (( $# - 2 > $1 )); then
+    usage
+  fi
+}
+
 case "${1:-status}" in
-  status) status "${2:-}" ;;
-  on) turn_on ;;
-  off) turn_off ;;
-  toggle) if enabled; then turn_off; else turn_on; fi ;;
-  seed) seed "${2:-}" ;;
+  status) arguments_at_most 1 "$@"; status "${2:-}" ;;
+  on) arguments_at_most 0 "$@"; turn_on ;;
+  off) arguments_at_most 0 "$@"; turn_off ;;
+  toggle) arguments_at_most 0 "$@"; if enabled; then turn_off; else turn_on; fi ;;
+  seed) arguments_at_most 1 "$@"; seed "${2:-}" ;;
   *) usage ;;
 esac

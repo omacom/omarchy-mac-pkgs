@@ -62,8 +62,8 @@ sorted_down=$(tr ' ' '\n' <<<"$keyboard_values" | sort -rn | paste -sd' ')
 [[ $panel_values == "$sorted_up" ]] || fail 'the panel gets brighter with the light' "$panel_values"
 [[ $keyboard_values == "$sorted_down" ]] || fail 'the keyboard gets dimmer with the light' "$keyboard_values"
 [[ ${panel_values##* } == 1000 ]] || fail 'the panel reaches its maximum in daylight' "$panel_values"
-[[ ${panel_values%% *} -ge 1 && ${panel_values%% *} -le 100 ]] || fail 'the panel never goes dark' "$panel_values"
-[[ ${keyboard_values##* } == 0 && ${keyboard_values%% *} -ge 64 && ${keyboard_values%% *} -le 255 ]] || fail 'the keyboard is lit in the dark and off in daylight' "$keyboard_values"
+(( ${panel_values%% *} >= 1 && ${panel_values%% *} <= 100 )) || fail 'the panel never goes dark' "$panel_values"
+[[ ${keyboard_values##* } == 0 ]] && (( ${keyboard_values%% *} >= 64 && ${keyboard_values%% *} <= 255 )) || fail 'the keyboard is lit in the dark and off in daylight' "$keyboard_values"
 [[ $(lux "$panel" | cut -d' ' -f1) == 0 ]] || fail 'the curve starts at zero lux'
 pass 'seed writes monotonic curves scaled to the device ranges'
 
@@ -127,13 +127,41 @@ pass 'off and toggle drive the service'
 [[ $(run status --json) == '{"enabled":true,"lux":123}' ]] || fail 'status --json reports state and lux' "$(run status --json)"
 rm -f "$ENABLED_FLAG"
 [[ $(run status --json) == '{"enabled":false,"lux":123}' ]] || fail 'status --json reports off'
-run status | grep -Fq '123' || fail 'status prints the lux'
+[[ $(run status | sed -n 2p) == 'Ambient light: 123 lux' ]] || fail 'status prints the lux once' "$(run status)"
 rm "$sys/bus/iio/devices/iio:device0/in_illuminance_input"
+[[ $(run status | sed -n 2p) == 'Ambient light: no reading' ]] || fail 'status says when there is no reading' "$(run status)"
 [[ $(run status --json) == '{"enabled":false,"lux":null}' ]] || fail 'status --json reports a missing reading as null' "$(run status --json)"
 pass 'status reports state and lux, plain and JSON'
 
 if run bogus >/dev/null 2>&1; then fail 'unknown commands fail'; fi
 pass 'rejects unknown commands'
+
+# Extra arguments are an error, not ignored, and nothing runs.
+: >"$SYSTEMCTL_LOG"
+for args in 'off x' 'on x' 'toggle x' 'seed --force x' 'status --json x'; do
+  # shellcheck disable=SC2086
+  if run $args >/dev/null 2>&1; then fail "'$args' is refused"; fi
+done
+[[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused call starts nothing' "$(cat "$SYSTEMCTL_LOG")"
+pass 'rejects extra arguments'
+
+# A device whose maximum cannot be read must not get an all-zero curve.
+rm -rf "$work/state"
+: >"$sys/class/backlight/apple-panel-bl/max_brightness"
+if run seed >/dev/null 2>"$work/err"; then fail 'seed refuses an unreadable maximum'; fi
+grep -q 'max_brightness' "$work/err" || fail 'seed names the bad maximum' "$(cat "$work/err")"
+[[ ! -e $work/state/wluma/eDP-1.yaml ]] || fail 'seed writes no curve for it'
+echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
+pass 'seed refuses an unreadable max_brightness'
+
+# No connected internal panel: on still seeds the keyboard but says the screen gets no config.
+rm -rf "$work/state" "$work/config"
+echo 123 >"$sys/bus/iio/devices/iio:device0/in_illuminance_input"
+echo disconnected >"$sys/class/drm/card1-eDP-1/status"
+run on >/dev/null 2>"$work/err" || fail 'on still runs with only a keyboard backlight' "$(cat "$work/err")"
+grep -qi 'panel' "$work/err" || fail 'on says the panel was not configured' "$(cat "$work/err")"
+echo connected >"$sys/class/drm/card1-eDP-1/status"
+pass 'on says when no panel is configured'
 
 # Off Apple Silicon every verb refuses and touches nothing.
 touch "$NOT_APPLE_FLAG"
