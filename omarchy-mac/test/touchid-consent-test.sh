@@ -152,7 +152,8 @@ neo() {
 run() {
   PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_FIRMWARE=$fixture/firmware \
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
-    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
+    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_OTHER_OPTIONS=$fixture/etc/apple-sep.conf \
+    OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
@@ -510,6 +511,19 @@ echo not-ready >"$fixture/activation"
 ! out=$(run touchid-enable 2>&1) && [[ $out == *"did not become ready (not-ready)"* && $out != *"turns on when this Mac restarts"* ]] ||
   fail 'a driver loaded with the options already in place that still fails says so, not that a restart will fix it' "$out"
 echo ready >"$fixture/activation"
+# Another apple-sep.conf would pass the set-once options twice and the load
+# would fail with EEXIST, so touchid-enable names it and changes nothing.
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc"
+printf 'options apple_sep xart_writes=1\n' >"$fixture/etc/apple-sep.conf"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"$fixture/etc/apple-sep.conf also sets"* && $out == *"remove $fixture/etc/apple-sep.conf"* ]] &&
+  [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf && ! -e $fixture/firmware/updates && ! -s $fixture/calls &&
+    ! -e $fixture/run/touchid-loaded && ! -e $fixture/run/touchid.lock &&
+    $(<"$fixture/etc/apple-sep.conf") == 'options apple_sep xart_writes=1' ]] ||
+  fail 'an apple-sep.conf beside the options stops touchid-enable before it writes or loads anything' "$out"
+touch "$fixture/etc/touchid-on"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"apple-sep.conf also sets"* && -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] ||
+  fail "the refusal keeps the record of an owner who agreed earlier" "$out"
 machine apple,j314s apple,t6000 apple,arm-platform
 ! run touchid-enable >/dev/null 2>&1 && [[ ! -e $fixture/etc/touchid-on ]] || fail 'an unsupported Mac is never turned on'
 pass 'turning Touch ID on carves what is missing, records the agreement, and succeeds only when it is ready'
