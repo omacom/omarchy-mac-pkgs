@@ -104,6 +104,10 @@ run prepare >/dev/null
 config="$work/config/wluma/config.toml"
 grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'prepare writes an ambient-light-only config for the panel' "$(cat "$config")"
 awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'prepare leaves idle dimming to Omarchy' "$(cat "$config")"
+# wluma drives every kbd_backlight it finds, and with its own idle off it learns the lock screen's keyboard-off as a
+# choice, so the keyboard would stay dark in a dark room. The config names the LED and disables it, leaving the keyboard
+# to whatever pauses on lock.
+awk '/^\[\[keyboard\]\]$/ { kbd = 1; next } /^\[/ { kbd = 0 } kbd && /^name = "apple::kbd_backlight"$/ { named = 1 } kbd && /^enabled = false$/ { off = 1 } END { exit !(named && off) }' "$config" || fail 'prepare disables wluma for the keyboard backlight' "$(cat "$config")"
 echo '# mine' >"$config"
 echo learned >"$panel"
 run prepare >/dev/null
@@ -112,6 +116,14 @@ run prepare >/dev/null
 run prepare >/dev/null
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'prepare starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 pass 'prepare seeds and configures once and never overwrites'
+
+# Without a keyboard backlight the config names none.
+rm -rf "$work/state" "$work/config"
+mv "$sys/class/leds/apple::kbd_backlight" "$work/led-away"
+run prepare >/dev/null
+! grep -q 'keyboard' "$config" || fail 'prepare names no keyboard when there is none' "$(cat "$config")"
+mv "$work/led-away" "$sys/class/leds/apple::kbd_backlight"
+pass 'the generated config names no keyboard without a keyboard backlight'
 
 # A device whose maximum cannot be read must not make prepare fail: the unit still starts, on what wluma has.
 rm -f "$panel"
