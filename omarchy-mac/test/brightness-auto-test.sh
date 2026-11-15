@@ -89,6 +89,7 @@ run on >/dev/null
 [[ -f $panel ]] || fail 'on seeds missing data'
 config="$work/config/wluma/config.toml"
 grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'on writes an ambient-light-only config for the panel' "$(cat "$config")"
+awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'on leaves idle dimming to Omarchy' "$(cat "$config")"
 grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on enables and starts the service' "$(cat "$SYSTEMCTL_LOG")"
 echo '# mine' >"$config"
 run on >/dev/null

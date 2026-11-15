@@ -113,13 +113,13 @@ seed() {
   fi
 }
 
-# Ambient light only: no screen capture, and wluma leaves colour temperature to hyprsunset.
+# Ambient light only: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle chain.
 write_config() {
   local connector
   [[ -e $config_file ]] && return 0
   connector=$(panel_connector) || return 0
   mkdir -p "${config_file%/*}"
-  printf '[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
+  printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
 }
 
 enabled() {
