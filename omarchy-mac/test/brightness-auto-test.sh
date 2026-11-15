@@ -20,26 +20,33 @@ echo 100 >"$sys/class/backlight/display-pipe/max_brightness"
 echo connected >"$sys/class/drm/card1-eDP-1/status"
 echo disconnected >"$sys/class/drm/card1-DP-1/status"
 
-# Stubs: wluma is present, systemctl records its arguments and answers is-enabled from a flag file.
+# Stubs: wluma is present; systemctl records its arguments and keeps two facts, whether the unit is masked (the
+# package's vendor link otherwise starts it) and whether it is stopped. Like the real one it answers "disabled" to
+# is-enabled for that link, so status must read is-active. sleep only records, so ready's wait costs no time.
 printf '#!/bin/sh\nexit 0\n' >"$work/bin/wluma"
 cat >"$work/bin/systemctl" <<'STUB'
 #!/bin/bash
 echo "$*" >>"$SYSTEMCTL_LOG"
-if [[ $* == "--user is-enabled wluma.service" ]]; then
-  [[ -f $ENABLED_FLAG ]] && { echo enabled; exit 0; }
-  echo disabled
-  exit 1
-fi
+case $* in
+  "--user mask --now wluma.service") : >"$MASKED_FLAG" ;;
+  "--user unmask wluma.service") rm -f "$MASKED_FLAG" ;;
+  "--user is-active --quiet wluma.service")
+    [[ -f $MASKED_FLAG || -f $STOPPED_FLAG ]] && exit 3
+    exit 0 ;;
+  "--user is-enabled wluma.service")
+    echo disabled; exit 1 ;;
+esac
 exit 0
 STUB
+printf '#!/bin/bash\necho "$*" >>"$SLEEP_LOG"\nif [[ -n ${SLEEP_FILL:-} && $(wc -l <"$SLEEP_LOG") -ge 3 ]]; then rmdir "$SLEEP_FILL"; echo 5 >"$SLEEP_FILL"; fi\n' >"$work/bin/sleep"
 # The runtime's Apple predicate: true unless the flag file says this is another machine.
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 #!/bin/bash
 [[ ! -f $NOT_APPLE_FLAG ]]
 STUB
-chmod +x "$work/bin/wluma" "$work/bin/systemctl" "$work/bin/omarchy-hw-apple-silicon"
-export NOT_APPLE_FLAG="$work/not-apple"
-export SYSTEMCTL_LOG="$work/systemctl.log" ENABLED_FLAG="$work/enabled"
+chmod +x "$work/bin/wluma" "$work/bin/systemctl" "$work/bin/sleep" "$work/bin/omarchy-hw-apple-silicon"
+export NOT_APPLE_FLAG="$work/not-apple" SLEEP_LOG="$work/sleep.log"
+export SYSTEMCTL_LOG="$work/systemctl.log" MASKED_FLAG="$work/masked" STOPPED_FLAG="$work/stopped"
 export XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
 : >"$SYSTEMCTL_LOG"
 
@@ -86,18 +93,77 @@ echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
 run seed --force >/dev/null
 pass 'seed scales to max_brightness'
 
-# on: seeds, writes the config once, starts the service.
+# prepare, run by the unit before every start: seeds missing data, writes the config once, keeps a user's.
 rm -f "$panel" "$keyboard"
-run on >/dev/null
-[[ -f $panel ]] || fail 'on seeds missing data'
+run prepare >/dev/null
+[[ -f $panel ]] || fail 'prepare seeds missing data'
 config="$work/config/wluma/config.toml"
-grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'on writes an ambient-light-only config for the panel' "$(cat "$config")"
-awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'on leaves idle dimming to Omarchy' "$(cat "$config")"
-grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on enables and starts the service' "$(cat "$SYSTEMCTL_LOG")"
+grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'prepare writes an ambient-light-only config for the panel' "$(cat "$config")"
+awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'prepare leaves idle dimming to Omarchy' "$(cat "$config")"
 echo '# mine' >"$config"
+echo learned >"$panel"
+run prepare >/dev/null
+[[ $(cat "$config") == '# mine' && $(cat "$panel") == learned ]] || fail 'prepare keeps an existing config and learned curve'
+: >"$SYSTEMCTL_LOG"
+run prepare >/dev/null
+[[ ! -s $SYSTEMCTL_LOG ]] || fail 'prepare starts nothing' "$(cat "$SYSTEMCTL_LOG")"
+pass 'prepare seeds and configures once and never overwrites'
+
+# A device whose maximum cannot be read must not make prepare fail: the unit still starts, on what wluma has.
+rm -f "$panel"
+max_file="$sys/class/backlight/apple-panel-bl/max_brightness"
+max_was=$(<"$max_file")
+: >"$max_file"
+run prepare >/dev/null 2>"$work/err" || fail 'prepare succeeds when a maximum cannot be read' "$(cat "$work/err")"
+grep -q 'max_brightness' "$work/err" || fail 'prepare names the bad maximum' "$(cat "$work/err")"
+[[ ! -e $panel ]] || fail 'prepare writes no curve for it'
+echo "$max_was" >"$max_file"
+pass 'prepare survives an unreadable max_brightness'
+
+# ready, asked by the unit before every start: wluma, a sensor, and a number from it.
+: >"$SLEEP_LOG"
+run ready || fail 'ready is true with wluma and a reading'
+[[ ! -s $SLEEP_LOG ]] || fail 'ready does not wait when the sensor already reports'
+mv "$sys/bus/iio/devices/iio:device0" "$work/iio-away"
+if run ready; then fail 'ready is false without a sensor'; fi
+[[ ! -s $SLEEP_LOG ]] || fail 'ready does not wait for a sensor that is not there'
+# With an always-on processor node the sensor's driver may still load: wait for it, then give up.
+mkdir -p "$sys/bus/platform/devices/290c00000.aop"
+if run ready; then fail 'ready is false when the sensor never appears'; fi
+[[ $(wc -l <"$SLEEP_LOG") == 59 ]] || fail 'ready waits 59 s for a sensor that may still load' "$(wc -l <"$SLEEP_LOG")"
+rmdir "$sys/bus/platform/devices/290c00000.aop"
+: >"$SLEEP_LOG"
+mv "$work/iio-away" "$sys/bus/iio/devices/iio:device0"
+reading="$sys/bus/iio/devices/iio:device0/in_illuminance_input"
+# A read that fails, as the sensor's does until it reports (ENODATA), stood in for by a directory.
+rm "$reading"
+mkdir "$reading"
+if run ready; then fail 'ready is false while the sensor gives no number'; fi
+[[ $(wc -l <"$SLEEP_LOG") == 59 ]] || fail 'ready waits 59 s for a first reading, then gives up' "$(wc -l <"$SLEEP_LOG")"
+rmdir "$reading"
+echo 'not a number' >"$reading"
+if run ready; then fail 'ready is false when the reading is not a number'; fi
+: >"$SLEEP_LOG"
+rm "$reading"
+mkdir "$reading"
+SLEEP_FILL="$reading" run ready || fail 'ready is true once the sensor reports within the wait'
+echo 123 >"$reading"
+pass 'ready needs wluma, a sensor and a number, and waits for the first reading'
+
+# on unmasks and starts the service.
+: >"$SYSTEMCTL_LOG"
 run on >/dev/null
-[[ $(cat "$config") == '# mine' ]] || fail 'on keeps an existing config'
-pass 'on seeds, writes the config once and starts wluma'
+[[ $(cat "$SYSTEMCTL_LOG") == $'--user unmask wluma.service\n--user start wluma.service' ]] || fail 'on unmasks and starts the service' "$(cat "$SYSTEMCTL_LOG")"
+pass 'on unmasks and starts wluma'
+
+# on tells the user why it is slow when the sensor has not reported yet.
+: >"$reading"
+run on >/dev/null 2>"$work/err" || fail 'on still starts with no reading yet'
+grep -q '60 s' "$work/err" || fail 'on says it waits for the sensor' "$(cat "$work/err")"
+echo 123 >"$reading"
+run on >/dev/null 2>"$work/err"
+[[ ! -s $work/err ]] || fail 'on is silent when the sensor already reports' "$(cat "$work/err")"
+pass 'on says when it waits for the sensor'
 
 # on refuses without a sensor or without wluma.
 : >"$SYSTEMCTL_LOG"
@@ -112,41 +178,63 @@ ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
 ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
 if PATH="$work/nowluma" "$command" on >/dev/null 2>"$work/err"; then fail 'on refuses without wluma'; fi
 grep -q 'wluma is not installed' "$work/err" || fail 'on names the missing package' "$(cat "$work/err")"
+if PATH="$work/nowluma" "$command" ready; then fail 'ready is false without wluma'; fi
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 pass 'on refuses without a sensor or without wluma'
 
-# off, toggle, status.
+# off, on and toggle from both states; the vendor link leaves the unit on until it is masked.
+enabled_json() { run status --json | sed -E 's/.*"enabled":([a-z]+).*/\1/'; }
+rm -f "$MASKED_FLAG"
+[[ $(enabled_json) == true ]] || fail 'status reports on for the vendor link'
+: >"$SYSTEMCTL_LOG"
 run off >/dev/null
-grep -Fxq -- '--user disable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'off disables and stops the service'
+[[ $(cat "$SYSTEMCTL_LOG") == '--user mask --now wluma.service' ]] || fail 'off masks and stops the service' "$(cat "$SYSTEMCTL_LOG")"
+[[ $(enabled_json) == false && $(run status | sed -n 1p) == 'Automatic brightness: off' ]] || fail 'status reports off when masked'
+run off >/dev/null
+[[ $(enabled_json) == false ]] || fail 'off twice stays off'
 : >"$SYSTEMCTL_LOG"
 run toggle >/dev/null
-grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle turns it on when off'
-touch "$ENABLED_FLAG"
+grep -Fxq -- '--user start wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle turns it on when off'
+[[ $(enabled_json) == true ]] || fail 'toggle from off leaves it on'
+run on >/dev/null
+[[ $(enabled_json) == true ]] || fail 'on when on stays on'
 : >"$SYSTEMCTL_LOG"
 run toggle >/dev/null
-grep -Fxq -- '--user disable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle turns it off when on'
-pass 'off and toggle drive the service'
+grep -Fxq -- '--user mask --now wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle turns it off when on'
+[[ $(enabled_json) == false ]] || fail 'toggle from on leaves it off'
+run on >/dev/null
+[[ $(enabled_json) == true ]] || fail 'on turns it on from off'
+: >"$STOPPED_FLAG"
+[[ $(enabled_json) == false && $(run status | sed -n 1p) == 'Automatic brightness: off' ]] || fail 'status reports off when the unit is not running'
+: >"$SYSTEMCTL_LOG"
+run toggle >/dev/null
+grep -Fxq -- '--user start wluma.service' "$SYSTEMCTL_LOG" || fail 'toggle starts a unit that is not running'
+rm -f "$STOPPED_FLAG"
+pass 'off, on and toggle work from both states'
 
 [[ $(run status --json) == '{"enabled":true,"lux":123}' ]] || fail 'status --json reports state and lux' "$(run status --json)"
-rm -f "$ENABLED_FLAG"
-[[ $(run status --json) == '{"enabled":false,"lux":123}' ]] || fail 'status --json reports off'
 [[ $(run status | sed -n 2p) == 'Ambient light: 123 lux' ]] || fail 'status prints the lux once' "$(run status)"
+run off >/dev/null
+[[ $(run status --json) == '{"enabled":false,"lux":123}' ]] || fail 'status --json reports off'
 rm "$sys/bus/iio/devices/iio:device0/in_illuminance_input"
 [[ $(run status | sed -n 2p) == 'Ambient light: no reading' ]] || fail 'status says when there is no reading' "$(run status)"
 [[ $(run status --json) == '{"enabled":false,"lux":null}' ]] || fail 'status --json reports a missing reading as null' "$(run status --json)"
+echo 123 >"$reading"
 pass 'status reports state and lux, plain and JSON'
 
 # The menu pipes status --json through grep for '"enabled":true' (omacom/omarchy), so that substring and a zero exit
 # have to hold even with no sensor and no wluma.
-touch "$ENABLED_FLAG"
+rm -f "$MASKED_FLAG" "$STOPPED_FLAG"
 [[ $(run status --json) == *'"enabled":true'* ]] || fail 'status --json carries "enabled":true when on' "$(run status --json)"
-rm -f "$ENABLED_FLAG"
+touch "$MASKED_FLAG"
+rm "$reading"
 mkdir -p "$work/nowluma"
 for tool in bash cat awk mkdir mv paste; do ln -sf "$(command -v "$tool")" "$work/nowluma/$tool"; done
 ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
 ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
 out=$(PATH="$work/nowluma" "$command" status --json) || fail 'status --json exits 0 with no wluma and no reading'
 [[ $out == '{"enabled":false,"lux":null}' ]] || fail 'status --json still prints JSON with no wluma and no reading' "$out"
+echo 123 >"$reading"
 pass 'status --json keeps the menu contract'
 
 if run bogus >/dev/null 2>&1; then fail 'unknown commands fail'; fi
@@ -154,7 +242,7 @@ pass 'rejects unknown commands'
 
 # Extra arguments are an error, not ignored, and nothing runs.
 : >"$SYSTEMCTL_LOG"
-for args in 'off x' 'on x' 'toggle x' 'seed --force x' 'status --json x'; do
+for args in 'off x' 'on x' 'toggle x' 'ready x' 'prepare x' 'seed --force x' 'status --json x'; do
   # shellcheck disable=SC2086
   if run $args >/dev/null 2>&1; then fail "'$args' is refused"; fi
 done
@@ -171,7 +259,8 @@ echo 1000 >"$sys/class/backlight/apple-panel-bl/max_brightness"
 pass 'seed refuses an unreadable max_brightness'
 
 # No connected internal panel and no config: on refuses before it starts or writes anything, since wluma on its
-# defaults would capture the screen and dim on idle.
+# defaults would capture the screen and dim on idle. The unit's start condition stays false for the same reason,
+# and prepare still seeds the keyboard but says the screen gets no config.
 rm -rf "$work/state" "$work/config"
 : >"$SYSTEMCTL_LOG"
 echo 123 >"$sys/bus/iio/devices/iio:device0/in_illuminance_input"
@@ -180,14 +269,19 @@ if run on >/dev/null 2>"$work/err"; then fail 'on refuses without a panel and wi
 grep -qi 'panel' "$work/err" || fail 'on says why' "$(cat "$work/err")"
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 [[ ! -e $work/state && ! -e $work/config ]] || fail 'a refused on writes nothing' "$(find "$work/state" "$work/config" 2>&1)"
+if run ready >/dev/null 2>&1; then fail 'ready stays false without a panel and without a config'; fi
+run prepare >/dev/null 2>"$work/err" || fail 'prepare still runs with only a keyboard backlight' "$(cat "$work/err")"
+grep -qi 'panel' "$work/err" || fail 'prepare says the panel was not configured' "$(cat "$work/err")"
 # A config of the user's own is enough: on then runs with it and the keyboard curve.
 mkdir -p "$work/config/wluma"
 echo '# mine' >"$work/config/wluma/config.toml"
+run ready >/dev/null 2>&1 || fail 'ready is true with the user config and no panel'
+: >"$SYSTEMCTL_LOG"
 run on >/dev/null 2>&1 || fail 'on runs with the user config and no panel'
-grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on starts wluma with the user config'
+grep -Fxq -- '--user start wluma.service' "$SYSTEMCTL_LOG" || fail 'on starts wluma with the user config' "$(cat "$SYSTEMCTL_LOG")"
 [[ $(cat "$work/config/wluma/config.toml") == '# mine' ]] || fail 'on leaves the user config alone'
 echo connected >"$sys/class/drm/card1-eDP-1/status"
-pass 'on refuses without a panel or a config, before touching anything'
+pass 'a missing panel and a missing config keep wluma stopped, before touching anything'
 
 # A panel that goes away after on's check, while the curves are written: on must say why, not exit silently.
 rm -rf "$work/state" "$work/config"
@@ -228,10 +322,20 @@ pass 'seed skips Touch Bar backlights and prefers the panel'
 touch "$NOT_APPLE_FLAG"
 rm -rf "$work/state" "$work/config"
 : >"$SYSTEMCTL_LOG"
-for verb in status on off toggle seed; do
+for verb in status on off toggle seed ready prepare; do
   if run "$verb" >/dev/null 2>"$work/err"; then fail "$verb refuses off Apple Silicon"; fi
   grep -q 'Apple Silicon' "$work/err" || fail "$verb says why" "$(cat "$work/err")"
 done
 [[ ! -s $SYSTEMCTL_LOG && ! -e $work/state && ! -e $work/config ]] || fail 'a refused verb touches nothing'
 rm "$NOT_APPLE_FLAG"
 pass 'refuses off Apple Silicon'
+
+# The package turns the unit on for everyone, and asks the command before each start.
+"$ROOT"/install "$work/root" >/dev/null
+user_units="$work/root/usr/lib/systemd/user"
+[[ $(readlink "$user_units/graphical-session.target.wants/wluma.service") == ../wluma.service ]] || fail 'the package links wluma.service into graphical-session.target.wants'
+dropin="$user_units/wluma.service.d/omarchy-mac.conf"
+grep -Fxq 'ExecCondition=/usr/bin/omarchy-brightness-auto ready' "$dropin" || fail 'the drop-in starts wluma only with a sensor'
+grep -Fxq 'ExecStartPre=-/usr/bin/omarchy-brightness-auto prepare' "$dropin" || fail 'the drop-in seeds and configures before a start'
+[[ -x $work/root/usr/bin/omarchy-brightness-auto ]] || fail 'the drop-in names an installed command'
+pass 'the package enables wluma by default'

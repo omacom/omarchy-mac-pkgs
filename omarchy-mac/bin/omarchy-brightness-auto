@@ -2,7 +2,7 @@
 
 # omarchy:summary=Turn automatic brightness from the ambient light sensor on or off
 # omarchy:args=[status [--json]|on|off|toggle|seed [--force]]
-# omarchy:examples=omarchy brightness auto | omarchy brightness auto toggle | omarchy brightness auto seed --force
+# omarchy:examples=omarchy brightness auto | omarchy brightness auto off | omarchy brightness auto seed --force
 
 set -euo pipefail
 
@@ -105,7 +105,7 @@ write_curve() {
   local file=$state_dir/$name.yaml
   if [[ ! $maximum =~ ^[1-9][0-9]*$ ]]; then
     echo "Cannot read max_brightness for $name, so no curve is seeded for it." >&2
-    exit 1
+    return 1
   fi
   if [[ -e $file ]] && (( force != 1 )); then
     return 0
@@ -137,17 +137,23 @@ seed() {
     usage
   fi
   if panel=$(panel_backlight) && connector=$(panel_connector); then
-    write_curve "$connector" "$(<"$panel/max_brightness")" "$panel_curve" "$force"
+    write_curve "$connector" "$(<"$panel/max_brightness")" "$panel_curve" "$force" || return 1
     seeded=1
   fi
   if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
-    write_curve "${keyboard##*/}" "$(<"$keyboard/max_brightness")" "$keyboard_curve" "$force"
+    write_curve "${keyboard##*/}" "$(<"$keyboard/max_brightness")" "$keyboard_curve" "$force" || return 1
     seeded=1
   fi
   if (( seeded == 0 )); then
     echo "No internal display backlight or keyboard backlight found to seed." >&2
-    exit 1
+    return 1
   fi
+}
+
+# wluma on no config runs on its defaults (screen capture, idle dimming), so a machine with neither a connected
+# internal panel nor a config of the user's own stays stopped.
+panel_or_config() {
+  [[ -e $config_file ]] || panel_connector >/dev/null
 }
 
 # Ambient light only: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle chain.
@@ -156,17 +162,39 @@ write_config() {
   if [[ -e $config_file ]]; then
     return 0
   fi
-  # The panel can disconnect after turn_on checked it; without a name there is no config to write.
   if ! connector=$(panel_connector); then
-    echo "The internal panel disconnected while brightness auto was starting, so no wluma config was written and wluma was not started. Wake the panel and run it again." >&2
-    exit 1
+    echo "No internal panel is connected, so the screen gets no wluma config." >&2
+    return 0
   fi
   mkdir -p "${config_file%/*}"
   printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
 }
 
+# The real state: is the unit running. is-enabled answers "disabled" for a unit that starts from the target's vendor link.
 enabled() {
-  systemctl --user is-enabled "$unit" >/dev/null 2>&1
+  systemctl --user is-active --quiet "$unit"
+}
+
+# The unit's start condition: wluma, and a sensor that reports a number. The sensor's driver may load after login
+# (a guarded loader) and the sensor needs a few seconds to report, so this waits up to 60 s. A Mac with no sensor
+# and no always-on processor node to load a driver for it, or a kernel whose sensor never reports, skips the unit.
+ready() {
+  local tries=60
+  command -v wluma >/dev/null || return 1
+  panel_or_config || return 1
+  while [[ -z $(read_lux) ]]; do
+    if ! sensor_dir >/dev/null && ! compgen -G "$sys_root/bus/platform/devices/*.aop" >/dev/null; then
+      return 1
+    fi
+    (( --tries > 0 )) || return 1
+    sleep 1
+  done
+}
+
+# Run by the unit before every start: the starting curves and the config, each only where none exists yet.
+prepare() {
+  write_config
+  seed || return 0
 }
 
 turn_on() {
@@ -179,17 +207,20 @@ turn_on() {
     exit 1
   fi
   # Without a config wluma runs on its defaults: it captures the screen and dims on idle.
-  if [[ ! -e $config_file ]] && ! panel_connector >/dev/null; then
+  if ! panel_or_config; then
     echo "No internal panel is connected and there is no wluma config, so wluma would run on its defaults. Wake the panel, or write $config_file first." >&2
     exit 1
   fi
-  seed
-  write_config
-  systemctl --user enable --now "$unit"
+  systemctl --user unmask "$unit"
+  if [[ -z $(read_lux) ]]; then
+    echo "Waiting up to 60 s for the light sensor to report before wluma starts." >&2
+  fi
+  systemctl --user start "$unit"
 }
 
+# A mask is the one off switch that outlives the vendor link which turns the unit on for everyone.
 turn_off() {
-  systemctl --user disable --now "$unit"
+  systemctl --user mask --now "$unit"
 }
 
 status() {
@@ -230,5 +261,7 @@ case "${1:-status}" in
   off) arguments_at_most 0 "$@"; turn_off ;;
   toggle) arguments_at_most 0 "$@"; if enabled; then turn_off; else turn_on; fi ;;
   seed) arguments_at_most 1 "$@"; seed "${2:-}" ;;
+  ready) arguments_at_most 0 "$@"; ready ;;
+  prepare) arguments_at_most 0 "$@"; prepare ;;
   *) usage ;;
 esac
