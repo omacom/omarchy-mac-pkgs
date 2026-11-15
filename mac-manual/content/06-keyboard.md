@@ -18,6 +18,8 @@ Apple keyboards have no Print Screen key, so Omarchy's `Print` bindings have no 
 
 On Macs with an ambient light sensor, the keyboard backlight follows the room: lit in the dark, off in bright light. Apple Silicon keyboards have no backlight keys, so Omarchy's keyboard backlight bindings have no key on the built-in keyboard yet; [omacom/omarchy-mac#683](https://github.com/omacom/omarchy-mac/issues/683) tracks giving it some.
 
+`omarchy brightness auto on` also makes the screen follow the room, and the keyboard backlight with it, from the same sensor through wluma; `omarchy brightness auto off` stops it. It starts from a built-in curve and keeps learning from the brightness you set by hand.
+
 ## Trackpad
 
 The trackpad follows Omarchy's defaults, as on any other machine. Change scrolling, tap-to-click and gestures in `~/.config/hypr/input.lua`, as [Keyboard, mouse, trackpad](https://omarchy.org/manual/keyboard-mouse-trackpad/) describes. For example, to scroll naturally and click only by pressing the trackpad:

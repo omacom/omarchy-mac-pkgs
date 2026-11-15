@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# omarchy:summary=Turn automatic brightness from the ambient light sensor on or off
+# omarchy:args=[status [--json]|on|off|toggle|seed [--force]]
+# omarchy:examples=omarchy brightness auto | omarchy brightness auto toggle | omarchy brightness auto seed --force
+
+set -euo pipefail
+
+sys_root=/sys
+unit=wluma.service
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/wluma
+config_file=${XDG_CONFIG_HOME:-$HOME/.config}/wluma/config.toml
+
+# Starting curves, as lux:per-mille of the device's maximum. wluma keeps learning from manual changes on top of them.
+panel_curve="0:50 5:120 20:220 50:320 150:450 400:600 1000:780 3000:920 10000:1000"
+keyboard_curve="0:500 3:400 10:250 25:100 50:0"
+
+usage() {
+  echo "Usage: omarchy brightness auto [status [--json]|on|off|toggle|seed [--force]]" >&2
+  exit 2
+}
+
+sensor_dir() {
+  local dir
+  for dir in "$sys_root"/bus/iio/devices/*; do
+    if [[ -e $dir/in_illuminance_input || -e $dir/in_illuminance_raw ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The lux reading, or nothing while the sensor has none (reads fail with ENODATA until it reports).
+read_lux() {
+  local dir file value
+  dir=$(sensor_dir) || return 0
+  for file in in_illuminance_input in_illuminance_raw; do
+    if value=$(cat "$dir/$file" 2>/dev/null) && [[ $value =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "${value%.*}"
+      return 0
+    fi
+  done
+}
+
+first_dir() {
+  local dir
+  for dir in "$@"; do
+    if [[ -d $dir ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# wluma names the panel after its DRM connector.
+panel_connector() {
+  local dir name
+  for dir in "$sys_root"/class/drm/card*-eDP-*; do
+    [[ -f $dir/status && $(<"$dir/status") == connected ]] || continue
+    name=${dir##*/}
+    echo "${name#*-}"
+    return 0
+  done
+  return 1
+}
+
+# Writes one wluma data file unless it exists: name, device maximum, curve.
+write_curve() {
+  local name=$1 maximum=$2 curve=$3 force=$4
+  local file=$state_dir/$name.yaml
+  if [[ -e $file && $force != 1 ]]; then
+    return 0
+  fi
+  mkdir -p "$state_dir"
+  {
+    echo "output_name: $name"
+    echo "entries:"
+    echo "  brightness:"
+    awk -v maximum="$maximum" -v curve="$curve" 'BEGIN {
+      count = split(curve, points, " ")
+      for (index_ = 1; index_ <= count; index_++) {
+        split(points[index_], pair, ":")
+        value = int(maximum * pair[2] / 1000 + 0.5)
+        printf "  - als: %d\n    luma: 0\n    value: %d\n", pair[1], value
+      }
+    }'
+    echo "  dim: []"
+    echo "  temperature: []"
+  } >"$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+seed() {
+  local force=0 panel keyboard connector seeded=0
+  if [[ ${1:-} == --force ]]; then
+    force=1
+  elif [[ -n ${1:-} ]]; then
+    usage
+  fi
+  if panel=$(first_dir "$sys_root"/class/backlight/*) && connector=$(panel_connector); then
+    write_curve "$connector" "$(<"$panel/max_brightness")" "$panel_curve" "$force"
+    seeded=1
+  fi
+  if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
+    write_curve "${keyboard##*/}" "$(<"$keyboard/max_brightness")" "$keyboard_curve" "$force"
+    seeded=1
+  fi
+  if (( seeded == 0 )); then
+    echo "No internal display backlight or keyboard backlight found to seed." >&2
+    exit 1
+  fi
+}
+
+# Ambient light only: no screen capture, and wluma leaves colour temperature to hyprsunset.
+write_config() {
+  local connector
+  [[ -e $config_file ]] && return 0
+  connector=$(panel_connector) || return 0
+  mkdir -p "${config_file%/*}"
+  printf '[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
+}
+
+enabled() {
+  systemctl --user is-enabled "$unit" >/dev/null 2>&1
+}
+
+turn_on() {
+  if ! command -v wluma >/dev/null; then
+    echo "wluma is not installed." >&2
+    exit 1
+  fi
+  if ! sensor_dir >/dev/null; then
+    echo "No ambient light sensor found." >&2
+    exit 1
+  fi
+  seed
+  write_config
+  systemctl --user enable --now "$unit"
+}
+
+turn_off() {
+  systemctl --user disable --now "$unit"
+}
+
+status() {
+  local lux state=off
+  lux=$(read_lux)
+  enabled && state=on
+  if [[ ${1:-} == --json ]]; then
+    printf '{"enabled":%s,"lux":%s}\n' "$([[ $state == on ]] && echo true || echo false)" "${lux:-null}"
+  elif [[ -z ${1:-} ]]; then
+    echo "Automatic brightness: $state"
+    echo "Ambient light: ${lux:+$lux lux}${lux:-no reading}"
+  else
+    usage
+  fi
+}
+
+if ! omarchy-hw-apple-silicon; then
+  echo "Automatic brightness is only set up for Apple Silicon Macs." >&2
+  exit 1
+fi
+
+case "${1:-status}" in
+  status) status "${2:-}" ;;
+  on) turn_on ;;
+  off) turn_off ;;
+  toggle) if enabled; then turn_off; else turn_on; fi ;;
+  seed) seed "${2:-}" ;;
+  *) usage ;;
+esac

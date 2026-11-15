@@ -57,6 +57,14 @@ A set limit is saved as `CHARGE_CONTROL_END_THRESHOLD=` in `/etc/udev/macsmc-bat
 
 asahi-scripts' path unit starts `macsmc-battery-charge-control-end-threshold.service`, which saves the limit, on every SMC battery event, so plugging in the charger or resuming can start it more than five times in ten seconds and leave it `failed` with `start-limit-hit`. Since it only rewrites the same line, the package's drop-in removes its start limit; the drop-in goes once AsahiLinux/asahi-scripts#78 fixes the unit upstream.
 
+## Automatic brightness
+
+`omarchy brightness auto [status [--json]|on|off|toggle|seed [--force]]` turns on automatic brightness for the panel and the keyboard backlight from the ambient light sensor, as macOS does. It runs [wluma](https://github.com/max-baz/wluma) as the user unit `wluma.service` with the sensor alone: no screen capture, and no gamma control, so hyprsunset keeps the colour temperature. `on` refuses without wluma or without a light sensor under `/sys/bus/iio/devices` (`in_illuminance_input` or `in_illuminance_raw`).
+
+wluma learns from manual brightness changes and does nothing until it has data, so `on` first seeds one starting curve per device in `~/.local/state/wluma/`, named as wluma names them: the panel's DRM connector and the keyboard LED. The panel curve climbs from 5% of `max_brightness` in the dark to 100% at 10000 lux; the keyboard is at half of its maximum in the dark and off from 50 lux. A seed never overwrites a file wluma has written; `seed --force` does. `on` also writes `~/.config/wluma/config.toml` for the panel when none exists, and never replaces one.
+
+`status` reports whether the unit is enabled and the current lux reading, which stays empty until the sensor reports.
+
 ## Keyboard function-key mode
 
 The built-in keyboard binds to `hid_apple`, whose `fnmode` decides what the top row sends. Apple Silicon uses the kernel's default, `fnmode=3` (auto): Apple keyboards send mute, volume, brightness and media first with F1-F12 behind Fn, as in macOS, and the non-Apple boards `hid_apple` recognises (Keychron and similar) keep F-keys first. The package ships no `hid_apple` option and the desktop install leaf writes none on Apple Silicon, so any option the owner sets wins, whatever its file name. For F-keys first on the Mac, write `options hid_apple fnmode=2` to `/etc/modprobe.d/hid_apple.conf` and rebuild the boot image (`sudo mkinitcpio -P`, or `sudo omarchy-mac-boot-update` on a Limine Mac): `hid_apple` loads from the initramfs with the options it was built with.
