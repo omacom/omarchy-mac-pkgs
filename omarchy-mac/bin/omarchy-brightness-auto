@@ -150,9 +150,10 @@ seed() {
   fi
 }
 
-# Ambient light only: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle chain.
+# Ambient light only for the panel: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle
+# chain, the keyboard backlight left to whatever else drives it.
 write_config() {
-  local connector
+  local connector keyboard
   if [[ -e $config_file ]]; then
     return 0
   fi
@@ -163,6 +164,11 @@ write_config() {
   fi
   mkdir -p "${config_file%/*}"
   printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
+  # wluma finds every kbd_backlight on its own and, with its idle off, learns the lock screen's keyboard-off as the
+  # user's choice, so the keyboard stays dark in a dark room. Naming the LED with enabled = false drops it.
+  if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
+    printf '\n[[keyboard]]\nname = "%s"\npath = "%s"\nenabled = false\n' "${keyboard##*/}" "$keyboard" >>"$config_file"
+  fi
 }
 
 enabled() {

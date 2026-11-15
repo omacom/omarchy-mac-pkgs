@@ -93,11 +93,22 @@ run on >/dev/null
 config="$work/config/wluma/config.toml"
 grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'on writes an ambient-light-only config for the panel' "$(cat "$config")"
 awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'on leaves idle dimming to Omarchy' "$(cat "$config")"
+# wluma drives every kbd_backlight it finds, and with its own idle off it learns the lock screen's keyboard-off as a
+# choice, so the keyboard would stay dark in a dark room. The config names the LED and disables it, leaving the keyboard
+# to whatever pauses on lock.
+awk '/^\[\[keyboard\]\]$/ { kbd = 1; next } /^\[/ { kbd = 0 } kbd && /^name = "apple::kbd_backlight"$/ { named = 1 } kbd && /^enabled = false$/ { off = 1 } END { exit !(named && off) }' "$config" || fail 'on disables wluma for the keyboard backlight' "$(cat "$config")"
 grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on enables and starts the service' "$(cat "$SYSTEMCTL_LOG")"
 echo '# mine' >"$config"
 run on >/dev/null
 [[ $(cat "$config") == '# mine' ]] || fail 'on keeps an existing config'
 pass 'on seeds, writes the config once and starts wluma'
+# Without a keyboard backlight the config names none.
+rm -rf "$work/state" "$work/config"
+mv "$sys/class/leds/apple::kbd_backlight" "$work/led-away"
+run on >/dev/null
+! grep -q 'keyboard' "$config" || fail 'on names no keyboard when there is none' "$(cat "$config")"
+mv "$work/led-away" "$sys/class/leds/apple::kbd_backlight"
+pass 'the generated config disables the keyboard backlight when there is one'
 
 # on refuses without a sensor or without wluma.
 : >"$SYSTEMCTL_LOG"
