@@ -348,7 +348,9 @@ mv "$work/led-away" "$sys/class/leds/apple::kbd_backlight"
 rm -rf "$work/state" "$work/config"
 run seed >/dev/null
 good=$(cat "$panel")
-printf '#!/bin/bash\ncase "$*" in *maximum=*) echo "  - als: 1"; exit 2 ;; esac\nexec /usr/bin/awk "$@"\n' >"$work/bin/awk"
+# The stub runs the awk this machine has, wherever it lives; it is looked up before the stub exists.
+real_awk=$(command -v awk)
+printf '#!/bin/bash\ncase "$*" in *maximum=*) echo "  - als: 1"; exit 2 ;; esac\nexec "%s" "$@"\n' "$real_awk" >"$work/bin/awk"
 chmod +x "$work/bin/awk"
 if run seed --force >/dev/null 2>&1; then fail 'seed fails when the curve cannot be built'; fi
 [[ $(cat "$panel") == "$good" ]] || fail 'a failed rewrite leaves the good curve in place' "$(cat "$panel")"
