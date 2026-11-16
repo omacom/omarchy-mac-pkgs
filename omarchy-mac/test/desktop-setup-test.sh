@@ -51,8 +51,8 @@ while IFS= read -r line || [[ -n $line ]]; do
   esac
   directives+=("$directive${argument:+ $argument}")
 done <"$platform/displays.conf"
-[[ ${directives[*]} == 'backlight-skip display-pipe backlight-skip 228600000.dsi.0 backlight-prefer apple-panel-bl ddc-require-connector-ddc panel eDP 3024x1964 bitdepth=10 cm=dp3' ]] ||
-  fail 'displays.conf skips the Touch Bar backlights, prefers the Retina panel, probes DDC only where a connector has it and runs the 14" MacBook Pro panel at 10 bits in Display P3' "${directives[*]}"
+[[ ${directives[*]} == 'backlight-skip display-pipe backlight-skip 228600000.dsi.0 backlight-prefer apple-panel-bl ddc-require-connector-ddc panel eDP 3024x1964 bitdepth=10 cm=dp3 panel eDP 3024x1986 cm=dp3' ]] ||
+  fail 'displays.conf skips the Touch Bar backlights, prefers the Retina panel, probes DDC only where a connector has it and runs the 14" MacBook Pro panels in Display P3' "${directives[*]}"
 for helper in electron-launchers electron-desktop-entries; do
   [[ -x $stage/usr/lib/omarchy-mac/$helper ]] || fail "$helper is staged"
 done

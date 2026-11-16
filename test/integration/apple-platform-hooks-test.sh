@@ -34,9 +34,10 @@ const fs = require('fs')
 const model = require(process.env.RUNTIME + '/shell/plugins/bar/BarModel.js')
 const cutouts = model.parseCutouts(fs.readFileSync(process.env.CUTOUTS, 'utf8'))
 const expect = (ok, what) => { if (!ok) { console.error('not ok - ' + what); process.exit(1) } }
-expect(cutouts.length === 4, 'four MacBook panels')
+expect(cutouts.length === 5, 'five MacBook panel modes')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1728, 1117, 2, 0) === 32, '16" MacBook Pro at scale 2: 32 px')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 982, 2, 0) === 32, '14" MacBook Pro at scale 2: 32 px')
+expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 993, 2, 0) === 48, '14-inch M5 Max panel at scale 2: 48 px')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1280, 832, 2, 0) === 28, 'MacBook Air 13.6" at scale 2: 28 px')
 expect(model.notchFloor(cutouts, 'top', 'DP-1', 1728, 1117, 2, 0) === 0, 'external monitors keep no floor')
 expect(model.notchFloor(cutouts, 'bottom', 'eDP-1', 1728, 1117, 2, 0) === 0, 'a bottom bar keeps no floor')
@@ -112,5 +113,9 @@ monitors[1].width, monitors[1].height = 3456, 2234
 applied = {}
 hl.monitor({ output = "eDP-1", scale = 2 })
 assert(last("eDP-1").bitdepth == nil and last("eDP-1").cm == nil, "a panel not listed gets neither")
+monitors[1].width, monitors[1].height = 3024, 1986
+applied = {}
+hl.monitor({ output = "eDP-1", scale = 2 })
+assert(last("eDP-1") and last("eDP-1").cm == "dp3" and last("eDP-1").bitdepth == nil, "the 14-inch M5 Max panel gets Display P3 at the default bitdepth")
 LUA
-pass "the 14-inch MacBook Pro panel gets bitdepth 10 and Display P3, other monitors keep the defaults"
+pass "the 14-inch MacBook Pro panels get Display P3, other monitors keep the defaults"
