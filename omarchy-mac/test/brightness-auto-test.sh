@@ -24,6 +24,9 @@ echo disconnected >"$sys/class/drm/card1-DP-1/status"
 # package's vendor link otherwise starts it) and whether it is stopped. Like the real one it answers "disabled" to
 # is-enabled for that link, so status must read is-active. sleep only records, so ready's wait costs no time.
 printf '#!/bin/sh\nexit 0\n' >"$work/bin/wluma"
+# pacman answers for wluma's package version (WLUMA_PKG_VERSION, "none" when pacman does not know the package).
+printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
+chmod +x "$work/bin/pacman"
 cat >"$work/bin/systemctl" <<'STUB'
 #!/bin/bash
 echo "$*" >>"$SYSTEMCTL_LOG"
@@ -214,6 +217,23 @@ grep -q 'wluma is not installed' "$work/err" || fail 'on names the missing packa
 if PATH="$work/nowluma" "$command" ready; then fail 'ready is false without wluma'; fi
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 pass 'on refuses without a sensor or without wluma'
+
+# wluma 4 has no --version and no keyboard or output tables, so the version comes from the package database: a 4.x
+# package is refused by on and by ready with its version named, a wluma pacman does not know (a user build) is let through.
+export WLUMA_PKG_VERSION=4.9.2-1
+: >"$SYSTEMCTL_LOG"
+if run on >/dev/null 2>"$work/err"; then fail 'on refuses wluma 4'; fi
+grep -Fxq 'wluma 5.0 or newer is required, found 4.9.2' "$work/err" || fail 'on names the version it found' "$(cat "$work/err")"
+[[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
+if run ready 2>/dev/null; then fail 'ready is false for wluma 4'; fi
+export WLUMA_PKG_VERSION=5.0-1
+run on >/dev/null || fail 'on accepts wluma 5.0'
+run ready || fail 'ready accepts wluma 5.0'
+export WLUMA_PKG_VERSION=none
+run on >/dev/null || fail 'on accepts a wluma that pacman does not know'
+run ready || fail 'ready accepts a wluma that pacman does not know'
+export WLUMA_PKG_VERSION=5.0.4-1
+pass 'on and ready refuse wluma older than 5.0 and name the version'
 
 # off, on and toggle from both states; the vendor link leaves the unit on until it is masked.
 enabled_json() { run status --json | sed -E 's/.*"enabled":([a-z]+).*/\1/'; }

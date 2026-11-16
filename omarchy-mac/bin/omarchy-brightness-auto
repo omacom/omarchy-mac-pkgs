@@ -9,6 +9,7 @@ set -euo pipefail
 sys_root=/sys
 displays_conf=/usr/share/omarchy-platform/displays.conf
 unit=wluma.service
+wluma_floor=5.0
 state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/wluma
 config_file=${XDG_CONFIG_HOME:-$HOME/.config}/wluma/config.toml
 
@@ -199,12 +200,28 @@ enabled() {
   systemctl --user is-active --quiet "$unit"
 }
 
+# wluma 5 added the keyboard and output tables the config uses. wluma 4 has no --version and would start on any flag,
+# so the version comes from the package database. A wluma pacman does not know (a user build) is let through.
+wluma_usable() {
+  local found
+  if ! command -v wluma >/dev/null; then
+    echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
+    return 1
+  fi
+  found=$(pacman -Q wluma 2>/dev/null) || return 0
+  found=${found#* }
+  if (( $(vercmp "$found" "$wluma_floor") < 0 )); then
+    echo "wluma $wluma_floor or newer is required, found ${found%-*}" >&2
+    return 1
+  fi
+}
+
 # The unit's start condition: wluma, and a sensor that reports a number. The sensor's driver may load after login
 # (a guarded loader) and the sensor needs a few seconds to report, so this waits up to 60 s. A Mac with no sensor
 # and no always-on processor node to load a driver for it, or a kernel whose sensor never reports, skips the unit.
 ready() {
   local tries=60
-  command -v wluma >/dev/null || return 1
+  wluma_usable || return 1
   panel_or_config || return 1
   while [[ -z $(read_lux) ]]; do
     if ! sensor_dir >/dev/null && ! compgen -G "$sys_root/bus/platform/devices/*.aop" >/dev/null; then
@@ -222,10 +239,7 @@ prepare() {
 }
 
 turn_on() {
-  if ! command -v wluma >/dev/null; then
-    echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
-    exit 1
-  fi
+  wluma_usable || exit 1
   if ! sensor_dir >/dev/null; then
     echo "No ambient light sensor found." >&2
     exit 1
