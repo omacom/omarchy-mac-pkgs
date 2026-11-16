@@ -138,6 +138,24 @@ grep -q 'wluma is not installed' "$work/err" || fail 'on names the missing packa
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
 pass 'on refuses without a sensor or without wluma'
 
+# wluma 4 has no --version and no keyboard or output tables, so the version comes from the package database: a 4.x
+# package is refused with its version named, a wluma pacman does not know (a user build) is let through.
+printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
+chmod +x "$work/bin/pacman"
+export WLUMA_PKG_VERSION=4.9.2-1
+rm -rf "$work/config" "$work/state"
+: >"$SYSTEMCTL_LOG"
+if run on >/dev/null 2>"$work/err"; then fail 'on refuses wluma 4'; fi
+grep -Fxq 'wluma 5.0 or newer is required, found 4.9.2' "$work/err" || fail 'on names the version it found' "$(cat "$work/err")"
+[[ ! -s $SYSTEMCTL_LOG && ! -e $config ]] || fail 'a refused on starts nothing and writes no config' "$(cat "$SYSTEMCTL_LOG")"
+export WLUMA_PKG_VERSION=5.0-1
+run on >/dev/null || fail 'on accepts wluma 5.0'
+export WLUMA_PKG_VERSION=none
+rm -rf "$work/config" "$work/state"
+run on >/dev/null || fail 'on accepts a wluma that pacman does not know'
+export WLUMA_PKG_VERSION=5.0.4-1
+pass 'on refuses wluma older than 5.0 and names the version'
+
 # off, toggle, status.
 run off >/dev/null
 grep -Fxq -- '--user disable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'off disables and stops the service'

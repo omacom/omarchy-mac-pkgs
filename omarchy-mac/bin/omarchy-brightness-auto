@@ -9,6 +9,7 @@ set -euo pipefail
 sys_root=/sys
 displays_conf=/usr/share/omarchy-platform/displays.conf
 unit=wluma.service
+wluma_floor=5.0
 state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/wluma
 config_file=${XDG_CONFIG_HOME:-$HOME/.config}/wluma/config.toml
 
@@ -188,11 +189,24 @@ enabled() {
   systemctl --user is-enabled "$unit" >/dev/null 2>&1
 }
 
-turn_on() {
+# wluma 5 added the keyboard and output tables the config uses. wluma 4 has no --version and would start on any flag,
+# so the version comes from the package database. A wluma pacman does not know (a user build) is let through.
+wluma_usable() {
+  local found
   if ! command -v wluma >/dev/null; then
     echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
-    exit 1
+    return 1
   fi
+  found=$(pacman -Q wluma 2>/dev/null) || return 0
+  found=${found#* }
+  if (( $(vercmp "$found" "$wluma_floor") < 0 )); then
+    echo "wluma $wluma_floor or newer is required, found ${found%-*}" >&2
+    return 1
+  fi
+}
+
+turn_on() {
+  wluma_usable || exit 1
   if ! sensor_dir >/dev/null; then
     echo "No ambient light sensor found." >&2
     exit 1
