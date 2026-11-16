@@ -99,9 +99,19 @@ panel_connector() {
   return 1
 }
 
+# Writes $2 to $1 through a temp file, so a failed write leaves the old file or none. Each step returns its own
+# status: the callers run this on the left of ||, where set -e is off.
+write_file() {
+  local file=$1
+  mkdir -p "${file%/*}"
+  printf '%s' "$2" >"$file.tmp" && mv "$file.tmp" "$file" && return 0
+  rm -f "$file.tmp"
+  return 1
+}
+
 # Writes one wluma data file unless it exists: name, device maximum, curve.
 write_curve() {
-  local name=$1 maximum=$2 curve=$3 force=$4
+  local name=$1 maximum=$2 curve=$3 force=$4 body content
   local file=$state_dir/$name.yaml
   if [[ ! $maximum =~ ^[1-9][0-9]*$ ]]; then
     echo "Cannot read max_brightness for $name, so no curve is seeded for it." >&2
@@ -110,23 +120,16 @@ write_curve() {
   if [[ -e $file ]] && (( force != 1 )); then
     return 0
   fi
-  mkdir -p "$state_dir"
-  {
-    echo "output_name: $name"
-    echo "entries:"
-    echo "  brightness:"
-    awk -v maximum="$maximum" -v curve="$curve" 'BEGIN {
-      count = split(curve, points, " ")
-      for (index_ = 1; index_ <= count; index_++) {
-        split(points[index_], pair, ":")
-        value = int(maximum * pair[2] / 1000 + 0.5)
-        printf "  - als: %d\n    luma: 0\n    value: %d\n", pair[1], value
-      }
-    }'
-    echo "  dim: []"
-    echo "  temperature: []"
-  } >"$file.tmp"
-  mv "$file.tmp" "$file"
+  body=$(awk -v maximum="$maximum" -v curve="$curve" 'BEGIN {
+    count = split(curve, points, " ")
+    for (index_ = 1; index_ <= count; index_++) {
+      split(points[index_], pair, ":")
+      value = int(maximum * pair[2] / 1000 + 0.5)
+      printf "  - als: %d\n    luma: 0\n    value: %d\n", pair[1], value
+    }
+  }') || return 1
+  printf -v content 'output_name: %s\nentries:\n  brightness:\n%s\n  dim: []\n  temperature: []\n' "$name" "$body"
+  write_file "$file" "$content"
 }
 
 seed() {
@@ -159,7 +162,7 @@ panel_or_config() {
 # Ambient light only for the panel: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle
 # chain, the keyboard backlight left to whatever else drives it.
 write_config() {
-  local connector keyboard
+  local connector keyboard content block
   if [[ -e $config_file ]]; then
     return 0
   fi
@@ -167,13 +170,14 @@ write_config() {
     echo "No internal panel is connected and there is no wluma config, so wluma does not start." >&2
     return 1
   fi
-  mkdir -p "${config_file%/*}"
-  printf '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" >"$config_file"
+  printf -v content '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector"
   # wluma finds every kbd_backlight on its own and, with its idle off, learns the lock screen's keyboard-off as the
   # user's choice, so the keyboard stays dark in a dark room. Naming the LED with enabled = false drops it.
   if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
-    printf '\n[[keyboard]]\nname = "%s"\npath = "%s"\nenabled = false\n' "${keyboard##*/}" "$keyboard" >>"$config_file"
+    printf -v block '\n[[keyboard]]\nname = "%s"\npath = "%s"\nenabled = false\n' "${keyboard##*/}" "$keyboard"
+    content+=$block
   fi
+  write_file "$config_file" "$content"
 }
 
 # The real state: is the unit running. is-enabled answers "disabled" for a unit that starts from the target's vendor link.

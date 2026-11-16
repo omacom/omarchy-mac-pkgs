@@ -326,6 +326,31 @@ grep -qi 'panel' "$work/err" || fail 'prepare says why when the panel goes away 
 echo connected >"$sys/class/drm/card1-eDP-1/status"
 pass 'a panel that goes away between ready and prepare stops the start'
 
+# A write that fails must fail prepare and seed, leave no partial file, and never replace a good curve. prepare and
+# write_curve run on the left of || in the callers, where set -e is off, so every step reports its own failure.
+mv "$sys/class/leds/apple::kbd_backlight" "$work/led-away"
+rm -rf "$work/state" "$work/config"
+: >"$work/config"
+if run prepare >/dev/null 2>&1; then fail 'prepare fails when the config directory cannot be made'; fi
+rm -f "$work/config"
+mkdir -p "$work/config/wluma/config.toml.tmp"
+if run prepare >/dev/null 2>&1; then fail 'prepare fails when the config cannot be written'; fi
+[[ ! -e $work/config/wluma/config.toml ]] || fail 'a failed config write leaves no config' "$(cat "$work/config/wluma/config.toml")"
+mv "$work/led-away" "$sys/class/leds/apple::kbd_backlight"
+rm -rf "$work/state" "$work/config"
+run seed >/dev/null
+good=$(cat "$panel")
+printf '#!/bin/bash\ncase "$*" in *maximum=*) echo "  - als: 1"; exit 2 ;; esac\nexec /usr/bin/awk "$@"\n' >"$work/bin/awk"
+chmod +x "$work/bin/awk"
+if run seed --force >/dev/null 2>&1; then fail 'seed fails when the curve cannot be built'; fi
+[[ $(cat "$panel") == "$good" ]] || fail 'a failed rewrite leaves the good curve in place' "$(cat "$panel")"
+[[ ! -e $panel.tmp ]] || fail 'a failed rewrite leaves no temp file'
+rm -f "$work/bin/awk" "$panel"
+ln -s /dev/full "$panel.tmp"
+if run seed >/dev/null 2>&1; then fail 'seed fails when the curve cannot be written'; fi
+[[ ! -e $panel && ! -L $panel.tmp ]] || fail 'a failed curve write leaves no curve and no temp file'
+pass 'a failed write fails prepare and seed and leaves no partial file'
+
 # Touch Bar backlights are skipped, and the panel is preferred over any other.
 rm -rf "$work/state"
 run seed >/dev/null
