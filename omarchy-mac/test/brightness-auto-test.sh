@@ -108,7 +108,7 @@ mv "$sys/class/leds/apple::kbd_backlight" "$work/led-away"
 run on >/dev/null
 ! grep -q 'keyboard' "$config" || fail 'on names no keyboard when there is none' "$(cat "$config")"
 mv "$work/led-away" "$sys/class/leds/apple::kbd_backlight"
-pass 'the generated config disables the keyboard backlight when there is one'
+pass 'the generated config names no keyboard when there is none'
 
 # on refuses without a sensor or without wluma.
 : >"$SYSTEMCTL_LOG"
@@ -117,10 +117,13 @@ if run on >/dev/null 2>"$work/err"; then fail 'on refuses without a light sensor
 grep -qi 'light sensor' "$work/err" || fail 'on says why' "$(cat "$work/err")"
 mv "$work/iio-away" "$sys/bus/iio/devices/iio:device0"
 # A PATH with the tools the command needs and no wluma.
-mkdir -p "$work/nowluma"
-for tool in bash cat awk mkdir mv paste; do ln -sf "$(command -v "$tool")" "$work/nowluma/$tool"; done
-ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
-ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
+stage_path_without_wluma() {
+  mkdir -p "$work/nowluma"
+  for tool in bash cat awk mkdir mv paste; do ln -sf "$(command -v "$tool")" "$work/nowluma/$tool"; done
+  ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
+  ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
+}
+stage_path_without_wluma
 if PATH="$work/nowluma" "$command" on >/dev/null 2>"$work/err"; then fail 'on refuses without wluma'; fi
 grep -q 'wluma is not installed' "$work/err" || fail 'on names the missing package' "$(cat "$work/err")"
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'a refused on starts nothing' "$(cat "$SYSTEMCTL_LOG")"
@@ -152,10 +155,7 @@ pass 'status reports state and lux, plain and JSON'
 touch "$ENABLED_FLAG"
 [[ $(run status --json) == *'"enabled":true'* ]] || fail 'status --json carries "enabled":true when on' "$(run status --json)"
 rm -f "$ENABLED_FLAG"
-mkdir -p "$work/nowluma"
-for tool in bash cat awk mkdir mv paste; do ln -sf "$(command -v "$tool")" "$work/nowluma/$tool"; done
-ln -sf "$work/bin/systemctl" "$work/nowluma/systemctl"
-ln -sf "$work/bin/omarchy-hw-apple-silicon" "$work/nowluma/omarchy-hw-apple-silicon"
+stage_path_without_wluma
 out=$(PATH="$work/nowluma" "$command" status --json) || fail 'status --json exits 0 with no wluma and no reading'
 [[ $out == '{"enabled":false,"lux":null}' ]] || fail 'status --json still prints JSON with no wluma and no reading' "$out"
 pass 'status --json keeps the menu contract'
@@ -208,7 +208,8 @@ real_mv=$(command -v mv)
 printf '#!/bin/bash\necho disconnected >"%s"\nexec "%s" "$@"\n' "$sys/class/drm/card1-eDP-1/status" "$real_mv" >"$work/bin/mv"
 chmod +x "$work/bin/mv"
 if run on >/dev/null 2>"$work/err"; then fail 'on fails when the panel goes away before the config is written'; fi
-grep -qi 'panel' "$work/err" || fail 'on says why when the panel goes away' "$(cat "$work/err")"
+grep -q 'disconnected while' "$work/err" || fail 'on says why when the panel goes away' "$(cat "$work/err")"
+[[ ! -e $config ]] || fail 'on writes no config when the panel goes away' "$(cat "$config")"
 [[ ! -s $SYSTEMCTL_LOG ]] || fail 'on starts nothing when the panel goes away' "$(cat "$SYSTEMCTL_LOG")"
 rm "$work/bin/mv"
 echo connected >"$sys/class/drm/card1-eDP-1/status"
