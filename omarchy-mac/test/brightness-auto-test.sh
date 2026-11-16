@@ -98,6 +98,15 @@ awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = fals
 # to whatever pauses on lock.
 awk '/^\[\[keyboard\]\]$/ { kbd = 1; next } /^\[/ { kbd = 0 } kbd && /^name = "apple::kbd_backlight"$/ { named = 1 } kbd && /^enabled = false$/ { off = 1 } END { exit !(named && off) }' "$config" || fail 'on disables wluma for the keyboard backlight' "$(cat "$config")"
 grep -Fxq -- '--user enable --now wluma.service' "$SYSTEMCTL_LOG" || fail 'on enables and starts the service' "$(cat "$SYSTEMCTL_LOG")"
+# wluma drives a Studio Display's own backlight too. The config names each external connector with enabled = false,
+# once per name, and leaves the panel's entry alone.
+awk '/^\[\[output.backlight\]\]$/ { out = 1; next } /^\[/ { out = 0 } out && /^name = "DP-1"$/ { named = 1; count++ } out && named && /^enabled = false$/ { off = 1 } END { exit !(named && off && count == 1) }' "$config" || fail 'on disables wluma for the external connector, once' "$(cat "$config")"
+! awk '/^\[\[output.backlight\]\]$/ { out = 1; panel = 0; next } /^\[/ { out = 0 } out && /^name = "eDP-1"$/ { panel = 1 } out && panel && /^enabled = false$/ { bad = 1 } END { exit !bad }' "$config" || fail 'the panel stays enabled' "$(cat "$config")"
+mkdir "$sys/class/drm/card0-DP-1"
+rm -f "$config"
+run on >/dev/null
+[[ $(grep -c '^name = "DP-1"$' "$config") == 1 ]] || fail 'a connector name shared by two cards is disabled once' "$(cat "$config")"
+rmdir "$sys/class/drm/card0-DP-1"
 echo '# mine' >"$config"
 run on >/dev/null
 [[ $(cat "$config") == '# mine' ]] || fail 'on keeps an existing config'

@@ -151,9 +151,9 @@ seed() {
 }
 
 # Ambient light only for the panel: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle
-# chain, the keyboard backlight left to whatever else drives it.
+# chain, the keyboard backlight and every external display left to whatever else drives them.
 write_config() {
-  local connector keyboard
+  local connector keyboard dir name seen=" "
   if [[ -e $config_file ]]; then
     return 0
   fi
@@ -169,6 +169,19 @@ write_config() {
   if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
     printf '\n[[keyboard]]\nname = "%s"\npath = "%s"\nenabled = false\n' "${keyboard##*/}" "$keyboard" >>"$config_file"
   fi
+  # wluma drives every connected display it finds a backlight for, and a Studio Display has one. The sensor sits in the
+  # laptop and does not see the light at an external display, so every other connector is named once with
+  # enabled = false. sysfs lists a connector whether or not a display is plugged in, so a later hotplug is covered too.
+  for dir in "$sys_root"/class/drm/card*-*; do
+    [[ -d $dir ]] || continue
+    name=${dir##*/}
+    name=${name#*-}
+    if [[ $name == eDP-* || $seen == *" $name "* ]]; then
+      continue
+    fi
+    seen+="$name "
+    printf '\n[[output.backlight]]\nname = "%s"\nenabled = false\n' "$name" >>"$config_file"
+  done
 }
 
 enabled() {
