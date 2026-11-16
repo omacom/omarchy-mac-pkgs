@@ -31,7 +31,7 @@ case $* in
   "--user mask --now wluma.service") : >"$MASKED_FLAG" ;;
   "--user unmask wluma.service") rm -f "$MASKED_FLAG" ;;
   "--user is-active --quiet wluma.service")
-    [[ -f $MASKED_FLAG || -f $STOPPED_FLAG ]] && exit 3
+    [[ -f $MASKED_FLAG || -f $STOPPED_FLAG || -f $STARTING_FLAG ]] && exit 3
     exit 0 ;;
   "--user is-active wluma.service")
     if [[ -f $MASKED_FLAG || -f $STOPPED_FLAG ]]; then echo inactive; exit 3; fi
@@ -42,7 +42,7 @@ case $* in
 esac
 exit 0
 STUB
-printf '#!/bin/bash\necho "$*" >>"$SLEEP_LOG"\nif [[ -n ${SLEEP_FILL:-} && $(wc -l <"$SLEEP_LOG") -ge 3 ]]; then rmdir "$SLEEP_FILL"; echo 5 >"$SLEEP_FILL"; fi\n' >"$work/bin/sleep"
+printf '#!/bin/bash\necho "$*" >>"$SLEEP_LOG"\nif [[ -n ${SLEEP_FILL:-} && $(wc -l <"$SLEEP_LOG") -ge 3 ]]; then rmdir "$SLEEP_FILL"; echo 5 >"$SLEEP_FILL"; fi\nif [[ -n ${SLEEP_MV:-} && $(wc -l <"$SLEEP_LOG") -ge 3 && -e ${SLEEP_MV%% *} ]]; then mv $SLEEP_MV; fi\n' >"$work/bin/sleep"
 # The runtime's Apple predicate: true unless the flag file says this is another machine.
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 #!/bin/bash
@@ -164,6 +164,14 @@ rm "$reading"
 mkdir "$reading"
 SLEEP_FILL="$reading" run ready || fail 'ready is true once the sensor reports within the wait'
 echo 123 >"$reading"
+# The case the wait exists for: the sensor directory is absent, the always-on processor node is there, and the
+# directory appears while ready waits.
+mv "$sys/bus/iio/devices/iio:device0" "$work/iio-away"
+mkdir -p "$sys/bus/platform/devices/290c00000.aop"
+: >"$SLEEP_LOG"
+SLEEP_MV="$work/iio-away $sys/bus/iio/devices/iio:device0" run ready || fail 'ready is true once the sensor directory appears within the wait'
+[[ $(wc -l <"$SLEEP_LOG") -ge 3 ]] || fail 'ready waited for the sensor directory' "$(wc -l <"$SLEEP_LOG")"
+rmdir "$sys/bus/platform/devices/290c00000.aop"
 pass 'ready needs wluma, a sensor and a number, and waits for the first reading'
 
 # on unmasks and starts the service.
