@@ -1,0 +1,66 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Aurora's Stage 2 updater for Arch Linux ARM. The logic is fedora-aurora's
+# bootchain.py; bootchain_arch.py gives it Arch's paths. See docs/updates.md.
+set -euo pipefail
+# shellcheck disable=SC1091
+[[ ! -f /etc/default/update-m1n1 ]] || source /etc/default/update-m1n1
+[[ -z ${M1N1_UPDATE_DISABLED:-} ]] || exit 0
+
+: "${SOURCE:=/usr/lib/asahi-boot}"
+export M1N1=${M1N1:-"$SOURCE/m1n1.bin"}
+export U_BOOT=${U_BOOT:-"$SOURCE/u-boot-nodtb.bin"}
+export CONFIG=${CONFIG:-/etc/m1n1.conf}
+# Unset means the newest installed kernel's own dtbs directory.
+[[ -z ${DTBS+x} ]] || export DTBS
+export AURORA_DEVICE_TREE_COMPATIBLE=${AURORA_DEVICE_TREE_COMPATIBLE:-/proc/device-tree/compatible}
+export AURORA_MONITOR_FREE_MARKER=${AURORA_MONITOR_FREE_MARKER:-/usr/share/aura/monitor-free}
+: "${AURORA_BOOTCHAIN:=/usr/libexec/aurora/bootchain_arch.py}"
+mode=${1:-}
+if [[ $mode == --commit || $mode == --guard ]]; then
+    export AURORA_KERNEL_ACTION=refresh AURORA_KERNEL_VERSION=
+    export TARGET=${TARGET:-}
+else
+    [[ -z $mode || $mode != --* ]] || { echo "unknown update-m1n1 option" >&2; exit 2; }
+    # The pacman hook runs once after the whole transaction, so the
+    # installed kernels are already final: pick the newest.
+    export AURORA_KERNEL_ACTION=refresh AURORA_KERNEL_VERSION=
+    export TARGET=${TARGET:-$mode}
+fi
+
+# One lock covers discovery, mounting, staging and the rename, for the pacman
+# hook, the boot-time commit and the guard alike.
+mkdir -p /run/lock
+exec 9>/run/lock/update-m1n1.lock
+flock -x 9
+mounted=false
+cleanup() {
+    if $mounted; then umount /run/.system-efi; fi
+}
+trap cleanup EXIT
+
+# Preflight before mounting the ESP. The apply pass checks again under the lock.
+if [[ $mode != --commit && $mode != --guard ]]; then
+    python3 "$AURORA_BOOTCHAIN" --check || exit 1
+fi
+if [[ -z $TARGET ]]; then
+    # shellcheck disable=SC1091
+    source /usr/share/asahi-scripts/functions.sh
+    # functions.sh is POSIX sh; its ESP lookup pipes a file that may be absent.
+    set +o pipefail
+    mount_sys_esp /run/.system-efi
+    set -o pipefail
+    mounted=true
+    export TARGET=/run/.system-efi/m1n1/boot.bin
+fi
+# The trial needs the real ESP mount; a plain write (an image build) does not.
+ESP_ROOT=$(findmnt -nro TARGET --target "$(dirname "$TARGET")" 2>/dev/null || true)
+ESP_DEVICE='' ESP_FSTYPE=''
+if [[ -n $ESP_ROOT ]]; then
+    ESP_DEVICE=$(findmnt -nro SOURCE --target "$ESP_ROOT" 2>/dev/null || true)
+    ESP_FSTYPE=$(findmnt -nro FSTYPE --target "$ESP_ROOT" 2>/dev/null || true)
+fi
+export ESP_ROOT ESP_DEVICE ESP_FSTYPE
+args=()
+[[ $mode != --commit && $mode != --guard ]] || args+=("$mode")
+python3 "$AURORA_BOOTCHAIN" "${args[@]}"
