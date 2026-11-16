@@ -10,7 +10,7 @@ Encryption on a Mac is chosen in the installer and carried out on the Mac's firs
 
 Choose encryption in the installer. The image is written unencrypted, with a temporary install key for the first boot. On that boot, from the initramfs and before the root is mounted, the root file system is converted to LUKS in place: it is shrunk, re-encrypted and its boot entries and initramfs are rebuilt to unlock it. The conversion keeps a recovery journal on the boot partition, so an interrupted conversion can be picked up again.
 
-A Mac that was not asked to encrypt is never touched. The conversion needs a marker the installer writes and refuses to run without it.
+The first boot encrypts unless the installer recorded that you said no. The installer leaves that choice on the EFI system partition, and if it is missing the first boot encrypts. A no is kept on the boot partition, so it holds through a factory reset. Only the first boot of a freshly written image converts, so a Mac that is already installed is never touched.
 
 ## First boot: your password
 

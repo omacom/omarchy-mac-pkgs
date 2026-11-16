@@ -46,6 +46,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: omarchy-mac-pkgs
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Read the pinned runtime

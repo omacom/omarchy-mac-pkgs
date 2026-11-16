@@ -186,6 +186,8 @@ esac
 STUB
 printf '#!/bin/bash\n' >"$work/live-bin/NetworkManager"
 printf '#!/bin/bash\n' >"$work/live-bin/modprobe"
+# This fixture exercises speaker recovery, without the host's optional Steam.
+printf '#!/bin/bash\nexit 1\n' >"$work/live-bin/pacman"
 chmod +x "$work/live-bin/"*
 live() { : >"$CALLS"; PATH="$work/live-bin:$PATH" "$work/live-setup" 2>"$work/live-errors"; }
 SAFETY_ACTIVE=3 live
