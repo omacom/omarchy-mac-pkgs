@@ -80,11 +80,13 @@ Anything marked work in progress there, Thunderbolt device support among them, i
 
 ### M4 Macs (edge testers)
 
-M4 Macs are not part of the first release. On an M4 Mac (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
+M4 Macs are not part of the first release. On an M4 MacBook (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
 
 ```
 apple_dart.j713_dcp=1 apple_dart.j713_display=1
 ```
+
+This applies to the M4 laptops: the MacBook Pro 14" and the MacBook Air 13" and 15". On the M4 Mac mini and iMac, Aurora's device tree leaves the built-in display path disabled, so the options change nothing there.
 
 When the running kernel has these options, Omarchy adds both to `GRUB_CMDLINE_LINUX` in `/etc/default/grub` at install, which feeds Limine and GRUB alike. A kernel without them gets nothing. To keep the display with the boot loader, set `apple_dart.j713_dcp=0` in `/etc/default/grub` and run `sudo omarchy-mac-boot-update`; Omarchy then adds neither option and never changes the one you set.
 
