@@ -85,11 +85,13 @@ fi
 
 repos=$(pacman-conf --repo-list 2>/dev/null)
 missing=()
-for repo in core extra alarm asahi-alarm; do
+for repo in core extra alarm; do
   grep -qx -- "$repo" <<<"$repos" || missing+=("[$repo]")
 done
 if (( ${#missing[@]} )); then
   report FAIL repos "missing from pacman.conf: $(joined "${missing[@]}")"
+elif grep -qx -- asahi-alarm <<<"$repos"; then
+  report FAIL repos "[asahi-alarm] is still in pacman.conf"
 else
   report PASS repos "$(tr '\n' ' ' <<<"$repos" | sed 's/ $//')"
 fi
