@@ -71,7 +71,7 @@ esac
 SH
 stub pacman-conf <<'SH'
 #!/bin/bash
-printf '%s\n' omarchy asahi-alarm core extra alarm
+printf '%s\n' ${TEST_REPOS:-omarchy core extra alarm}
 SH
 stub sudo <<'SH'
 #!/bin/bash
@@ -205,6 +205,10 @@ for line in \
   grep -Fxq -- "$line" "$test_tmp/out" || fail "failing report has: $line" "$(cat "$test_tmp/out")"
 done
 pass "failed units, Wi-Fi, boot check and kernel repository are reported as failures"
+
+TEST_REPOS="omarchy asahi-alarm core extra alarm" run_check && fail "a Mac that still has [asahi-alarm] fails"
+grep -Fq "[asahi-alarm] is still in pacman.conf" "$test_tmp/out" || fail "the leftover repository is named" "$(cat "$test_tmp/out")"
+pass "a Mac that still configures [asahi-alarm] fails the repository check"
 
 rm "$fixture/boot/efi/EFI/Linux/omarchy_linux-aurora.efi" "$fixture/boot/efi/limine.conf"
 run_check && fail "a Limine Mac without its boot files fails"
