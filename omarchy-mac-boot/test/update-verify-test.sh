@@ -104,47 +104,36 @@ verify 6.16.0-aurora9-ARCH
 expect_refused "an initramfs built for the previous kernel" "does not hold the $mac_kver modules"
 pass "update-verify refuses a wrong device tree, a stale m1n1, a missing or stale UKI, another Limine or a stale initramfs, and says not to reboot"
 
-# An owner who boots a chain this package does not build names it in
-# /etc/omarchy-mac-boot/owner-boot-chain. A failed check then still shows
-# what it found, but warns, says how to go back and lets the update finish.
-# A passing check says the file is there, so it is not forgotten.
+# The owner marker bypasses the checker, even with an unsupported kernel or
+# missing boot files. An absent marker must still enforce the packaged chain.
 owner_boot_chain() {
   mkdir -p "$mac_root/etc/omarchy-mac-boot"
   printf '%s\n' "$@" >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
 }
-
-expect_warned() {
-  local description=$1 reason=$2 chain=$3
-  (( status == 0 )) || fail "$description passes update-verify with a warning" "status $status: $(cat "$tmp/out" "$tmp/err")"
-  grep -Fq "$reason" "$tmp/err" || fail "$description still shows what the boot check found" "$(cat "$tmp/err")"
-  grep -Fq "The boot files were not verified: /etc/omarchy-mac-boot/owner-boot-chain says this Mac's owner manages its boot chain:" "$tmp/err" &&
-    grep -Fxq "  $chain" "$tmp/err" || fail "$description names the owner's chain" "$(cat "$tmp/err")"
-  grep -Fxq "To have updates verify the boot files again, remove /etc/omarchy-mac-boot/owner-boot-chain." "$tmp/err" ||
-    fail "$description says how to have updates verify the boot files again" "$(cat "$tmp/err")"
-  ! grep -Fq "do not reboot yet" "$tmp/err" || fail "$description does not say the update is unfinished" "$(cat "$tmp/err")"
+expect_skipped() {
+  (( status == 0 )) || fail "owner-managed verification succeeds" "$(cat "$tmp/out" "$tmp/err")"
+  [[ ! -s $tmp/err ]] || fail "owner-managed verification has no checker errors" "$(cat "$tmp/err")"
+  (( $(wc -l <"$tmp/out") == 1 )) || fail "owner-managed verification prints one line" "$(cat "$tmp/out")"
+  grep -Fxq "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain." "$tmp/out" || fail "owner-managed verification explains the skip"
 }
-
 limine_mac
-owner_boot_chain "" "m1n1 and linux built by hand, booted from the owner's stage 2"
+owner_boot_chain "hand-built chain"
 verify
-expect_verified "an owner-managed Mac whose boot chain passes the check"
-[[ ! -s $tmp/err ]] || fail "an owner-managed Mac that passes the check gets no warning" "$(cat "$tmp/err")"
-grep -Fxq "Boot files verified; /etc/omarchy-mac-boot/owner-boot-chain is present, so a failed check would only warn." "$tmp/out" ||
-  fail "an owner-managed Mac that passes the check is told the file is present" "$(cat "$tmp/out")"
+expect_skipped
 rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 verify
-expect_warned "an owner-managed Mac without its UKI" "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing" \
-  "m1n1 and linux built by hand, booted from the owner's stage 2"
-
+expect_skipped
 limine_mac
 sed -i '/^linux-aurora$/d' "$mac_state/installed"
 verify
 expect_refused "a Mac with no packaged kernel" "cannot tell which kernel boots: neither linux-aurora nor linux-asahi installed"
 owner_boot_chain ""
-verify
-expect_warned "an owner-managed Mac with no packaged kernel" "cannot tell which kernel boots: neither linux-aurora nor linux-asahi installed" \
-  "(the file names no chain)"
-pass "update-verify warns instead of refusing on a Mac whose owner names the boot chain they manage, and says the file is present when the check passes"
+mkdir -p "$tmp/no-check"
+printf '#!/bin/bash\necho checker-must-not-run >&2\nexit 99\n' >"$tmp/no-check/omarchy-apple-silicon-boot-check"
+chmod +x "$tmp/no-check/omarchy-apple-silicon-boot-check"
+TEST_REBUILDS=$tmp/no-check verify
+expect_skipped
+pass "update-verify skips the checker with an owner marker, including an empty marker, and enforces checks without it"
 
 # update-verify checks only what the next boot reads. What the full boot check
 # also holds against a Mac, the next boot does not read, so it never fails an
