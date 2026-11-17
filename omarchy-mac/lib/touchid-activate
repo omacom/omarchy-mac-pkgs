@@ -1,0 +1,70 @@
+#!/bin/bash
+# Opens /dev/sep-bio once, which activates Touch ID, then records in the status
+# file fingerprint-readers names whether it can enrol and match: "ready" only
+# when all four of the driver's attributes say so, otherwise the reason.
+
+node=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
+driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
+status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+attempts=${OMARCHY_MAC_TOUCHID_ATTEMPTS:-90}
+omarchy-hw-apple-silicon || exit 0
+
+attribute() {
+  local file
+  for file in "$driver"/*/diag/"$1"; do
+    if [[ -r $file ]]; then
+      cat "$file"
+      return
+    fi
+  done
+  echo missing
+}
+
+record() {
+  mkdir -p -m 0755 "${status_file%/*}"
+  printf '%s\n' "$1" >"$status_file.new"
+  chmod 0644 "$status_file.new"
+  mv -f "$status_file.new" "$status_file"
+}
+
+finish() {
+  record "$1"
+  if [[ $1 == "ready" ]]; then
+    exit 0
+  else
+    echo "Touch ID is not ready to enrol and match: $2" >&2
+    exit 1
+  fi
+}
+
+# An update re-runs this, and touchid follows every later bring-up, which can
+# fail once and recover: a "ready" from earlier this boot stands unless it ends.
+previous=$(cat "$status_file" 2>/dev/null)
+
+# The node takes one opener at a time, so a busy node is fprintd's, which has
+# activated Touch ID already. Activation lasts the rest of the boot.
+true 2>/dev/null <"$node"
+
+# The attach retries once about 10 s after a short fall, so wait until 45 s
+# after the start, which leaves the unit's 60 s timeout room to record why.
+for ((attempt = 1; attempt <= attempts && SECONDS < 45; attempt++)); do
+  touchid=$(attribute touchid)
+  sensor_attach=$(attribute sensor_attach)
+  restore=$(attribute restore)
+  matching=$(attribute matching)
+  if [[ $touchid == "missing" || $sensor_attach == "missing" || $restore == "missing" || $matching == "missing" ]]; then
+    finish not-ready "the driver lacks a diag attribute (touchid $touchid, sensor_attach $sensor_attach, restore $restore, matching $matching)"
+  elif [[ $touchid == "failed" ]]; then
+    finish failed "activation failed (touchid failed)"
+  elif [[ $restore == "unproven" ]]; then
+    finish unproven "the enrolled fingerprints could not be proven (restore unproven)"
+  elif [[ $matching == "blocked" ]]; then
+    finish blocked "a match could not save its state (matching blocked)"
+  elif [[ $sensor_attach == "attached" && ($previous == "ready" || ($touchid == "ready" && ($restore == "restored" || $restore == "empty") && ($matching == "usable" || $matching == "unverified"))) ]]; then
+    finish ready
+  elif [[ $sensor_attach == "not-ready" ]]; then
+    finish not-ready "the sensor did not come online (sensor_attach not-ready)"
+  fi
+  sleep 0.5
+done
+finish not-ready "timed out (touchid $touchid, sensor_attach $sensor_attach, restore $restore, matching $matching)"

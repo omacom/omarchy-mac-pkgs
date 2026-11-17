@@ -1,0 +1,5 @@
+# Touch ID: "available" once this Mac can set it up but the owner hasn't agreed
+# yet (omarchy-mac-touchid-status.service), "ready" once it can enrol and match
+# (omarchy-mac-touchid-activate.service). See omarchy's docs/file-layout.md.
+/run/omarchy-mac/touchid ready
+/run/omarchy-mac/touchid available

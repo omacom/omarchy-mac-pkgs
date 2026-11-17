@@ -4,6 +4,3 @@ packages=(omarchy omarchy-settings linux)
 forbidden_repos=('asahi*' omarchy-aarch64)
 forbidden_packages=("${mac_only[@]}")
 transitions=(omarchy omarchy-settings)
-unpublished=(
-  [obs-studio]="not built for aarch64 by Arch Linux ARM"
-)

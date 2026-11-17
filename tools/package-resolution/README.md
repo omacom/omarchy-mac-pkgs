@@ -17,6 +17,7 @@ Platforms name the runtime's own package lists (`install/omarchy-*.packages`), r
 - **Conflicts:** no closure package declares a conflict with another one. `pacman -Sp` skips this check, so it is computed from the databases, with versioned conflicts compared by `vercmp`.
 - **Forbidden packages:** no closure package matches `forbidden_packages`.
 - **linux provider:** reports what `pacman -S linux` selects and every package offering `linux`; fails when a forbidden package is selected. With `kernel` set, also reports the selection with that kernel installed.
+- **Mac-only list:** on platforms with `forbidden_packages`, every package in the configured repositories in the `omarchy-platform-apple-silicon` group (which omacom/omarchy-pkgs gives every Apple Silicon package) is named in `mac-only`. The group never classifies a package by itself; add a new Apple Silicon package's name to `mac-only` before it is published.
 - **Mac-only dependencies:** on platforms with `forbidden_packages`, nothing else in the configured repositories depends on a forbidden name.
 - **File ownership:** no file in the closure (from the `.files` databases) has two owners.
 - **Transitions:** for each `transitions` package, an installed equal version and a locally newer version are kept by `pacman -Su` and replaced by an explicit `pacman -S`; `-S --needed` skips the equal version.

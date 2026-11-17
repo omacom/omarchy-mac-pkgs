@@ -18,6 +18,7 @@ omarchy_mac_encrypt_write_state() { echo "phase=$1" >>"$calls"; }
 for fn in open resize_luks mount_opened set_grub_cmdline esp_writable bind_chroot umount_root esp_readonly; do
   eval "omarchy_mac_encrypt_$fn() { :; }"
 done
+omarchy_mac_encrypt_remove_recovery_backup() { :; }
 sync() { :; }
 chroot() { printf '%s\n' "$*" >>"$calls"; [[ ${FAIL_UPDATE:-0} != 1 || $2 != omarchy-mac-boot-update ]]; }
 

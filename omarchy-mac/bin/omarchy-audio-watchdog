@@ -71,10 +71,11 @@ class System:
         time.sleep(seconds)
 
     def run(self, *args, timeout=10, env=None):
-        # None: the command hung or could not run at all.
+        # None: the command hung or could not run at all. C.UTF-8, not C: under
+        # C, Quickshell (Qt) prints a locale warning on stdout, ahead of its JSON.
         try:
             return subprocess.run(args, capture_output=True, text=True, timeout=timeout,
-                                  env=dict(os.environ, LC_ALL='C', **(env or {})), stdin=subprocess.DEVNULL)
+                                  env=dict(os.environ, LC_ALL='C.UTF-8', **(env or {})), stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError):
             return None
 

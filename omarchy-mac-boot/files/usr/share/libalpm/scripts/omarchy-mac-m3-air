@@ -1,0 +1,14 @@
+#!/bin/bash
+# 96-omarchy-mac-m3-air.hook: setup-boot's M3 Air leaf again, with nothing from
+# pacman's environment. The leaf leaves every other Mac, an older m1n1 and an
+# unbooted root alone, and this never fails the transaction.
+
+leaf=/usr/lib/omarchy-mac/boot/setup/m1n1-display.sh
+if (( EUID == 0 )); then
+  /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin OMARCHY_PATH=/usr/share/omarchy \
+    /bin/bash -uo pipefail -c 'source "$1"' omarchy-mac-m3-air "$leaf" || true
+else
+  # Unprivileged tests stage the package under a fixture root.
+  bash -uo pipefail -c 'source "$1"' omarchy-mac-m3-air "${OMARCHY_MAC_BOOT_ROOT:-}$leaf" || true
+fi
+exit 0

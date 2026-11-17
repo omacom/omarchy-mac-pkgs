@@ -19,6 +19,8 @@ sys.dont_write_bytecode = True
 loader = importlib.machinery.SourceFileLoader('mic', str(root / 'bin/omarchy-audio-asahi-mic-map'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+# The host's model and sound cards stay out of it.
+m.MODEL = Path('/nonexistent/model'); m.ASOUND_CARDS = Path('/nonexistent/cards'); m.WIREPLUMBER_CONF = Path('/nonexistent/conf.d')
 DSP = 'effect_output.j414-mic'
 EXISTING = 'module-remap-source', 'source_name=omarchy_asahi_mic master=' + DSP + ' channels=2 source_properties=' + m.OWNER + '=existing'
 # The virtual source 0.1.2 mapped into, under the same name.
@@ -39,10 +41,13 @@ class Audio:
         self.notices = []; self.feeds = {m.MAPPING}; self.routes = 0; self.route_choice = None
         self.stamp = None; self.restarts = 0; self.link_error = 'link rejected after partial creation'
         self.cards = [dict(name='alsa_card.platform-sound', active_profile='HiFi')]
+        self.dsp_ports = ['capture_AUX0']; self.capture_ports = ['input_FL', 'input_FR']; self.has_array = True
         # WirePlumber links the DSP's mono port to the remap source's left side
         # this many graph queries after the module loads (None: never).
         self.wireplumber_links = None; self.loaded_at = None; self.queries = 0
     def restart_session_manager(self, reason): self.restarts += 1; return 0
+    def array(self): return self.has_array
+    def updating(self): return getattr(self, 'busy', False)
     def objects(self, kind):
         if self.fail_query: raise RuntimeError('live Pulse query failed')
         if kind == 'sources':
@@ -60,11 +65,11 @@ class Audio:
                 and self.queries - self.loaded_at >= self.wireplumber_links and not any(input_ == 21 for input_, _ in self.linked.values())):
             self.next_id += 1; self.linked[self.next_id] = (21, None)
         nodes = [dict(id=1, type='PipeWire:Interface:Node', info={'props': {'node.name': DSP}})]
-        ports = [(11, 1, 'capture_AUX0')]
+        ports = [(11 + index, 1, name) for index, name in enumerate(self.dsp_ports)]
         if self.existing:
             nodes.append(dict(id=2, type='PipeWire:Interface:Node', info={'props': {'node.name': m.MAPPING}}))
             nodes.append(dict(id=3, type='PipeWire:Interface:Node', info={'props': {'node.name': m.CAPTURE}}))
-            ports += [(21, 3, 'input_FL'), (22, 3, 'input_FR'), (23, 2, 'capture_FL'), (24, 2, 'capture_FR')]
+            ports += [(21 + index, 3, name) for index, name in enumerate(self.capture_ports)] + [(23, 2, 'capture_FL'), (24, 2, 'capture_FR')]
         for id_, node, name in ports:
             if name != self.missing: nodes.append(dict(id=id_, type='PipeWire:Interface:Port', info={'props': {'node.id': node, 'port.name': name}}))
         for id_, (input_, owner) in self.linked.items():
@@ -878,6 +883,186 @@ for code in (0, 75, 76, 1):
         args = call.call_args.args[0]
         assert args[:3] == ['systemd-run', '--user', '--wait'] and '--unit=omarchy-audio-repair-%d' % os.getpid() in args, args
         assert args[-5:] == ['omarchy-audio-watchdog', '--repair', 'wireplumber', '--reason', 'links refused'], args
+# asahi-audio ab1b469 names the DSP's mono port MONO instead of AUX0: either
+# one is mapped, and so is a capture side PipeWire negotiated down to one MONO
+# port; a DSP or capture side that offers both shapes is never mapped.
+with tempfile.TemporaryDirectory() as temporary:
+    for dsp_ports, capture_ports, links in ((['capture_MONO'], ['input_FL', 'input_FR'], [21, 22]),
+                                            (['capture_MONO'], ['input_MONO'], [21]),
+                                            (['capture_AUX0'], ['input_FL', 'input_FR'], [21, 22])):
+        audio = Audio(); audio.dsp_ports = dsp_ports; audio.capture_ports = capture_ports
+        m.reconcile(audio, Path(temporary) / 'mono.json')
+        assert audio.default == m.MAPPING and sorted(input_ for input_, _ in audio.linked.values()) == links, (dsp_ports, capture_ports, audio.linked)
+    for dsp_ports, capture_ports in ((['capture_AUX0', 'capture_MONO'], ['input_FL', 'input_FR']),
+                                     (['capture_AUX0', 'capture_AUX0', 'capture_MONO'], ['input_FL', 'input_FR']),
+                                     (['capture_AUX0'], ['input_FL', 'input_FR', 'input_MONO']),
+                                     (['capture_AUX0'], ['input_FL', 'input_FR', 'input_MONO', 'input_MONO']),
+                                     (['capture_MONO'], ['input_MONO', 'input_FL', 'input_FL', 'input_FR', 'input_FR']),
+                                     (['capture_MONO'], ['input_MONO', 'input_MONO']),
+                                     (['capture_AUX0'], ['input_FL'])):
+        audio = Audio(); audio.dsp_ports = dsp_ports; audio.capture_ports = capture_ports
+        try: m.reconcile(audio, Path(temporary) / 'both.json')
+        except RuntimeError as error: assert 'must be ready' in str(error), error
+        else: raise AssertionError('an ambiguous microphone graph was mapped: %r %r' % (dsp_ports, capture_ports))
+        assert audio.default == DSP and not audio.existing
+print('ok - the DSP microphone is mapped from its AUX0 or MONO port, onto stereo or negotiated MONO capture')
+
+# The array is an Apple HPAI card (M1, M2), or the AOP card on J700, that
+# asahi-audio's rules build a DSP microphone for; a Mac mini's or a USB card
+# is none, nor is an array card the rules do not name, or unreadable files.
+with tempfile.TemporaryDirectory() as temporary:
+    cards = Path(temporary) / 'cards'; conf = Path(temporary) / 'conf.d'; conf.mkdir()
+    (conf / '99-asahi.conf').write_text('{ api.alsa.path = "hw:AppleJ416HPAI,0" }\n{ api.alsa.path = "hw:AppleJ700AOP,1" }\n')
+    with mock.patch.object(m, 'ASOUND_CARDS', cards), mock.patch.object(m, 'WIREPLUMBER_CONF', conf):
+        assert not m.Audio().array(), 'a missing cards file is no array'
+        for text, expected in ((' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n 1 [AppleJ416      ]: macaudio - MacBook Pro J416\n', True),
+                               (' 0 [AppleJ700AOP   ]: t8140_aop_audio - MacBook Neo J700 AOP\n', True),
+                               (' 0 [AppleJ274HPAI  ]: aop_audio - Mac mini J274 HPAI\n', False),
+                               (' 0 [AppleJ274      ]: macaudio - Mac mini J274\n 1 [Device         ]: USB-Audio - USB Audio Device\n', False)):
+            cards.write_text(text)
+            assert m.Audio().array() is expected, text
+        cards.write_text(' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n')
+        with mock.patch.object(m, 'WIREPLUMBER_CONF', Path(temporary) / 'absent'):
+            assert not m.Audio().array(), 'without asahi-audio rules there is no DSP microphone to expect'
+
+# An update that adds what the DSP graph lacked (triforce-lv2) brings no audio
+# event: once the update ends, a missing DSP with an array present restarts
+# WirePlumber once, through the watchdog, whatever the repair interval.
+def reset():
+    m.installed.update(pending=False, retry_at=None, record=None, signature=None); m.recheck['at'] = None
+    m.outage.update(since=None, notified=False, repaired=False)
+with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary)
+    lv2 = directory / 'lv2'; (lv2 / 'lsp-plugins.lv2').mkdir(parents=True)
+    os.utime(lv2 / 'lsp-plugins.lv2', ns=(10**18, 10**18)); os.utime(lv2, ns=(10**18, 10**18))
+    lock = directory / 'db.lck'; pacman = [False]
+    record = directory / 'run/omarchy-asahi-mic.installed'
+    def watcher(): return m.Installed(record, paths=(lv2, directory / 'absent'), lock=lock, running=lambda: pacman[0])
+    # A first start (no record: the first run after an update, or a login)
+    # looks once, FIRST_LOOK later; a DSP present by then needs nothing.
+    reset()
+    with mock.patch.object(m.time, 'monotonic', return_value=500.0):
+        watched = watcher()
+        assert m.installed['pending'] and m.installed['retry_at'] == 530.0 and m.outage_due() == 30.0, 'a first start looks once, later'
+        audio = Audio(); m.reconcile(audio, directory / 'first.json')
+        assert audio.restarts == 0 and not m.installed['pending'] and not json.loads(record.read_text())['pending'], 'a present DSP ends the first look'
+    assert record.exists() and not watched.changed() and not m.installed['pending'], 'an unchanged tree is no update'
+    lock.touch(); pacman[0] = True
+    (lv2 / 'triforce.lv2').mkdir()
+    assert not watched.changed() and not m.installed['pending'], 'nothing happens while pacman holds the database'
+    pacman[0] = False
+    assert watched.changed() and m.installed['pending'] and not watched.changed(), 'a finished update wakes one pass'
+    # A watcher that reloads before the pending repair ran keeps it.
+    retry = m.installed['retry_at']
+    reset(); reloaded = watcher()
+    assert m.installed['pending'] and m.installed['retry_at'] == retry and not reloaded.changed(), 'a reloaded watcher keeps the pending repair, and the change is not seen twice'
+    m.record_installed(False)
+    reset(); watcher()
+    assert not m.installed['pending'], 'a repair that ran is not run again after a reload'
+    os.utime(lv2 / 'lsp-plugins.lv2', ns=(2 * 10**18, 2 * 10**18))
+    assert watcher().changed(), 'a changed plugin bundle counts too'
+    record.write_text('not json'); reset()
+    assert not watcher().changed() and m.installed['pending'] and m.installed['retry_at'] is not None, 'a damaged record starts from the current tree, with a first look'
+    m.record_installed(False)
+    with mock.patch.object(Path, 'iterdir', side_effect=PermissionError('denied')):
+        assert watched.signature() is None and not watched.changed(), 'an unreadable directory changes nothing'
+    reset()
+    def pass_(audio):
+        try: m.reconcile(audio, directory / 'state.json')
+        except m.Deferred: pass
+    stamp = directory / 'repaired'; stamp.write_text(repr(time.monotonic()))
+    audio = Audio(); audio.no_dsp = True; audio.stamp = stamp
+    m.installed['pending'] = True; pass_(audio)
+    assert audio.restarts == 1 and not m.installed['pending'] and not audio.notices, 'the update restarts WirePlumber once, inside the interval'
+    pass_(audio)
+    assert audio.restarts == 1, 'and only once'
+    for name, setup in (('a Mac without a microphone array', lambda audio: setattr(audio, 'has_array', False)),
+                        ('a card the user switched off', lambda audio: audio.cards[0].update(active_profile='off'))):
+        reset(); audio = Audio(); audio.no_dsp = True; setup(audio)
+        m.installed['pending'] = True; pass_(audio)
+        assert audio.restarts == 0 and not m.installed['pending'], name + ' is left alone'
+    reset(); audio = Audio()
+    m.installed['pending'] = True; m.reconcile(audio, directory / 'present.json')
+    assert audio.restarts == 0 and not m.installed['pending'], 'a present DSP needs no restart'
+    class Scripted(Audio):
+        def __init__(self, codes, **options): super().__init__(**options); self.codes = list(codes)
+        def restart_session_manager(self, reason): self.restarts += 1; return self.codes.pop(0)
+    # A deferred restart keeps the repair pending, is asked again in half a
+    # minute and not sooner, and keeps an overdue outage from restarting too.
+    reset(); m.installed['record'] = record
+    audio = Scripted([m.DEFERRED, 0], existing=True); audio.no_dsp = True; audio.stamp = directory / 'outage'
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0):
+        pass_(audio)
+    m.record_installed(True)
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE):
+        pass_(audio)
+        assert audio.restarts == 1 and m.installed['pending'] and not audio.notices, 'one deferred restart, no outage repair in the same pass'
+        assert json.loads(record.read_text())['pending'], 'the pending repair is recorded'
+        assert m.outage_due() == 30.0, m.outage_due()
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE + 10):
+        pass_(audio)
+        assert audio.restarts == 1 and not audio.notices, 'an event before the retry asks nothing and keeps the notice back'
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0 + m.OUTAGE_GRACE + 30):
+        pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'] and m.outage['repaired'] and not audio.notices, 'the retry restarts once and counts as the outage repair'
+        assert not json.loads(record.read_text())['pending']
+    reset()
+    # The update that brought the missing plugin also replaced the mapper: its
+    # first run has no record, finds the DSP missing and restarts once, later.
+    reset(); record.unlink()
+    audio = Audio(); audio.no_dsp = True
+    with mock.patch.object(m.time, 'monotonic', return_value=700.0):
+        watcher(); pass_(audio)
+        assert audio.restarts == 0 and m.installed['pending'], 'not at once: WirePlumber may still be starting'
+    with mock.patch.object(m.time, 'monotonic', return_value=730.0):
+        pass_(audio)
+        assert audio.restarts == 1 and not m.installed['pending'], 'one restart once the first look is due'
+    # A new runtime directory (the next login) looks once again, by design:
+    # a microphone still missing 30 s into a session gets one restart.
+    reset(); record.unlink()
+    with mock.patch.object(m.time, 'monotonic', return_value=900.0):
+        watcher(); pass_(audio)
+    with mock.patch.object(m.time, 'monotonic', return_value=930.0):
+        pass_(audio); pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'], 'once per session start'
+    reset()
+    # A pending repair waits for a later pacman transaction to end, and a
+    # deferred one keeps its retry time across a reload of the watcher.
+    reset(); m.installed.update(record=record, signature='')
+    audio = Scripted([m.DEFERRED, 0]); audio.no_dsp = True; audio.busy = True
+    m.record_installed(True)
+    with mock.patch.object(m.time, 'monotonic', return_value=100.0):
+        pass_(audio)
+        assert audio.restarts == 0 and m.installed['pending'] and m.outage_due() == 5.0, 'no restart while pacman runs'
+    audio.busy = False
+    with mock.patch.object(m.time, 'monotonic', return_value=103.0):
+        pass_(audio)
+        assert audio.restarts == 0, 'nor before the retry time'
+    with mock.patch.object(m.time, 'monotonic', return_value=105.0):
+        pass_(audio)
+        assert audio.restarts == 1 and m.installed['pending'] and json.loads(record.read_text())['retry_at'] == 135.0
+    reset()
+    with mock.patch.object(m.time, 'monotonic', return_value=106.0):
+        watcher()
+        assert m.installed['pending'] and m.installed['retry_at'] == 135.0 and m.outage_due() == 29.0, 'a reloaded watcher keeps the retry time'
+        pass_(audio)
+        assert audio.restarts == 1, 'an early event after a reload asks nothing'
+        (lv2 / 'another.lv2').mkdir()
+        assert watcher().changed() and m.installed['retry_at'] == 135.0, 'a later change keeps the deferred retry time'
+        pass_(audio)
+        assert audio.restarts == 1, 'and asks nothing before it'
+    with mock.patch.object(m.time, 'monotonic', return_value=135.0):
+        pass_(audio)
+        assert audio.restarts == 2 and not m.installed['pending'] and not json.loads(record.read_text())['pending']
+    reset()
+    # The watcher asks changed() on its poll schedule and runs a full pass.
+    calls = []
+    def changed(): calls.append(1); return len(calls) == 2
+    sub = m.Subscription(command=['sleep', '30'], backstop=600.0, changed=changed, poll=0.05)
+    sub.start(); sub.confirm = None
+    assert sub.wait() is False and len(calls) == 2, 'a changed install wakes a full pass'
+    sub.stop()
+print('ok - an update that changes the audio plugins restarts WirePlumber once when the DSP microphone is missing')
 unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit

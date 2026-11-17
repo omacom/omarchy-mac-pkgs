@@ -1,21 +1,100 @@
 #!/bin/bash
-# simpledrm registers a DRM card about 0.1 s into boot and Apple's display
-# controller replaces it about 3 s later. A greeter compositor that starts in
-# between binds to simpledrm's connector and keeps drawing to an output that no
-# longer scans out: the password field never fills in, though typing still
-# reaches it and Enter still logs in. Wait for the controller's card, at most
-# 10 s, and never fail the greeter.
+# Let Apple's native display replace simpledrm before the greeter opens its VT.
+# Keep the existing 10 s wait on other Macs; J514C also needs its native GPU.
+# A timeout never fails the greeter.
 omarchy-hw-apple-silicon || exit 0
 proc=/proc
 dev=/dev
+sys=/sys
 if (( EUID != 0 )); then
   proc=${OMARCHY_PROC_ROOT:-/proc}
   dev=${OMARCHY_DEV_ROOT:-/dev}
+  sys=${OMARCHY_SYS_ROOT:-/sys}
 fi
-# Connectors are no test: simpledrm has one, and so does the GPU's own card.
-[[ -e $proc/device-tree/soc/display-subsystem ]] || exit 0
-for _ in {1..200}; do
-  [[ -e $dev/dri/by-path/platform-soc:display-subsystem-card ]] && break
-  sleep 0.05
-done
+native_ready() {
+  local path driver
+  native_display=false
+  native_gpu=false
+  for path in "$sys"/class/drm/*; do
+    [[ ${path##*/} =~ ^(card[0-9]+|renderD[0-9]+)$ ]] || continue
+    driver=$(readlink -f "$path/device/driver") || continue
+    if [[ ${path##*/} == card* && ${driver##*/} == "apple-drm" ]]; then
+      native_display=true
+    elif [[ ${path##*/} == renderD* && ${driver##*/} == "asahi-g15" && -e $dev/dri/${path##*/} ]]; then
+      native_gpu=true
+    fi
+  done
+  [[ $native_display == "true" && $native_gpu == "true" ]]
+}
+# Only a boot whose loader handed both over can bring native graphics up. Without
+# that (an owner opt-out, a refused check, an older m1n1) waiting only delays login.
+handed_over() {
+  local gpu status
+  gpu=$(tr -d '\0' <"$proc/device-tree/aliases/gpu" 2>/dev/null) || return 1
+  [[ $gpu == /* ]] || return 1
+  status=$(tr -d '\0' <"$proc/device-tree$gpu/status" 2>/dev/null) || return 1
+  [[ $status == "okay" || $status == "ok" ]] || return 1
+  compgen -G "$proc/device-tree/soc/dcp@*/apple,t6031-handoff" >/dev/null || return 1
+  ! display_disabled
+}
+# As the kernel parses it: double quotes group and are stripped, "--" ends the
+# kernel's parameters, - and _ match alike, a bare switch is on, a value kstrtobool
+# rejects is ignored, and the last valid one wins.
+display_disabled() {
+  local line='' c tok='' quoted=false arg name value off=false args=() i
+  IFS= read -r line <"$proc/cmdline" 2>/dev/null
+  for ((i = 0; i < ${#line}; i++)); do
+    c=${line:i:1}
+    if [[ $c == '"' ]]; then
+      if [[ $quoted == "true" ]]; then quoted=false; else quoted=true; fi
+    elif [[ $c == [[:space:]] && $quoted == "false" ]]; then
+      [[ -n $tok ]] && args+=("$tok")
+      tok=''
+    else
+      tok+=$c
+    fi
+  done
+  [[ -n $tok ]] && args+=("$tok")
+  for arg in "${args[@]}"; do
+    [[ $arg == "--" ]] && break
+    name=${arg%%=*}
+    name=${name//-/_}
+    if [[ $arg != *=* && $name == apple_t6031_display.enable ]]; then
+      off=false
+    elif [[ $name == apple_t6031_display.enable ]]; then
+      value=${arg#*=}
+      if [[ $value == [1yYtTeE]* || $value == [oO][nN]* ]]; then
+        off=false
+      elif [[ $value == [0nNfFdD]* || $value == [oO][fF]* ]]; then
+        off=true
+      fi
+    fi
+  done
+  [[ $off == "true" ]]
+}
+
+if grep -zqx 'apple,j514c' "$proc/device-tree/compatible" 2>/dev/null &&
+  grep -zqx 'apple,t6031' "$proc/device-tree/compatible" 2>/dev/null; then
+  # Without a handover the native display never replaces simpledrm: nothing to wait for.
+  handed_over || exit 0
+  started=$SECONDS
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    if native_ready; then
+      udevadm settle --timeout=10 || true
+      native_ready && break
+    fi
+    sleep 0.05
+  done
+  printf 'J514C graphics readiness: native_display=%s native_gpu=%s wait_seconds=%s\n' \
+    "$native_display" "$native_gpu" "$((SECONDS - started))"
+else
+  # Connectors are no test: simpledrm has one, and so does the GPU's own card.
+  if [[ -e $proc/device-tree/soc/display-subsystem ]]; then
+    for _ in {1..200}; do
+      [[ -e $dev/dri/by-path/platform-soc:display-subsystem-card ]] && break
+      sleep 0.05
+    done
+  fi
+fi
 exit 0

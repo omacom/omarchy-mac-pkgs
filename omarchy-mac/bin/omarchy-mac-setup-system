@@ -51,6 +51,20 @@ elif [[ -f $brcmfmac ]] && grep -Fxq -- "$quirk" "$brcmfmac"; then
   echo "Removed the Intel Mac Broadcom quirk from $brcmfmac; it stops applying at the next reboot"
 fi
 
+# The earlier mpv default lacks gpu-sw, so mpv aborts where the GPU has no
+# driver, and tmpfiles never replaces the copy it made. Only a regular file
+# byte-identical to that copy takes the new default; edits and links stay.
+mpv="$root/etc/mpv/mpv.conf"
+released_mpv_sum=9e186dd88be483b3666795b805e780921adecd1051ae85986857c22152a2d818
+if [[ -f $mpv && ! -L $mpv ]] && [[ $(sha256sum <"$mpv") == "$released_mpv_sum  -" ]]; then
+  updated=$(mktemp "$root/etc/mpv/.mpv.conf.XXXXXX")
+  cp -- "$root/usr/share/omarchy-mac/mpv/mpv.conf" "$updated" || { rm -f -- "$updated"; exit 1; }
+  chown --reference="$mpv" "$updated"
+  chmod --reference="$mpv" "$updated"
+  mv -- "$updated" "$mpv"
+  echo "Updated $mpv to the current omarchy-mac default, which lets mpv draw in software where the GPU has no driver"
+fi
+
 unit=omarchy-wifi-resume-fix.service
 marker="$root/var/lib/omarchy-mac/wifi-configured"
 if "$root/usr/lib/omarchy-mac/wifi-supported" && [[ ! -f $marker ]]; then

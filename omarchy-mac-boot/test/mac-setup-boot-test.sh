@@ -12,7 +12,7 @@ root=$work/root
 "$ROOT/install" "$root"
 entry=$root/usr/lib/omarchy/mac-boot/setup-boot
 [[ -x $entry && $(stat -c %a "$entry") == 755 ]] || fail 'the setup-boot entrypoint is staged for omarchy-lifecycle-dispatch'
-for leaf in grub-console limine-boot; do
+for leaf in grub-console limine-boot m1n1-display; do
   cat >"$root/usr/lib/omarchy-mac/boot/setup/$leaf.sh" <<SH
 echo "$leaf rebuild=\${OMARCHY_IMAGE_BOOT_REBUILD:-none}" >>"$work/ran"
 [[ ! -e $work/$leaf-fail ]] || return 1
@@ -21,11 +21,11 @@ done
 run() { rm -f "$work/ran"; OMARCHY_MAC_BOOT_ROOT=$root "$entry" "$@"; }
 
 run
-[[ $(<"$work/ran") == $'grub-console rebuild=none\nlimine-boot rebuild=none' ]] || fail 'the console leaf runs, then the Limine leaf' "$(cat "$work/ran")"
+[[ $(<"$work/ran") == $'grub-console rebuild=none\nlimine-boot rebuild=none\nm1n1-display rebuild=none' ]] || fail 'the console leaf runs, then the Limine leaf, then the display default' "$(cat "$work/ran")"
 run image-first-boot
-[[ $(<"$work/ran") == $'grub-console rebuild='"$root"$'/var/lib/omarchy/image/boot-rebuild\nlimine-boot rebuild='"$root"'/var/lib/omarchy/image/boot-rebuild' ]] ||
+[[ $(<"$work/ran") == $'grub-console rebuild='"$root"$'/var/lib/omarchy/image/boot-rebuild\nlimine-boot rebuild='"$root"$'/var/lib/omarchy/image/boot-rebuild\nm1n1-display rebuild='"$root"'/var/lib/omarchy/image/boot-rebuild' ]] ||
   fail "an image's first boot asks for the deferred rebuild" "$(cat "$work/ran")"
-pass 'setup-boot runs the console leaf, then the Limine leaf, asking for the rebuild on an image first boot'
+pass 'setup-boot runs the console leaf, the Limine leaf, then the display default, asking for the rebuild on an image first boot'
 
 touch "$work/grub-console-fail"
 if run 2>/dev/null; then fail 'a failed console leaf fails setup-boot'; fi
@@ -34,6 +34,9 @@ rm "$work/grub-console-fail"
 touch "$work/limine-boot-fail"
 if run 2>/dev/null; then fail 'a failed Limine leaf fails setup-boot'; fi
 rm "$work/limine-boot-fail"
+touch "$work/m1n1-display-fail"
+if run 2>/dev/null; then fail 'a failed display leaf fails setup-boot'; fi
+rm "$work/m1n1-display-fail"
 for arguments in first-boot 'image-first-boot extra'; do
   status=0
   # shellcheck disable=SC2086

@@ -10,7 +10,7 @@ An install is three programs handing over to each other: the macOS app decides w
 
 ## The app
 
-The app ships as a signed and notarized `.pkg` that installs the app bundle and a privileged helper. The helper is the only part that runs as root, and the app talks to it over a Mach service whose code-signing requirement is pinned to the same Developer ID.
+The app ships as a signed and notarized app in a `.dmg` (or through `brew install omacom/mac/omarchy`), and it installs its own privileged helper the first time it asks for the administrator password. The helper is the only part that runs as root, and the app talks to it over a Mach service whose code-signing requirement is pinned to the same Developer ID.
 
 The bundle carries the channel list, the default channel and the SHA-256 of the Ed25519 trust root every catalog must be signed with. Because the trust root is in the app, rotating the signing key means shipping a new app.
 
@@ -42,7 +42,7 @@ Before a release, the image is installed and booted in KVM on a test Mac, once p
 
 - copies the Apple vendor firmware the Asahi engine extracted from macOS into the running system and the initramfs;
 - loads the Apple keyboard and trackpad drivers early, so the passphrase prompt and the greeter both have input;
-- converts the root file system to LUKS if the installer asked for it, from the initramfs and before the root is mounted;
+- converts the root file system to LUKS unless the installer recorded `encrypt=0`, from the initramfs and before the root is mounted;
 - hands over to owner provisioning: your account and password, and the disk re-key;
 - leaves the remaining model-specific hardware steps for your first desktop session, which runs them without asking.
 

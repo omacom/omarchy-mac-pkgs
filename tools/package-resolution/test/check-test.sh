@@ -24,7 +24,7 @@ fail() {
   exit 1
 }
 
-# package REPO NAME VERSION [depend=DEP] [provides=NAME] [conflict=NAME] [file=PATH]...
+# package REPO NAME VERSION [depend=DEP] [provides=NAME] [conflict=NAME] [group=NAME] [file=PATH]...
 package() {
   local repo=$1 name=$2 version=$3 spec build
   shift 3
@@ -37,6 +37,7 @@ package() {
         depend=*) printf 'depend = %s\n' "${spec#depend=}" ;;
         provides=*) printf 'provides = %s\n' "${spec#provides=}" ;;
         conflict=*) printf 'conflict = %s\n' "${spec#conflict=}" ;;
+        group=*) printf 'group = %s\n' "${spec#group=}" ;;
         file=*)
           mkdir -p "$build/$(dirname "${spec#file=}")"
           echo "$name" >"$build/${spec#file=}"
@@ -106,8 +107,10 @@ package core linux-aarch64 7.0-1 provides=linux depend=filesystem file=usr/lib/m
 package core tool 1.0-1 depend=filesystem file=usr/bin/tool
 package omarchy omarchy 1.0-1 depend=tool file=usr/bin/omarchy
 package omarchy omarchy-settings 1.0-1 file=usr/share/omarchy/settings
-package omarchy linux-aurora 7.1-1 provides=linux=7.1 provides=linux-asahi conflict=linux-asahi depend=filesystem file=usr/lib/modules/7.1-aurora/vmlinuz
-package omarchy omarchy-mac 1.0-1 depend=omarchy file=usr/bin/omarchy-mac-setup
+package omarchy linux-aurora 7.1-1 provides=linux=7.1 provides=linux-asahi conflict=linux-asahi depend=filesystem group=omarchy-platform-apple-silicon file=usr/lib/modules/7.1-aurora/vmlinuz
+package omarchy omarchy-mac 1.0-1 depend=omarchy group=omarchy-platform-apple-silicon file=usr/bin/omarchy-mac-setup
+package tagged apple-tool 1.0-1 depend=omarchy-mac group=omarchy-platform-apple-silicon
+package nearby near-tool 1.0-1 group=omarchy-platform-apple-silicon-extras group=omarchy-platform
 package leaky leaky 1.0-1 depend=omarchy-mac
 package omarchy clash 1.0-1 file=usr/bin/omarchy
 package asahi-alarm linux-asahi 7.1-1 provides=linux=7.1 file=usr/lib/modules/7.1-asahi/vmlinuz
@@ -130,6 +133,9 @@ expect_pass aarch64 "an aarch64 set without Mac packages passes" \
 grep -Fq 'note  aarch64: Mac-only omarchy/linux-aurora still provides linux' <<<"$output" ||
   fail "a Mac-only linux provider is reported while it is not selected" "$output"
 pass "a Mac-only linux provider is reported while it is not selected"
+grep -Fq 'ok    aarch64: every omarchy-platform-apple-silicon package is named in mac-only' <<<"$output" ||
+  fail "Apple Silicon group packages named in mac-only pass" "$output"
+pass "Apple Silicon group packages named in mac-only pass"
 grep -Fq 'ok    aarch64: omarchy 1.0-1: -Su keeps equal and newer installs; -S replaces both; -S --needed skips equal' <<<"$output" ||
   fail "equal-version and locally-newer transitions are checked" "$output"
 pass "equal-version and locally-newer transitions are checked"
@@ -147,6 +153,18 @@ expect_fail leak "a Mac package in an aarch64 closure fails" 'leak: forbidden pa
 grep -Eq '^FAIL  leak: packages depend on Mac-only names' <<<"$output" ||
   fail "an aarch64 package depending on a Mac package fails" "$output"
 pass "an aarch64 package depending on a Mac package fails"
+
+platform drift "core omarchy tagged" "omarchy" "$aarch64"
+expect_fail drift "an Apple Silicon group package missing from mac-only fails" 'drift: omarchy-platform-apple-silicon packages missing from mac-only'
+grep -Fxq '      tagged/apple-tool' <<<"$output" || fail "the unlisted package is named with its repository" "$output"
+pass "the unlisted package is named with its repository"
+grep -Fxq '      tagged/apple-tool -> omarchy-mac' <<<"$output" ||
+  fail "the group does not exempt a package from the Mac-only dependency check" "$output"
+pass "the group does not exempt a package from the Mac-only dependency check"
+
+platform nearby "core omarchy nearby" "omarchy" "$aarch64"
+expect_pass nearby "groups that only resemble the Apple Silicon group pass" \
+  'ok    nearby: every omarchy-platform-apple-silicon package is named in mac-only'
 
 platform owners "core omarchy" "omarchy clash" 'transitions=()'
 expect_fail owners "two packages owning one file fails" 'owners: files owned by more than one package'

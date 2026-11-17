@@ -123,7 +123,7 @@ run_check() {
   status=$?
   set -e
   tree_state >"$tmp/after"
-  diff -q "$tmp/before" "$tmp/after" >/dev/null || fail "the check changes no boot file"
+  [[ -n ${TEST_BOOT_WRITES:-} ]] || diff -q "$tmp/before" "$tmp/after" >/dev/null || fail "the check changes no boot file"
   [[ ! -s $mac_state/mounts && -z $(ls -A "$mac_root/run") ]] || fail "the check leaves nothing mounted"
 }
 
@@ -200,32 +200,48 @@ printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n' >"$mac_root/boot/vmlinuz-linu
 { cat "$mac_root/boot/vmlinuz-linux-aurora"; printf 'initrd\n'; } >"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 limine_mac_menu
 run_check "--restore --no-mutex" "$snapshot_cmdline"
-expect_refused "a snapshot from before a kernel update" \
+expect_allowed "a snapshot from before a kernel update"
+grep -Fq "Snapshot 7 is from before this Mac's last boot file update" "$tmp/out" &&
+  grep -Fq "/boot/vmlinuz-linux-aurora is not the $mac_kver kernel linux-aurora installed" "$tmp/out" &&
+  [[ $(cat "$tmp/state/rollback") == "$mac_kver" ]] || fail "the restore says why it differs, and notes the rollback"
+pass "a snapshot from before a kernel update is restored"
+
+# The running kernel's tree is one its package no longer owns: this boot proves
+# nothing about the snapshot's own kernel.
+orphan=$mac_root/usr/lib/modules/6.16.0-aurora9-ARCH
+mkdir -p "$orphan"
+printf 'linux-aurora\n' >"$orphan/pkgbase"
+: >"$orphan/modules.dep"
+printf 'linux-aurora kernel 6.16.0-aurora9-ARCH\n' >"$orphan/vmlinuz"
+rm -rf "$tmp/state"
+TEST_UNAME=6.16.0-aurora9-ARCH run_check "--restore --no-mutex" "$snapshot_cmdline"
+expect_refused "a snapshot running a kernel its packages do not own" \
   "Snapshot 7 does not match this Mac's boot files, so it is not restored" \
   "/boot/vmlinuz-linux-aurora is not the $mac_kver kernel linux-aurora installed" \
   "A snapshot holds the root file system only" \
   "taken before a kernel" \
   "first install its kernel, boot firmware and Limine" \
   "linux-aurora 6.17.0.aurora1-1" "m1n1-aurora 1.5.2-1" "uboot-asahi 2026.07-2" "limine 12.9.0-1"
-pass "a snapshot from before a kernel update is refused, with why and what to do"
+[[ ! -e $tmp/state/rollback ]] || fail "a refused restore notes no rollback"
+pass "a snapshot running a kernel its packages do not own is refused, with why and what to do"
 
 # An m1n1 update since the snapshot: boot.bin on the ESP holds the new m1n1.
 limine_mac
 printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
 limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 run_check "--restore" "$snapshot_cmdline"
-expect_refused "a snapshot from before an m1n1 update" \
-  "Snapshot 7 does not match this Mac's boot files" \
-  "m1n1/boot.bin on the system ESP (/boot/efi) is not m1n1, linux-aurora $mac_kver's device trees, U-Boot"
-pass "a snapshot from before a boot firmware update is refused"
+expect_allowed "a snapshot from before an m1n1 update"
+grep -Fq "m1n1/boot.bin on the system ESP (/boot/efi) is not m1n1, linux-aurora $mac_kver's device trees, U-Boot" "$tmp/out" ||
+  fail "the restore names the newer m1n1" "$(cat "$tmp/out")"
+pass "a snapshot from before a boot firmware update is restored"
 
 # A Limine update since the snapshot: the ESP holds the new loader.
 limine_mac
 printf 'LIMINE next\n' >"$mac_esp/EFI/BOOT/BOOTAA64.EFI"
 run_check "--restore" "$snapshot_cmdline"
-expect_refused "a snapshot from before a Limine update" \
-  "Snapshot 7 does not match this Mac's boot files" "BOOTAA64.EFI" "limine 12.9.0-1"
-pass "a snapshot from before a Limine update is refused, and its Limine package is named"
+expect_allowed "a snapshot from before a Limine update"
+grep -Fq "BOOTAA64.EFI" "$tmp/out" || fail "the restore names the newer Limine" "$(cat "$tmp/out")"
+pass "a snapshot from before a Limine update is restored"
 
 # A snapshot from before Limine was activated carries no Limine setup.
 limine_mac
@@ -491,3 +507,139 @@ restored_root "linux-aurora kernel $mac_kver"
 run_post "--restore --no-mutex" "$snapshot_cmdline"
 expect_undo "a restore that put back a UKI with another kernel" "does not carry the restored root's $mac_kver kernel"
 pass "the post hook checks the UKI the restore put back"
+
+# A rollback across a kernel update: /boot holds the next kernel, the restore put
+# the snapshot's back in the UKI and rewrote the menu, and the ESP's m1n1 is newer.
+rollback_mac() {
+  limine_mac
+  printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n' >"$mac_root/boot/vmlinuz-linux-aurora"
+  printf 'next initramfs\n' >"$mac_root/boot/initramfs-linux-aurora.img"
+  printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
+  limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+  rm -rf "$tmp/state"
+  mkdir -p "$tmp/state"
+  : >"$tmp/state/started"
+  restored_root "linux-aurora kernel $mac_kver"
+  printf '%s\n' "$mac_kver" >"$tmp/state/rollback"
+}
+boot_unchanged() {
+  [[ $(cat "$mac_root/boot/vmlinuz-linux-aurora") == "linux-aurora kernel 6.18.0-aurora1-ARCH" &&
+    $(cat "$mac_root/boot/initramfs-linux-aurora.img") == "next initramfs" ]] || fail "$1 leaves /boot as it was"
+  [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "$1 leaves no rollback marker"
+  ! compgen -G "$mac_root/boot/*.rollback" >/dev/null && ! compgen -G "$mac_root/boot/*.previous" >/dev/null ||
+    fail "$1 leaves no staged files"
+}
+
+rollback_mac
+cp "$mac_esp/m1n1/boot.bin" "$tmp/esp-boot.bin"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_allowed "a rollback across a kernel update"
+cmp -s "$mac_root/boot/vmlinuz-linux-aurora" "$mac_root/usr/lib/modules/$mac_kver/vmlinuz" ||
+  fail "the restored kernel is on the boot partition"
+grep -Fq "initrd of $mac_esp/EFI/Linux/omarchy_linux-aurora.efi" "$mac_root/boot/initramfs-linux-aurora.img" ||
+  fail "the initramfs on the boot partition is the one in the UKI"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a rollback leaves the marker for the next update"
+cmp -s "$tmp/esp-boot.bin" "$mac_esp/m1n1/boot.bin" || fail "a rollback keeps the ESP's m1n1"
+! compgen -G "$mac_root/boot/*.rollback" >/dev/null && ! compgen -G "$mac_root/boot/*.previous" >/dev/null ||
+  fail "a rollback leaves no staged files"
+grep -Fq "The next omarchy update rebuilds them" "$tmp/out" || fail "the post hook says what stays and until when"
+[[ ! -e $tmp/state/rollback ]] || fail "a finished rollback clears its state"
+pass "a rollback puts the restored kernel and initramfs on /boot, and keeps the ESP"
+
+rollback_mac
+{ printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n'; printf 'initrd\n'; } >"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+limine_mac_menu
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback whose UKI does not carry the restored kernel" "does not carry the restored root's"
+boot_unchanged "a rollback whose UKI does not carry the restored kernel"
+pass "a rollback whose UKI does not carry the restored kernel changes nothing on /boot, and arms the undo"
+
+rollback_mac
+rm "$tmp/top/@/usr/lib/modules/$mac_kver/modules.dep"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback to a root without the running kernel's modules" "does not hold the running"
+boot_unchanged "a rollback to a root without the running kernel's modules"
+pass "a rollback to a root without the running kernel's modules changes nothing on /boot"
+
+# The next boot's menu does not match its UKI: the final check puts /boot back.
+rollback_mac
+printf 'stale\n' >>"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback whose menu does not match its UKI"
+boot_unchanged "a rollback whose menu does not match its UKI"
+pass "a rollback that fails the final check puts /boot back and arms the undo"
+
+# The undo after a refused pick: booted on the old kernel, the backup put back
+# holds the newer kernel /boot and the UKI still have.
+rollback_mac
+rm -f "$tmp/state/rollback"
+restored_root "linux-aurora kernel 6.18.0-aurora1-ARCH"
+{ printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n'; printf 'initrd\n'; } >"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+limine_mac_menu
+printf '12\n' >"$tmp/state/undo"
+: >"$tmp/state/undoing"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_allowed "the previous root with a newer kernel than the booted snapshot"
+boot_unchanged "putting the previous root back"
+[[ ! -e $tmp/state/undo && ! -e $tmp/state/undoing ]] || fail "putting the previous root back ends the undo"
+pass "a refused pick is undone across kernels"
+
+# An undo is still held to the mount and unlock the Limine command line boots.
+rollback_mac
+rm -f "$tmp/state/rollback"
+restored_root "linux-aurora kernel 6.18.0-aurora1-ARCH"
+{ printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n'; printf 'initrd\n'; } >"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+limine_mac_menu
+printf 'crypt UUID=x none luks\n' >"$tmp/top/@/etc/crypttab"
+: >"$tmp/state/undoing"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "an undo to a root with another crypttab" "crypttab"
+pass "an undo to a root with other unlock settings is refused"
+
+# A marker from an earlier rollback survives a later one that fails.
+rollback_mac
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+printf 'stale\n' >>"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a second rollback that fails"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed rollback keeps an earlier rollback's marker"
+[[ $(cat "$mac_root/boot/vmlinuz-linux-aurora") == "linux-aurora kernel 6.18.0-aurora1-ARCH" ]] || fail "a failed rollback puts /boot back"
+pass "a failed rollback keeps an earlier rollback's marker"
+
+# A backup that cannot be written leaves the good pair alone. A cp that fails
+# once it has written part of the backup, as a full disk does.
+rollback_mac
+mkdir -p "$tmp/failing-cp"
+real_cp=$(command -v cp)
+cat >"$tmp/failing-cp/cp" <<SH
+#!/bin/bash
+for last; do :; done
+if [[ \$last == *.previous ]]; then
+  printf 'partial\n' >"\$last"
+  exit 1
+fi
+exec $real_cp "\$@"
+SH
+chmod +x "$tmp/failing-cp/cp"
+TEST_PATH_FIRST=$tmp/failing-cp TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback that cannot keep the current kernel" "Cannot keep the current kernel"
+boot_unchanged "a rollback that cannot keep the current kernel"
+pass "a failed backup copy never replaces the good kernel and initramfs"
+
+# Putting /boot back tries both files, and a failure keeps the marker.
+rollback_mac
+printf 'stale\n' >>"$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
+mkdir -p "$tmp/failing-mv"
+real_mv=$(command -v mv)
+cat >"$tmp/failing-mv/mv" <<SH
+#!/bin/bash
+[[ \$1 != *vmlinuz-linux-aurora.previous ]] || exit 1
+exec $real_mv "\$@"
+SH
+chmod +x "$tmp/failing-mv/mv"
+TEST_PATH_FIRST=$tmp/failing-mv TEST_BOOT_WRITES=1 run_post "--restore --no-mutex" "$snapshot_cmdline"
+expect_undo "a rollback that cannot put the kernel back" "could not be put back"
+[[ $(cat "$mac_root/boot/initramfs-linux-aurora.img") == "next initramfs" ]] || fail "the initramfs comes back when the kernel cannot"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an incomplete recovery keeps the marker"
+pass "a recovery that cannot put the kernel back still restores the initramfs, and keeps the marker"
+

@@ -1,0 +1,15 @@
+# Saves the EFI variables set while the Mac ran to U-Boot's variable file on
+# the ESP as it shuts down, so a boot menu request or boot entry change
+# reaches the next boot. Stops before the ESP and efivarfs are unmounted.
+# Static: pulled in by multi-user.target, so an upgraded Mac needs no enable
+# step; skipped where U-Boot names no variable file.
+[Unit]
+Description=Save runtime EFI variables to U-Boot's variable file
+ConditionPathExists=/sys/firmware/efi/efivars/RTStorageVolatile-b2ac5fc9-92b7-4acd-aeac-11e818c3130c
+After=sys-firmware-efi-efivars.mount
+RequiresMountsFor=/boot/efi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStop=/usr/lib/omarchy/mac-boot/efi-vars-save

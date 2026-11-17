@@ -38,6 +38,20 @@ VIRTUAL = 'media.class=Audio/Source/Virtual'
 OWNER = 'omarchy.asahi-mic.owner'
 ROUTE_CLIENT = 'omarchy-asahi-mic-route'
 DSP = re.compile(r'effect_output\.j[0-9]+-mic')
+# asahi-audio's mono DSP output: AUX0, or MONO since asahi-audio ab1b469.
+DSP_PORTS = ('capture_AUX0', 'capture_MONO')
+# The microphone array's ALSA card, present even when its DSP graph is not,
+# and asahi-audio's WirePlumber rules, which name the cards it builds one for.
+ARRAY = re.compile(r'\[(AppleJ[0-9]+(?:HPAI|AOP)) *\]')
+ASOUND_CARDS = Path('/proc/asound/cards')
+WIREPLUMBER_CONF = Path('/usr/share/wireplumber/wireplumber.conf.d')
+# What the DSP graph is built from. An update that changes them (a plugin the
+# graph lacked) brings no audio event: WirePlumber builds the graph only when
+# the array's node appears, so the mapper restarts it.
+AUDIO_FILES = (Path('/usr/lib/lv2'), Path('/usr/share/asahi-audio'), Path('/usr/share/wireplumber/wireplumber.conf.d'))
+# A watcher with no record may be the first run after the update that brought
+# the missing files: it looks once, this long after starting.
+FIRST_LOOK = 30.0
 MODEL = Path('/proc/device-tree/model')
 OUTAGE_GRACE = 10.0
 REPAIR_INTERVAL = 300.0
@@ -50,6 +64,9 @@ outage = dict(since=None, notified=False, repaired=False)
 # After WirePlumber is restarted the rebuilt graph may appear before the event
 # subscription is listening, so the watcher looks again shortly anyway.
 recheck = dict(at=None)
+# Set once an update changed AUDIO_FILES and kept in the runtime record until
+# a pass has acted on it, so a watcher that reloads mid-update keeps it.
+installed = dict(pending=False, retry_at=None, record=None, signature=None)
 # The mapping's Pulse index, so a change of its own gain or mute is saved.
 mapping_index = dict(value=None)
 # A package upgrade replaces this file under a running watcher, and pacman
@@ -111,6 +128,18 @@ class Audio:
 
     def pause(self):
         time.sleep(0.1)
+
+    def array(self):
+        # An array card asahi-audio builds a DSP microphone for.
+        try:
+            cards = ARRAY.findall(ASOUND_CARDS.read_text())
+            rules = ''.join(path.read_text(errors='replace') for path in sorted(WIREPLUMBER_CONF.glob('*.conf')))
+        except OSError:
+            return False
+        return any('"hw:%s,' % card in rules for card in cards)
+
+    def updating(self):
+        return PACMAN_LOCK.exists() and pacman_running()
 
     def notify(self, headline, body, *command):
         try:
@@ -205,6 +234,33 @@ def port(graph, node_name, port_name):
     return matches[0]
 
 
+def dsp_port(graph, dsp):
+    nodes = {obj['id'] for obj in graph if obj.get('type', '').endswith(':Node')
+             and obj.get('info', {}).get('props', {}).get('node.name') == dsp}
+    found = [obj['id'] for obj in graph if obj.get('type', '').endswith(':Port')
+             and obj.get('info', {}).get('props', {}).get('node.id') in nodes
+             and obj['info']['props'].get('port.name') in DSP_PORTS]
+    return found[0] if len(found) == 1 else None
+
+
+def capture_inputs(graph):
+    # The mapping's capture side: front-left and front-right, or one MONO port
+    # when PipeWire negotiated it down to a MONO DSP port and duplicates it.
+    nodes = {obj['id'] for obj in graph if obj.get('type', '').endswith(':Node')
+             and obj.get('info', {}).get('props', {}).get('node.name') == CAPTURE}
+    found = {}
+    for obj in graph:
+        props = obj.get('info', {}).get('props', {})
+        if obj.get('type', '').endswith(':Port') and props.get('node.id') in nodes and props.get('port.name') in ('input_FL', 'input_FR', 'input_MONO'):
+            found.setdefault(props['port.name'], []).append(obj['id'])
+    shape = sorted((name, len(ids)) for name, ids in found.items())
+    if shape == [('input_FL', 1), ('input_FR', 1)]:
+        return [found['input_FL'][0], found['input_FR'][0]]
+    if shape == [('input_MONO', 1)]:
+        return found['input_MONO']
+    return None
+
+
 def links(graph, output, input_):
     return [obj for obj in graph if obj.get('type', '').endswith(':Link')
             and obj.get('info', {}).get('output-port-id') == output
@@ -228,6 +284,20 @@ def gain(obj):
 
 def audible(obj):
     return not obj['mute'] and any(channel['value'] for channel in obj['volume'].values())
+
+
+def record_installed(pending, signature=None, retry_at=None):
+    installed.update(pending=pending, retry_at=retry_at if pending else None)
+    if signature is not None:
+        installed['signature'] = signature
+    record = installed['record']
+    if record is None:
+        return
+    with contextlib.suppress(OSError):
+        record.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w', dir=record.parent, delete=False) as temporary:
+            json.dump(dict(signature=installed['signature'], pending=pending, retry_at=installed['retry_at']), temporary)
+        os.replace(temporary.name, record)
 
 
 def save_state(audio, path):
@@ -387,7 +457,7 @@ def leave_mapping(audio, state, sources, original_input):
             path.write_text(inputs[0])
 
 
-def repair_graph(audio, reason):
+def repair_graph(audio, reason, force=False):
     # WirePlumber 0.5 (wireplumber#1028) keeps the ids of a DSP graph it tore
     # down (a logout, a card profile change) in its hidden list and hides them
     # from every later client, so the rebuilt microphone graph stays hidden or
@@ -398,7 +468,7 @@ def repair_graph(audio, reason):
     # shared by every mapper process.
     # Returns True (restarted), False, or DEFERRED: not now (a logout, the
     # lock screen, another repair), try again soon; that costs no attempt.
-    if audio.stamp is not None:
+    if audio.stamp is not None and not force:
         try:
             if 0 <= time.monotonic() - float(audio.stamp.read_text()) < REPAIR_INTERVAL:
                 return False
@@ -478,7 +548,27 @@ def reconcile(audio, state, save_only=False, checked=None):
         mapped = any(obj['name'] == MAPPING for obj in sources)
         if mapped or claim(state):
             leave_mapping(audio, state, sources, original_input)
-        if mapped:
+        # An update's changed files restart WirePlumber once, past the repair
+        # interval; until that is done the outage repair and notice wait.
+        updated = None
+        if installed['pending'] and (installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
+            if audio.updating():
+                record_installed(True, retry_at=time.monotonic() + 5.0)
+            else:
+                updated = audio.array() and not card_disabled(audio) and repair_graph(audio, 'audio files changed while the Asahi DSP microphone was missing', force=True)
+                if updated == DEFERRED:
+                    record_installed(True, retry_at=time.monotonic() + 30.0)
+                else:
+                    record_installed(False)
+            if installed['pending']:
+                recheck['at'] = installed['retry_at']
+        if not mapped:
+            outage.update(since=None, notified=False, repaired=False)
+        elif updated is True:
+            outage.update(since=time.monotonic(), notified=False, repaired=True)
+        elif installed['pending']:
+            outage['since'] = None
+        else:
             # A card or audio restart rebuilds the array within seconds; only a
             # lasting loss is worth telling the user about, once.
             # WirePlumber is restarted once first: a graph it left hidden
@@ -495,10 +585,10 @@ def reconcile(audio, state, save_only=False, checked=None):
                 else:
                     outage['notified'] = True
                     audio.notify('Built-in microphone unavailable', 'Click to restart audio', *RESTART_AUDIO)
-        else:
-            outage.update(since=None, notified=False, repaired=False)
         raise Deferred('No Asahi DSP microphone is present; user service will retry if an array appears')
     outage.update(since=None, notified=False, repaired=False)
+    if installed['pending']:
+        record_installed(False)
     fallback = fallback_path(state)
     claimed = claim(state)
     # A muted fallback keeps its claim: the array never unmutes capture. The
@@ -535,29 +625,27 @@ def reconcile(audio, state, save_only=False, checked=None):
             restore_input()
         for attempt in range(30):
             graph = audio.graph()
-            output = port(graph, dsp, 'capture_AUX0')
-            inputs = [port(graph, CAPTURE, 'input_' + channel) for channel in ('FL', 'FR')]
-            if output is not None and all(value is not None for value in inputs):
+            output = dsp_port(graph, dsp)
+            inputs = capture_inputs(graph)
+            if output is not None and inputs is not None:
                 break
             audio.pause()
         else:
-            raise RuntimeError('Asahi AUX0 and both stereo mapping ports must be ready')
+            raise RuntimeError('The Asahi DSP microphone port and the mapping capture ports must be ready')
         if module is not None:
             restore_gain(audio, state)
         def validate_endpoints(graph):
-            if port(graph, dsp, 'capture_AUX0') != output or [
-                port(graph, CAPTURE, 'input_' + channel) for channel in ('FL', 'FR')
-            ] != inputs:
+            if dsp_port(graph, dsp) != output or capture_inputs(graph) != inputs:
                 raise RuntimeError('Asahi microphone endpoints changed during mapping')
-        # WirePlumber links the mono port to the left side as the remap
-        # source's target: wait for that link rather than race it with a
-        # duplicate, and link the right side, which WirePlumber never does.
+        # WirePlumber links the mono port to the left (or negotiated MONO)
+        # side as the remap source's target: wait for that link rather than
+        # race it, and link the right side, which WirePlumber never does.
         if module is not None:
             for attempt in range(20):
                 if links(audio.graph(), output, inputs[0]):
                     break
                 audio.pause()
-        for input_ in (inputs[1], inputs[0]):
+        for input_ in reversed(inputs):
             graph = audio.graph()
             validate_endpoints(graph)
             if not links(graph, output, input_):
@@ -742,6 +830,53 @@ class Program:
             self.backoff = min(self.backoff * 2, 300.0)
 
 
+class Installed:
+    # Wakes a pass once a finished update changed AUDIO_FILES (a directory or
+    # one of its subdirectories). The record in the runtime directory keeps the
+    # last signature and a pending repair across a reload of the watcher.
+    def __init__(self, record, paths=None, lock=None, running=pacman_running):
+        installed['record'] = Path(record)
+        self.paths = tuple(Path(path) for path in (AUDIO_FILES if paths is None else paths))
+        self.lock = Path(PACMAN_LOCK if lock is None else lock)
+        self.running = running
+        try:
+            saved = json.loads(installed['record'].read_text())
+            signature, pending, retry_at = saved['signature'], saved['pending'], saved.get('retry_at')
+            if not isinstance(signature, str) or type(pending) is not bool or not (retry_at is None or type(retry_at) is float):
+                raise ValueError('Invalid microphone update record')
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            signature, pending, retry_at = self.signature(), True, time.monotonic() + FIRST_LOOK
+        if signature is None:
+            signature = ''
+        record_installed(pending, signature, retry_at)
+        if pending and retry_at is not None:
+            recheck['at'] = retry_at
+
+    def signature(self):
+        # None: a directory could not be read; the previous signature stands.
+        stamps = []
+        try:
+            for path in self.paths:
+                entries = [path]
+                if path.is_dir():
+                    entries += sorted(path.iterdir())
+                for entry in entries:
+                    with contextlib.suppress(FileNotFoundError):
+                        status = os.stat(entry)
+                        stamps.append('%s %d %d' % (entry, status.st_ino, status.st_mtime_ns))
+        except OSError:
+            return None
+        return '\n'.join(stamps)
+
+    def changed(self):
+        current = self.signature()
+        if current is None or current == installed['signature'] or (self.lock.exists() and self.running()):
+            return False
+        # A repair already deferred keeps its retry time.
+        record_installed(True, current, installed['retry_at'] if installed['pending'] else None)
+        return True
+
+
 class Subscription:
     # Wakes the supervisor when the mapping may need repair: a sink, source,
     # card or module appeared or vanished, a card or module changed, or the
@@ -757,13 +892,15 @@ class Subscription:
     EVENT = re.compile(rb"^Event '(new|remove)' on (sink|source|card|module) #|^Event 'change' on (card|module|server) #")
     SOURCE_CHANGE = re.compile(rb"^Event 'change' on source #([0-9]+)$")
 
-    def __init__(self, command=('pactl', 'subscribe'), quiet=0.5, settle=5.0, backstop=600.0, retry=2.0, stale=None, poll=2.0):
+    def __init__(self, command=('pactl', 'subscribe'), quiet=0.5, settle=5.0, backstop=600.0, retry=2.0, stale=None, poll=2.0, changed=None):
         self.command = list(command)
         self.quiet, self.settle, self.backstop, self.retry = quiet, settle, backstop, retry
         # stale() is asked every poll seconds, across waits, whether to stop
         # for RELOAD. A pass a moment after subscribing covers a device that
         # appeared before pactl had registered the subscription.
         self.stale, self.poll = stale, poll
+        # changed() is asked on the same schedule whether to run a full pass.
+        self.changed = changed
         self.next_poll = None
         self.confirm = None
         self.process = None
@@ -808,8 +945,9 @@ class Subscription:
         self.confirm = None
         return False
 
-    def reload_due(self):
-        if self.stale is None:
+    def polled(self):
+        # RELOAD, True (run a full pass) or False.
+        if self.stale is None and self.changed is None:
             return False
         now = time.monotonic()
         if self.next_poll is None:
@@ -817,15 +955,20 @@ class Subscription:
         if now < self.next_poll:
             return False
         self.next_poll = now + self.poll
-        return self.stale()
+        if self.stale is not None and self.stale():
+            return RELOAD
+        return self.changed is not None and self.changed()
 
     def wait(self, limit=None):
         # True: only the mapping's gain or mute may have changed. RELOAD: the
         # watcher's program was replaced.
         # A full pass follows every subscription, so a device that appeared
         # while nothing listened (the DSP at login) is still mapped.
-        if self.reload_due():
+        polled = self.polled()
+        if polled == RELOAD:
             return RELOAD
+        if polled:
+            return self.full()
         if self.process is None:
             if not self.start():
                 time.sleep(self.retry)
@@ -838,8 +981,11 @@ class Subscription:
         latest = None
         repair = False
         while True:
-            if self.reload_due():
+            polled = self.polled()
+            if polled == RELOAD:
                 return RELOAD
+            if polled:
+                return self.full()
             now = time.monotonic()
             deadline = hard if due is None else min(due, latest) if repair else min(due, latest, hard)
             wake = deadline if self.next_poll is None else min(deadline, self.next_poll)
@@ -871,10 +1017,10 @@ class Subscription:
                     latest = now + self.settle
 
 
-def supervise(operation, wait=None, program=None):
+def supervise(operation, wait=None, program=None, changed=None):
     subscription = None
     if wait is None:
-        subscription = Subscription(stale=None if program is None else program.replaced)
+        subscription = Subscription(stale=None if program is None else program.replaced, changed=changed)
         subscription.start()
         wait = lambda: subscription.wait(outage_due())
     previous_error = None
@@ -921,7 +1067,8 @@ def main():
     if args.watch:
         # Let a service stop unwind through supervise so the subscriber exits too.
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-        supervise(operation, program=Program(os.path.abspath(sys.argv[0])))
+        supervise(operation, program=Program(os.path.abspath(sys.argv[0])),
+                  changed=Installed(runtime / 'omarchy-asahi-mic.installed').changed)
     else:
         try:
             operation()

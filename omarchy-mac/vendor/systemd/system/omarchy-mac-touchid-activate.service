@@ -1,0 +1,21 @@
+# Touch ID activates on the first open of /dev/sep-bio. Opening it once when it
+# appears, and recording whether it can enrol and match, lets Omarchy find the
+# reader before anything has used it (fingerprint-readers names the record).
+[Unit]
+Description=Activate Touch ID
+# Only once the owner has agreed (enable-fingerprint's record): a driver
+# something else loaded is not agreement, and its status stays the boot's.
+ConditionPathExists=/etc/omarchy-mac/touchid-on
+ConditionPathExists=/dev/sep-bio
+# A failed activation stays failed for the rest of the boot, so open the node
+# only once the kernel has made this Mac's keybag.
+ConditionPathExists=/var/lib/aurora-sep-keybag.bin
+Before=fprintd.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStart=/usr/lib/omarchy-mac/touchid-activate
+# The script waits up to 45 s for the attach's later retry; this bounds a
+# blocked open, which would otherwise hold up the pacman hook.
+TimeoutStartSec=60s

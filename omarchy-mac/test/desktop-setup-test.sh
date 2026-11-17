@@ -13,13 +13,22 @@ for entry in setup-system setup-user; do
     fail "the $entry entrypoint is staged for omarchy-lifecycle-dispatch"
 done
 platform=$stage/usr/share/omarchy-platform
-for file in key-names display-cutouts.json displays.conf keyrings audio.json; do
+for file in key-names display-cutouts.json displays.conf keyrings audio.json fingerprint-readers; do
   [[ -f $platform/$file && ! -L $platform/$file ]] || fail "$file is staged in the platform root"
 done
 [[ $(grep -v '^#' "$platform/keyrings") == asahi-alarm-keyring ]] ||
   fail 'the platform names the [asahi-alarm] keyring for omarchy update to refresh'
+[[ $(grep -v '^#' "$platform/fingerprint-readers") == $'/run/omarchy-mac/touchid ready\n/run/omarchy-mac/touchid available' ]] ||
+  fail 'the platform names Touch ID by its status: ready to enrol and match, or available to turn on'
 python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$platform/display-cutouts.json" ||
   fail 'the cutout description is valid JSON'
+python3 - "$platform/display-cutouts.json" <<'PY' || fail 'each named cutout width is a whole number of columns, positive and narrower than its panel'
+import json, sys
+for panel in json.load(open(sys.argv[1]))["panels"]:
+    width = panel.get("cutoutWidth")
+    if width is not None and not (type(width) is int and 0 < width < panel["width"]):
+        sys.exit(f"bad cutoutWidth: {panel}")
+PY
 [[ ! -e $stage/usr/share/omarchy ]] || fail "nothing is staged in the omarchy package's tree"
 # displays.conf follows the runtime's grammar (docs/file-layout.md): one
 # directive per line, a name with no "/", comments on whole lines only. Nothing

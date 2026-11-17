@@ -60,3 +60,47 @@ for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-oma
   [[ $(grep -Fc -- "$path" "$harness") -ge 2 ]] || fail "$path is both probed and named in its skip reason"
 done
 pass "each entrypoint case probes the path its skip reason names"
+
+# Owner setup over a recorded console: the harness's own serial functions read
+# a log written in advance, and the guest has already exited, so a prompt that
+# never comes fails at once instead of after its timeout.
+awk '/^(serial_find|serial_expect|owner_setup)\(\) \{/,/^}/' "$harness" >"$test_tmp/owner-setup.sh"
+run_owner_setup() {
+  (
+    fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
+    boot_writable() { :; }
+    serial_send() { printf '%s|%s\n' "${1//$'\r'/\\r}" "$serial_match" >>"$test_tmp/sent"; }
+    serial_type() { serial_send "$1"$'\r'; }
+    # shellcheck disable=SC2034 # read by the sourced harness functions
+    owner_user=owner owner_password=secret boot_timeout=1 serial_log=$1 serial_pos=0 serial_match=
+    sleep 0 & qemu_pid=$!; wait "$qemu_pid"
+    source "$test_tmp/owner-setup.sh"
+    owner_setup test
+  ) >"$test_tmp/out" 2>&1
+}
+console_log() {
+  printf 'Press Return to Start Setup\nSelect keyboard layout\nUsername> \nPassword> \nConfirm> \n'
+  local prompt
+  for prompt in "$@"; do printf '%s\n' "$prompt"; done
+}
+
+console_log 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/new.log"
+: >"$test_tmp/sent"
+run_owner_setup "$test_tmp/new.log" || fail "owner setup without the git identity prompts finishes" "$(cat "$test_tmp/out")"
+grep -q 'Full name\|Email address' "$test_tmp/sent" && fail "owner setup without the git identity prompts answers none" "$(cat "$test_tmp/sent")"
+[[ $(grep -Fxc '\r|Hostname> ' "$test_tmp/sent") == 1 ]] || fail "owner setup keeps the default hostname" "$(cat "$test_tmp/sent")"
+pass "owner setup without the git identity prompts keeps every default"
+
+console_log 'Full name> ' 'Email address> ' 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/old.log"
+: >"$test_tmp/sent"
+run_owner_setup "$test_tmp/old.log" || fail "owner setup with the git identity prompts finishes" "$(cat "$test_tmp/out")"
+for prompt in 'Full name> ' 'Email address> ' 'Hostname> '; do
+  [[ $(grep -Fxc "\\r|$prompt" "$test_tmp/sent") == 1 ]] || fail "owner setup skips $prompt once" "$(cat "$test_tmp/sent")"
+done
+pass "owner setup with the git identity prompts skips name and email and keeps the default hostname"
+
+console_log 'Full name> ' 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/broken.log"
+: >"$test_tmp/sent"
+! run_owner_setup "$test_tmp/broken.log" || fail "owner setup with a full name but no email fails"
+grep -Fq 'Email address> ' "$test_tmp/out" || fail "owner setup names the missing Email address> prompt" "$(cat "$test_tmp/out")"
+pass "owner setup that asks for a full name but no email fails on the missing prompt"

@@ -1,0 +1,335 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""Rebuilds a MacBook Neo's Touch ID sensor root key, apple/msrk-j700.bin,
+once its owner has agreed to turn Touch ID on.
+
+The key is device-private. asahi-installer leaves this Mac's factory records
+on the ESP, in asahi/all_firmware.tar.gz; the key is the MSRk record's IM4P
+under the FDR sealing manifest (seal-<ECID>), with the trust bundle as secb,
+as macOS stores the other records in its factory cache. Every byte comes from
+those records, and each must also be found, byte for byte, somewhere in this
+Mac's own iBoot System Container. That proves each record is present there, not
+that it is the active or an authentic one. The logic follows
+omarchy-mac-installer's factory_root_key().
+
+With --check FILE it only says whether FILE is a whole sensor root key: it exits
+3 when FILE is not one, and 1 when it could not tell."""
+
+import argparse
+import hashlib
+import os
+import subprocess
+import sys
+import tarfile
+import zlib
+
+RECORD_MAXIMUM = 16 << 20
+# Bounds on the whole archive: members read, and record bytes kept in memory.
+MEMBER_MAXIMUM = 1 << 14
+RETAINED_MAXIMUM = 32 << 20
+# The records the key is rebuilt from; anything else in the cache is skipped.
+RECORDS = ("MSRk-", "seal-", "trustobject-")
+CONTAINER_MAXIMUM = 1 << 30
+# The Neo's SoC, as its seal-<ECID> record names it.
+CHIP = "00008140"
+
+
+class Refused(Exception):
+    pass
+
+
+def tlv(data, at):
+    if at < 0 or at + 2 > len(data):
+        raise ValueError("truncated DER header")
+    tag, length, header = data[at], data[at + 1], 2
+    if length >= 0x80:
+        count = length & 0x7F
+        if not 1 <= count <= 4 or at + 2 + count > len(data):
+            raise ValueError("bad DER length")
+        if data[at + 2] == 0:
+            raise ValueError("non-minimal DER length")
+        length = int.from_bytes(data[at + 2 : at + 2 + count], "big")
+        if length < 0x80:
+            raise ValueError("non-minimal DER length")
+        header = 2 + count
+    end = at + header + length
+    if end > len(data):
+        raise ValueError("DER runs past the input")
+    return tag, at + header, end
+
+
+def children(data, start, end):
+    fields = []
+    while start < end:
+        child = tlv(data, start)
+        if child[2] > end:
+            raise ValueError("DER child runs past its parent")
+        if len(fields) >= 1024:
+            raise ValueError("too many DER fields")
+        fields.append(child)
+        start = child[2]
+    return fields
+
+
+def ia5(data, child):
+    tag, start, end = child
+    return bytes(data[start:end]) if tag == 0x16 else None
+
+
+def der(tag, value):
+    n = len(value)
+    if n < 0x80:
+        head = bytes([n])
+    else:
+        size = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        head = bytes([0x80 | len(size)]) + size
+    return bytes([tag]) + head + value
+
+
+def check_root_key(data):
+    """data, if it is one complete comb { fdrd: IMG4 { IM4P(MSRk), [0] IM4M },
+    secb: trust bundle } with nothing after it. The envelope only."""
+    try:
+        if not 0 < len(data) <= RECORD_MAXIMUM:
+            raise ValueError("invalid size")
+        outer = tlv(data, 0)
+        if outer[0] != 0x30 or outer[2] != len(data):
+            raise ValueError("invalid combined envelope")
+        fields = children(data, outer[1], outer[2])
+        if (len(fields) != 3 or ia5(data, fields[0]) != b"comb"
+                or fields[1][0] != 0x30 or fields[2][0] != 0x30):
+            raise ValueError("incomplete combined envelope")
+        record = children(data, fields[1][1], fields[1][2])
+        security = children(data, fields[2][1], fields[2][2])
+        if (len(record) != 2 or ia5(data, record[0]) != b"fdrd"
+                or record[1][0] != 4 or len(security) != 2
+                or ia5(data, security[0]) != b"secb" or security[1][0] != 4
+                or security[1][1] == security[1][2]):
+            raise ValueError("missing record or trust bundle")
+        image = tlv(data, record[1][1])
+        if image[0] != 0x30 or image[2] != record[1][2]:
+            raise ValueError("invalid embedded image")
+        parts = children(data, image[1], image[2])
+        if (len(parts) != 3 or ia5(data, parts[0]) != b"IMG4"
+                or parts[1][0] != 0x30 or parts[2][0] != 0xA0):
+            raise ValueError("missing signed envelope")
+        payload = children(data, parts[1][1], parts[1][2])
+        if (len(payload) != 4 or ia5(data, payload[0]) != b"IM4P"
+                or ia5(data, payload[1]) != b"MSRk" or payload[2][0] != 0x16
+                or payload[2][1] == payload[2][2] or payload[3][0] != 4
+                or payload[3][1] == payload[3][2]):
+            raise ValueError("invalid payload")
+        wrapper = children(data, parts[2][1], parts[2][2])
+        if len(wrapper) != 1 or wrapper[0][0] != 0x30:
+            raise ValueError("invalid manifest wrapper")
+        manifest = children(data, wrapper[0][1], wrapper[0][2])
+        if len(manifest) < 2 or ia5(data, manifest[0]) != b"IM4M":
+            raise ValueError("missing manifest")
+    except (ValueError, IndexError) as error:
+        raise Refused(f"the key is not a whole sensor root key: {error}") from error
+    return data
+
+
+def reseal(record, seal, trust):
+    """comb { fdrd: IMG4 { the MSRk record's IM4P, [0] seal }, secb: trust }."""
+    try:
+        outer = tlv(record, 0)
+        parts = children(record, outer[1], outer[2])
+        if (outer[0] != 0x30 or outer[2] != len(record) or len(parts) != 3
+                or ia5(record, parts[0]) != b"IMG4" or parts[1][0] != 0x30):
+            raise ValueError("the MSRk record is not an IMG4")
+        im4p = bytes(record[parts[0][2]:parts[1][2]])
+        manifest = tlv(seal, 0)
+        if manifest[0] != 0x30 or manifest[2] != len(seal):
+            raise ValueError("the seal record is not one DER manifest")
+    except ValueError as error:
+        raise Refused(f"cannot rebuild the sensor root key: {error}") from error
+    image = der(0x30, der(0x16, b"IMG4") + im4p + der(0xA0, seal))
+    return der(0x30, der(0x16, b"comb")
+               + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
+               + der(0x30, der(0x16, b"secb") + der(0x04, trust)))
+
+
+def factory_records(archive):
+    """name -> bytes for the MSRk, seal and trust bundle records in the
+    archive's com.apple.factorydata directory, read into memory only. Other
+    entries there (a subdirectory or record a later macOS adds) are skipped."""
+    records = {}
+    members = retained = 0
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            for member in tar:
+                members += 1
+                if members > MEMBER_MAXIMUM:
+                    raise Refused(f"{archive} holds more than {MEMBER_MAXIMUM} entries")
+                # asahi-installer archives the cache as com.apple.factorydata/
+                # at the archive's root; nothing elsewhere counts.
+                path = member.name.rstrip("/")
+                while path.startswith("./"):
+                    path = path[2:]
+                directory, _, name = path.rpartition("/")
+                if directory != "com.apple.factorydata" or not name.startswith(RECORDS):
+                    continue
+                if not member.isreg():
+                    raise Refused(f"the factory record {name} in {archive} is not a regular file")
+                if member.size > RECORD_MAXIMUM:
+                    raise Refused(f"the factory record {name} in {archive} is too large")
+                if name in records:
+                    raise Refused(f"{archive} holds the factory record {name} twice")
+                retained += member.size
+                if retained > RETAINED_MAXIMUM:
+                    raise Refused(f"the factory records in {archive} are too large together")
+                with tar.extractfile(member) as fd:
+                    records[name] = fd.read(RECORD_MAXIMUM + 1)
+    except (OSError, tarfile.TarError, EOFError, zlib.error) as error:
+        raise Refused(f"cannot read {archive}: {error}") from error
+    return records
+
+
+def one(records, prefix):
+    found = [name for name in records if name.startswith(prefix) and not name.endswith("-current")]
+    if len(found) != 1:
+        raise Refused(f"expected one {prefix}* factory record, found {len(found)}")
+    return found[0], records[found[0]]
+
+
+def trust_bundle(records):
+    """The trustobject-<sha256> record that trustobject-current holds; only
+    without trustobject-current must there be exactly one."""
+    if "trustobject-current" not in records:
+        name, trust = one(records, "trustobject-")
+        if hashlib.sha256(trust).hexdigest() != name.split("-", 1)[1].lower():
+            raise Refused("the trust bundle does not match its name")
+        return trust
+    trust = records["trustobject-current"]
+    digest = hashlib.sha256(trust).hexdigest()
+    named = [name for name in records
+             if name.startswith("trustobject-") and name.split("-", 1)[1].lower() == digest]
+    if not named:
+        raise Refused("no named trust bundle matches trustobject-current")
+    if records[named[0]] != trust:
+        raise Refused("trustobject-current differs from the named trust bundle")
+    return trust
+
+
+def in_container(container, needles):
+    """Whether every needle occurs in the container, read once in chunks."""
+    try:
+        with open(container, "rb") as fd:
+            size = fd.seek(0, os.SEEK_END)
+            if not 0 < size <= CONTAINER_MAXIMUM:
+                raise Refused(f"{container} is not an iBoot System Container")
+            fd.seek(0)
+            overlap = max(len(needle) for needle in needles) - 1
+            missing = set(range(len(needles)))
+            tail = b""
+            while missing:
+                chunk = fd.read(8 << 20)
+                if not chunk:
+                    break
+                window = tail + chunk
+                missing = {index for index in missing if needles[index] not in window}
+                tail = window[-overlap:] if overlap else b""
+    except OSError as error:
+        raise Refused(f"cannot read {container}: {error}") from error
+    return not missing
+
+
+def write(path, data):
+    """path holds data only once it is whole: root-only, written to a
+    temporary name, synced and renamed."""
+    temporary = path + ".new"
+    created = False
+    os.umask(0o077)
+    try:
+        # A temporary copy left by an interrupted run goes first, so the key is
+        # only ever written into a file this run created root-only.
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created = True
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path)
+        directory = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError as error:
+        # Only a copy this run made: another run's is its own to finish.
+        if created:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        raise Refused(f"cannot write {path}: {error}") from error
+
+
+def apple_silicon():
+    try:
+        return subprocess.run(["omarchy-hw-apple-silicon"]).returncode == 0
+    except OSError:
+        return False
+
+
+NOT_WHOLE = 3
+
+
+def check(path):
+    try:
+        with open(path, "rb") as fd:
+            data = fd.read(RECORD_MAXIMUM + 1)
+    except OSError as error:
+        print(f"touchid-root-key: cannot read {path}: {error}", file=sys.stderr)
+        return 1
+    try:
+        check_root_key(data)
+    except Refused as error:
+        print(f"touchid-root-key: {path}: {error}", file=sys.stderr)
+        return NOT_WHOLE
+    return 0
+
+
+def main():
+    if not apple_silicon():
+        print("touchid-root-key: this is not an Apple Silicon Mac", file=sys.stderr)
+        return 1
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--archive", default="/boot/efi/asahi/all_firmware.tar.gz")
+    parser.add_argument("--container", default="/dev/disk/by-partlabel/iBootSystemContainer")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("-o", "--output")
+    action.add_argument("--check", metavar="FILE")
+    arguments = parser.parse_args()
+    if arguments.check:
+        return check(arguments.check)
+    try:
+        records = factory_records(arguments.archive)
+        _, record = one(records, "MSRk-")
+        seal_name, seal = one(records, "seal-")
+        if not seal_name.upper().startswith(f"SEAL-{CHIP}-"):
+            raise Refused(f"the seal record {seal_name} is not a MacBook Neo's")
+        trust = trust_bundle(records)
+        key = check_root_key(reseal(record, seal, trust))
+        if not in_container(arguments.container, [record, seal, trust]):
+            raise Refused(f"the factory records in {arguments.archive} are not all in this Mac's "
+                          f"iBoot System Container ({arguments.container}): they are another Mac's, "
+                          f"or changed since this install")
+        write(arguments.output, key)
+    except Refused as error:
+        print(f"touchid-root-key: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -132,10 +132,19 @@ CONF
   if (( ! menu_is_ours )); then
     sudo install -m600 "$limine_conf_source" "$esp/limine.conf" || limine_boot_fail "cannot install the Limine menu"
   fi
-  sudo sed -i -E 's/^#?[[:space:]]*timeout:.*/timeout: 3/' "$esp/limine.conf" || limine_boot_fail "cannot set the menu timeout"
-  if ! sudo grep -Eq '^timeout: ' "$esp/limine.conf"; then
-    printf 'timeout: 3\n' | sudo tee -a "$esp/limine.conf" >/dev/null || limine_boot_fail "cannot append the menu timeout"
+  # An image's menu carries no identity, and the entry tool updates such an
+  # entry by name without keying it. Key it to this Mac, so the rebuild, owner
+  # setup and factory reset all find it as this machine's own entry.
+  if (( menu_is_ours )) && [[ -z $stale_ids && $machine_id =~ ^[0-9a-f]{32}$ ]]; then
+    sudo awk -v id="$machine_id" '
+      { print }
+      !keyed && /^\/\+?Omarchy[[:space:]]*$/ { print "comment: machine-id=" id; keyed = 1 }
+    ' "$esp/limine.conf" >"$limine_backup/keyed" || limine_boot_fail "cannot key the menu to this machine"
+    sudo install -m600 "$limine_backup/keyed" "$esp/limine.conf" || limine_boot_fail "cannot write the keyed menu"
   fi
+  # The timeout and quiet mode are Omarchy's template's, as on x86.
+  sudo "${OMARCHY_LIMINE_MENU_DEFAULTS:-/usr/lib/omarchy/mac-boot/limine-menu-defaults}" \
+    "$esp/limine.conf" "$limine_conf_source" || limine_boot_fail "cannot give the menu Omarchy's timeout"
 
   limine_boots_uki() {
     sudo test -s "$esp/EFI/Linux/omarchy_$kernel.efi" && sudo grep -Fq "//$kernel" "$esp/limine.conf" &&

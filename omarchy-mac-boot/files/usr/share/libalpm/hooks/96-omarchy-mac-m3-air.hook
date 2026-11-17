@@ -1,0 +1,14 @@
+# An update can bring an M3 Air installed earlier the m1n1 switches setup-boot
+# writes, or bring the m1n1-aurora that admits them. After 95-m1n1-install.hook,
+# so boot.bin is built last from the switches.
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = omarchy-mac-boot
+Target = m1n1-aurora
+
+[Action]
+Description = Checking the M3 Air display and GPU switches in m1n1.conf...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/omarchy-mac-m3-air
