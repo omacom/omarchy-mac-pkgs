@@ -28,6 +28,13 @@ for board in laptops:
     assert not hides('audio_effect.j%s-convolver' % board, []), 'the speakers stay: ' + board
     assert hides(mic, [mic, 'omarchy_asahi_mic']), 'the mono microphone hides behind its mapping: ' + board
     assert not hides(mic, [mic]), 'the mono microphone stays without its mapping: ' + board
+# The M5 MacBook Pros are K boards (K114, K116): their microphone graph names its nodes k114-mic, k116-mic.
+for board in ('k114', 'k116'):
+    mic = 'effect_output.%s-mic' % board
+    assert hides('audio_effect.%s-mic' % board, []), board
+    assert hides(mic, [mic, 'omarchy_asahi_mic']), 'the mono microphone hides behind its mapping: ' + board
+    assert not hides(mic, [mic]), 'the mono microphone stays without its mapping: ' + board
+assert not hides('effect_output.x114-mic', ['effect_output.x114-mic', 'omarchy_asahi_mic']), 'only j and k boards'
 for desktop in ('mini', 'studio'):
     assert hides('effect_output.%s-convolver' % desktop, []), desktop
     assert not hides('audio_effect.%s-convolver' % desktop, []), desktop

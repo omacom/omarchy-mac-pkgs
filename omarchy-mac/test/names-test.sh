@@ -33,6 +33,11 @@ for board in laptops:
     # The DSP's own streams keep their names: the desktop shell hides them.
     assert description('effect_output.j%s-convolver' % board) is None, board
     assert description('audio_effect.j%s-mic' % board) is None, board
+# The M5 MacBook Pros (K114, K116) name their microphone graph k114-mic, k116-mic.
+for board in ('k114', 'k116'):
+    assert description('effect_output.%s-mic' % board) == 'MacBook Microphone (Mono)', board
+    assert description('audio_effect.%s-mic' % board) is None, board
+assert description('effect_output.x114-mic') is None, 'only j and k boards'
 for desktop in ('mini', 'studio'):
     assert description('audio_effect.%s-convolver' % desktop) == 'Built-in Speakers', desktop
 assert description('alsa_output.platform-sound.HiFi__Headphones__sink') == 'Headphones'
