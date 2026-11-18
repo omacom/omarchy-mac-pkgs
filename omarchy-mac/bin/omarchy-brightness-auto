@@ -180,7 +180,7 @@ write_config() {
   fi
   # wluma drives every connected display it finds a backlight for, and a Studio Display has one. The sensor sits in the
   # laptop and does not see the light at an external display, so every other connector is named once with
-  # enabled = false. sysfs lists a connector whether or not a display is plugged in, so a later hotplug is covered too.
+  # enabled = false. Every connector present when the config is written is covered; the config is never rewritten, so one that appears later is not.
   for dir in "$sys_root"/class/drm/card*-*; do
     [[ -d $dir ]] || continue
     name=${dir##*/}
@@ -203,14 +203,16 @@ enabled() {
 # wluma 5 added the keyboard and output tables the config uses. wluma 4 has no --version and would start on any flag,
 # so the version comes from the package database. A wluma pacman does not know (a user build) is let through.
 wluma_usable() {
-  local found
+  local found order
   if ! command -v wluma >/dev/null; then
     echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
     return 1
   fi
   found=$(pacman -Q wluma 2>/dev/null) || return 0
   found=${found#* }
-  if (( $(vercmp "$found" "$wluma_floor") < 0 )); then
+  # Fail closed on an unreadable comparison: only a vercmp that answers decides (m1n1-display pattern).
+  order=$(vercmp "$found" "$wluma_floor" 2>/dev/null)
+  if [[ $order =~ ^-?[0-9]+$ ]] && (( order < 0 )); then
     echo "wluma $wluma_floor or newer is required, found ${found%-*}" >&2
     return 1
   fi

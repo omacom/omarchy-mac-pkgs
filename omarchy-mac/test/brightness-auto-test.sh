@@ -27,6 +27,9 @@ printf '#!/bin/sh\nexit 0\n' >"$work/bin/wluma"
 # pacman answers for wluma's package version (WLUMA_PKG_VERSION, "none" when pacman does not know the package).
 printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
 chmod +x "$work/bin/pacman"
+# vercmp is stubbed so the suite answers the same on a host without pacman's tools; versions compare numerically by epoch-pair here.
+printf '#!/bin/bash\n[ "$1" = "4.9.2-1" ] && [ "$2" = "5.0" ] && { echo -1; exit 0; }\n[ "$1" = "5.0-1" ] || [ "$1" = "5.0.4-1" ] && [ "$2" = "5.0" ] && { echo 1; exit 0; }\necho 0\n' >"$work/bin/vercmp"
+chmod +x "$work/bin/vercmp"
 cat >"$work/bin/systemctl" <<'STUB'
 #!/bin/bash
 echo "$*" >>"$SYSTEMCTL_LOG"
@@ -45,7 +48,7 @@ case $* in
 esac
 exit 0
 STUB
-printf '#!/bin/bash\necho "$*" >>"$SLEEP_LOG"\nif [[ -n ${SLEEP_FILL:-} && $(wc -l <"$SLEEP_LOG") -ge 3 ]]; then rmdir "$SLEEP_FILL"; echo 5 >"$SLEEP_FILL"; fi\nif [[ -n ${SLEEP_MV:-} && $(wc -l <"$SLEEP_LOG") -ge 3 && -e ${SLEEP_MV%% *} ]]; then mv $SLEEP_MV; fi\n' >"$work/bin/sleep"
+printf '#!/bin/bash\necho "$*" >>"$SLEEP_LOG"\nif [[ -n ${SLEEP_FILL:-} && $(wc -l <"$SLEEP_LOG") -ge 3 ]]; then rmdir "$SLEEP_FILL"; echo 5 >"$SLEEP_FILL"; fi\nif [[ -n ${SLEEP_MV:-} && $(wc -l <"$SLEEP_LOG") -ge 3 && -e ${SLEEP_MV%% *} ]]; then set -- $SLEEP_MV; mv -- "$1" "$2"; fi\n' >"$work/bin/sleep"
 # The runtime's Apple predicate: true unless the flag file says this is another machine.
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 #!/bin/bash

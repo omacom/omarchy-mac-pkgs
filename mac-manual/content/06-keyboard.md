@@ -18,7 +18,7 @@ Apple keyboards have no Print Screen key, so Omarchy's `Print` bindings have no 
 
 The keyboard backlight comes on at half brightness at the passphrase prompt, then returns to its last level after unlock; the automatic brightness below moves the screen only. Apple Silicon keyboards have no backlight keys, so Omarchy's keyboard backlight bindings have no key on the built-in keyboard yet; [omacom/omarchy-mac#683](https://github.com/omacom/omarchy-mac/issues/683) tracks giving it some.
 
-The screen follows the room, from the ambient light sensor through wluma. It is on by default, as on macOS. `omarchy brightness auto off` stops it and keeps it off; `omarchy brightness auto on` turns it back on. If wluma is missing, `omarchy-pkg-add wluma` installs it. It starts from a built-in curve and keeps learning from the brightness you set by hand.
+Only the built-in screen follows the room, from the ambient light sensor through wluma; an external display keeps the brightness you set. It is on by default, as on macOS. `omarchy brightness auto off` stops it and keeps it off; `omarchy brightness auto on` turns it back on. If wluma 5.0 or newer is missing, `omarchy-pkg-add wluma` installs it. It starts from a built-in curve and keeps learning from the brightness you set by hand.
 
 ## Trackpad
 
