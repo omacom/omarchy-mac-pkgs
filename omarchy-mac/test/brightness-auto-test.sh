@@ -108,7 +108,7 @@ rm -f "$panel" "$keyboard"
 run prepare >/dev/null
 [[ -f $panel ]] || fail 'prepare seeds missing data'
 config="$work/config/wluma/config.toml"
-grep -Fq 'name = "eDP-1"' "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'prepare writes an ambient-light-only config for the panel' "$(cat "$config")"
+grep -Fq 'name = "eDP-1"' "$config" && grep -Fq "path = \"$sys/class/backlight/apple-panel-bl\"" "$config" && grep -Fq 'capturer = "none"' "$config" && grep -Fq 'gamma = false' "$config" || fail 'prepare writes an ambient-light-only config for the panel' "$(cat "$config")"
 awk '/^\[idle\]$/ { idle = 1; next } /^\[/ { idle = 0 } idle && /^enabled = false$/ { found = 1 } END { exit !found }' "$config" || fail 'prepare leaves idle dimming to Omarchy' "$(cat "$config")"
 # wluma drives every kbd_backlight it finds, and with its own idle off it learns the lock screen's keyboard-off as a
 # choice, so the keyboard would stay dark in a dark room. The config names the LED and disables it, leaving the keyboard

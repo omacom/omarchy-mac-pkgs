@@ -163,7 +163,7 @@ panel_or_config() {
 # Ambient light only for the panel: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle
 # chain, the keyboard backlight left to whatever else drives it, every external display left alone.
 write_config() {
-  local connector keyboard content block dir name seen=" "
+  local connector keyboard panel content block dir name seen=" "
   if [[ -e $config_file ]]; then
     return 0
   fi
@@ -171,7 +171,11 @@ write_config() {
     echo "No internal panel is connected and there is no wluma config, so wluma does not start." >&2
     return 1
   fi
-  printf -v content '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\ncapturer = "none"\ngamma = false\n' "$connector"
+  if ! panel=$(panel_backlight); then
+    echo "No internal panel backlight found and there is no wluma config, so wluma does not start." >&2
+    return 1
+  fi
+  printf -v content '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\npath = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" "$panel"
   # wluma finds every kbd_backlight on its own and, with its idle off, learns the lock screen's keyboard-off as the
   # user's choice, so the keyboard stays dark in a dark room. Naming the LED with enabled = false drops it.
   if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
@@ -255,8 +259,8 @@ turn_on() {
   if [[ -z $(read_lux) ]]; then
     echo "Waiting up to 60 s for the light sensor to report before wluma starts." >&2
   fi
-  # The start limit counts activations the ExecCondition skipped too, so a login plus two quick on/off
-  # cycles would refuse the third start; clear the failed state first.
+  # The start limit is checked before ExecCondition, so skipped starts still count; a login plus
+  # several quick on/off cycles would refuse the sixth start with a burst of 5; clear failed first.
   systemctl --user reset-failed "$unit" 2>/dev/null || true
   systemctl --user start "$unit"
 }
