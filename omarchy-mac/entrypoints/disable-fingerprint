@@ -2,8 +2,8 @@
 # omarchy-lifecycle-dispatch disable-fingerprint: Omarchy's fingerprint removal
 # runs this as root once the fingerprints are deleted. Removing the owner's
 # agreement stops the driver loading, and writing, at boot; the key store stays.
-# A Neo's or a 16-inch M4 Pro's sensor key goes too: turning Touch ID on again
-# rebuilds it.
+# A Neo's or a 16-inch M4 Pro's or M4 Max's sensor key goes too: turning
+# Touch ID on again rebuilds it.
 omarchy-hw-apple-silicon || exit 0
 
 # Waits for a Touch ID setup still running, which could otherwise install its
@@ -17,7 +17,8 @@ elif ! flock -w 300 "$lock_fd"; then
   exit 1
 fi
 
-keys=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin)
+keys=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin
+  /usr/lib/firmware/updates/apple/msrk-j616c.bin)
 present=0
 for key in "${keys[@]}"; do
   [[ -e $key || -e $key.new ]] && present=1
