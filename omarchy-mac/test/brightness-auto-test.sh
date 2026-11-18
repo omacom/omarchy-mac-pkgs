@@ -27,7 +27,7 @@ printf '#!/bin/sh\nexit 0\n' >"$work/bin/wluma"
 # pacman answers for wluma's package version (WLUMA_PKG_VERSION, "none" when pacman does not know the package).
 printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
 chmod +x "$work/bin/pacman"
-# vercmp is stubbed so the suite answers the same on a host without pacman's tools; versions compare numerically by epoch-pair here.
+# vercmp is stubbed so the suite answers the same on a host without pacman's tools; it looks up the three exact versions the suite asks about (real vercmp answers 0 for 5.0-1 vs 5.0, harmless here).
 printf '#!/bin/bash\n[ "$1" = "4.9.2-1" ] && [ "$2" = "5.0" ] && { echo -1; exit 0; }\n[ "$1" = "5.0-1" ] || [ "$1" = "5.0.4-1" ] && [ "$2" = "5.0" ] && { echo 1; exit 0; }\necho 0\n' >"$work/bin/vercmp"
 chmod +x "$work/bin/vercmp"
 cat >"$work/bin/systemctl" <<'STUB'
@@ -192,7 +192,7 @@ pass 'ready needs wluma, a sensor and a number, and waits for the first reading'
 # on unmasks and starts the service.
 : >"$SYSTEMCTL_LOG"
 run on >/dev/null
-[[ $(cat "$SYSTEMCTL_LOG") == $'--user unmask wluma.service\n--user start wluma.service' ]] || fail 'on unmasks and starts the service' "$(cat "$SYSTEMCTL_LOG")"
+[[ $(cat "$SYSTEMCTL_LOG") == $'--user unmask wluma.service\n--user reset-failed wluma.service\n--user start wluma.service' ]] || fail 'on unmasks, clears the start limit and starts the service' "$(cat "$SYSTEMCTL_LOG")"
 pass 'on unmasks and starts wluma'
 
 # on tells the user why it is slow when the sensor has not reported yet.
@@ -433,5 +433,7 @@ user_units="$work/root/usr/lib/systemd/user"
 dropin="$user_units/wluma.service.d/omarchy-mac.conf"
 grep -Fxq 'ExecCondition=/usr/bin/omarchy-brightness-auto ready' "$dropin" || fail 'the drop-in starts wluma only with a sensor'
 grep -Fxq 'ExecStartPre=/usr/bin/omarchy-brightness-auto prepare' "$dropin" || fail 'the drop-in runs prepare before a start, and a failed prepare stops the start'
+grep -Fxq 'StartLimitIntervalSec=120' "$dropin" || fail 'the drop-in bounds automatic retries by time'
+grep -Fxq 'StartLimitBurst=5' "$dropin" || fail 'the drop-in bounds automatic retries by count'
 [[ -x $work/root/usr/bin/omarchy-brightness-auto ]] || fail 'the drop-in names an installed command'
 pass 'the package enables wluma by default'

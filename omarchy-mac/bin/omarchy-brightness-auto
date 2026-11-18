@@ -210,7 +210,7 @@ wluma_usable() {
   fi
   found=$(pacman -Q wluma 2>/dev/null) || return 0
   found=${found#* }
-  # Fail closed on an unreadable comparison: only a vercmp that answers decides (m1n1-display pattern).
+  # A vercmp that gives no number lets wluma through, as an unknown package does; only an answer below the floor refuses.
   order=$(vercmp "$found" "$wluma_floor" 2>/dev/null)
   if [[ $order =~ ^-?[0-9]+$ ]] && (( order < 0 )); then
     echo "wluma $wluma_floor or newer is required, found ${found%-*}" >&2
@@ -255,6 +255,9 @@ turn_on() {
   if [[ -z $(read_lux) ]]; then
     echo "Waiting up to 60 s for the light sensor to report before wluma starts." >&2
   fi
+  # The start limit counts activations the ExecCondition skipped too, so a login plus two quick on/off
+  # cycles would refuse the third start; clear the failed state first.
+  systemctl --user reset-failed "$unit" 2>/dev/null || true
   systemctl --user start "$unit"
 }
 
