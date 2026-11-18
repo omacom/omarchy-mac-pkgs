@@ -78,6 +78,10 @@ USB-C and DisplayPort external displays stay off on an M3 Air for now, since the
 
 Anything marked work in progress there, Thunderbolt device support among them, is work in progress here too. The Aurora kernel adds the display, camera and USB4 work described above.
 
+### Experimental J514C login
+
+The 14-inch M3 Max J514C bring-up remains outside the supported release. On a J514C/T6031 install whose boot loader handed the native display and GPU over, the login manager waits for them before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
+
 ## Reporting a problem
 
 Open an issue on [omacom/omarchy-mac-pkgs](https://github.com/omacom/omarchy-mac-pkgs/issues), or on [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer/issues) for the macOS installer app. Include the output of:
