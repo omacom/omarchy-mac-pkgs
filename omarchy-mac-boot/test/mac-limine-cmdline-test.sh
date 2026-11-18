@@ -66,12 +66,22 @@ grep -q 'root=UUID=mounted-root-uuid ' "$limine" || fail "without a UUID in fsta
 pass "the mounted root is the fallback for the UUID"
 
 # A snapshot boot: no fstab row, an overlay root, the UUID from the cmdline.
+# The next UKI mounts @, not the snapshot the Mac booted.
 printf '# omarchy-mac-snapshot-overlay: UUID=x / btrfs subvol=@ 0 0\n' >"$fstab"
-printf '#!/bin/bash\nexit 1\n' >"$stub_bin/findmnt"
 printf 'root=UUID=booted-root rw rootflags=subvol=/@/.snapshots/8/snapshot quiet\n' >"$test_tmp/cmdline"
-OMARCHY_CMDLINE="$test_tmp/cmdline" PATH="$stub_bin:$PATH" run || fail "run in a snapshot boot succeeds"
-grep -q 'root=UUID=booted-root ' "$limine" || fail "a snapshot boot takes the UUID from the kernel command line" "$(cat "$limine")"
-pass "the booted root is the last fallback for the UUID"
+snapshot_boot() {
+  OMARCHY_CMDLINE="$test_tmp/cmdline" PATH="$stub_bin:$PATH" run || fail "run in a snapshot boot $1 succeeds"
+  grep -q 'root=UUID=booted-root ' "$limine" || fail "a snapshot boot $1 takes the UUID from the kernel command line" "$(cat "$limine")"
+  grep -Fq ' rootflags=subvol=@,x-systemd.device-timeout=0 ' "$limine" || fail "a snapshot boot $1 writes subvol=@" "$(cat "$limine")"
+}
+cat >"$stub_bin/findmnt" <<'SH'
+#!/bin/bash
+[[ $* == "-no FSTYPE,OPTIONS /" ]] && echo "overlay rw,lowerdir=/sysroot"
+SH
+snapshot_boot "on an overlay root"
+printf '#!/bin/bash\nexit 1\n' >"$stub_bin/findmnt"
+snapshot_boot "without findmnt"
+pass "the booted root is the last fallback for the UUID, and a snapshot boot's next UKI mounts @"
 
 # No UUID anywhere: the file keeps its line and the run fails.
 cp "$limine" "$test_tmp/before"

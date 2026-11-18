@@ -148,6 +148,8 @@ limine_mac() {
   ln -s usr/lib "$mac_root/lib"
 
   printf 'linux-aurora kernel %s\n' "$mac_kver" >"$modules/vmlinuz"
+  printf 'linux-aurora\n' >"$modules/pkgbase"
+  : >"$modules/modules.dep"
   cp "$modules/vmlinuz" "$mac_root/boot/vmlinuz-linux-aurora"
   printf 'initramfs\n' >"$mac_root/boot/initramfs-linux-aurora.img"
   printf 'usr/lib/modules/%s/kernel/drivers/gpu/drm/apple/appledrm.ko.zst\nusr/bin/init\n' "$mac_kver" >"$mac_state/initramfs"

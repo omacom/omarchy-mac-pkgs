@@ -10,7 +10,7 @@ Encryption on a Mac is chosen in the installer and carried out on the Mac's firs
 
 Choose encryption in the installer. The image is written unencrypted, with a temporary install key for the first boot. On that boot, from the initramfs and before the root is mounted, the root file system is converted to LUKS in place: it is shrunk, re-encrypted and its boot entries and initramfs are rebuilt to unlock it. The conversion keeps a recovery journal on the boot partition, so an interrupted conversion can be picked up again.
 
-A Mac that was not asked to encrypt is never touched. The conversion needs a marker the installer writes and refuses to run without it.
+The first boot encrypts unless the installer recorded that you said no. The installer leaves that choice on the EFI system partition, and if it is missing the first boot encrypts. A no is kept on the boot partition, so it holds through a factory reset. Only the first boot of a freshly written image converts, so a Mac that is already installed is never touched.
 
 ## First boot: your password
 
@@ -27,6 +27,21 @@ Change passwords under _Update > Password_ in the Omarchy menu, as on x86. On a 
 As on x86, no other key opens the disk: without the password its data cannot be read. Reinstall with the installer app to use the Mac again.
 
 A Mac set up before Omarchy dropped the recovery passphrase keeps it as a second password for the disk. It still unlocks the disk at the prompt, and a password change leaves it as it is, but it no longer offers to set a new password.
+
+## Turning on Touch ID
+
+Touch ID on Linux is experimental and can be unstable. It shares the Secure Enclave with macOS, so back up any data on your macOS partition before you turn it on. Fingerprint setup under _Setup > Security > Fingerprint_ asks first, and saying no leaves Touch ID off. The choice applies to every user on the Mac and needs an administrator.
+
+Turning it on loads the Secure Enclave driver and creates a key store for Linux, or uses the one an earlier setup created. In normal use the enclave advances its anti-replay state, which only moves forward. Linux and macOS share that state: it is one file in the Mac's iBoot System Container, and both systems update it.
+
+If a bug ever writes that shared state wrongly, the enclave stops accepting it and macOS can lose data:
+
+- With FileVault on, macOS can't unlock its disk and won't start, and the startup picker may not open. Getting the Mac back takes a DFU restore, which erases it.
+- With FileVault off, macOS resets its keychain and Touch ID fingerprints and shows a warning.
+
+On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
+
+Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.
 
 ## Resetting the Mac for a new owner
 

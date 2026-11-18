@@ -88,6 +88,7 @@ mkdir -p "$OMARCHY_SNAPSHOT_TOP/@/.snapshots/13"
 echo '<snapshot><num>13</num></snapshot>' >"$OMARCHY_SNAPSHOT_TOP/@/.snapshots/13/info.xml"
 for image in "$OMARCHY_SNAPSHOT_TOP"/@/usr/lib/modules/*/vmlinuz; do
   { cat "$image"; printf 'initrd\n'; } >"$MAC_UKI"
+  sed -i -E "s/(omarchy_linux-aurora\.efi#)[0-9a-f]+/\1$(b2sum "$MAC_UKI" | cut -d' ' -f1)/" "${MAC_UKI%/EFI/*}/limine.conf"
 done
 echo restored >"$OMARCHY_SNAPSHOT_RESTORE_LOCK"
 echo restored >>"$CALLS"
@@ -176,14 +177,18 @@ pass "a Limine Mac restores a snapshot that matches its boot files through limin
 # The same, after a kernel update the snapshot predates.
 limine_mac
 printf 'linux-aurora kernel 6.18.0-aurora1-ARCH\n' >"$mac_root/boot/vmlinuz-linux-aurora"
+printf 'linux-aurora\n' >"$mac_root/usr/lib/modules/$mac_kver/pkgbase"
 run_restore aarch64-apple limine "$tmp/hooks"
-(( status != 0 )) && ! grep -Fxq restored "$tmp/calls" ||
-  fail "a snapshot from before a kernel update is not restored" "$(cat "$tmp/calls" "$tmp/err")"
-grep -Fq "Snapshot 7 does not match this Mac's boot files, so it is not restored" "$tmp/err" &&
-  grep -Fq "/boot/vmlinuz-linux-aurora is not the $mac_kver kernel linux-aurora installed" "$tmp/err" &&
-  grep -Fq "A snapshot holds the root file system only" "$tmp/err" ||
-  fail "the refusal says what differs and why" "$(cat "$tmp/err")"
-pass "a Limine Mac refuses a snapshot from before a kernel update, and explains"
+(( status == 0 )) && grep -Fxq restored "$tmp/calls" ||
+  fail "a snapshot from before a kernel update is restored" "$(cat "$tmp/calls" "$tmp/err")"
+grep -Fq "Snapshot 7 is from before this Mac's last boot file update" "$tmp/out" &&
+  grep -Fq "The next omarchy update rebuilds them" "$tmp/out" && grep -Fq "Reboot now" "$tmp/out" ||
+  fail "the rollback says what happened and offers the reboot" "$(cat "$tmp/out" "$tmp/err")"
+cmp -s "$mac_root/boot/vmlinuz-linux-aurora" "$mac_root/usr/lib/modules/$mac_kver/vmlinuz" &&
+  [[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] ||
+  fail "the restored kernel is on /boot, with the marker for the next update"
+rm -rf "$tmp/state"
+pass "a Limine Mac rolls back across a kernel update through limine-snapper-restore"
 
 # Booted into snapshot 7, but another snapshot picked from limine-snapper-restore's
 # own list: the pre hook checked 7, so the post hook checks what came back.

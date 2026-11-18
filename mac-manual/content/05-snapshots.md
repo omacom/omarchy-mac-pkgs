@@ -17,11 +17,11 @@ Snapshots taken before Limine was activated on your Mac can't be restored. Limin
 
 ## What a snapshot does not hold on a Mac
 
-Part of what boots a Mac lives outside the root file system: the kernel and initramfs on the boot partition, Limine on the EFI system partition, and m1n1, U-Boot and the device trees. A snapshot does not roll those back.
+Part of what boots a Mac lives outside the root file system: the kernel and initramfs on the boot partition, Limine on the EFI system partition, and m1n1, U-Boot and the device trees. A snapshot does not hold those.
 
-So before a restore, the snapshot is checked against the current boot files, and the restore is refused when they don't match it, for example when the snapshot was taken before a kernel, m1n1, U-Boot or Limine update. The message says what differs and lists the snapshot's kernel, boot firmware and Limine packages. To restore that snapshot anyway, boot the current system, install those package versions with `pacman`, then boot the snapshot again and restore it.
+A snapshot from before a kernel, m1n1, U-Boot or Limine update can still be restored. You just booted it from the Limine menu with the boot firmware that's on your Mac now, so the restore keeps that firmware and puts the snapshot's kernel and initramfs on the boot partition. It checks what the next boot reads before it offers the reboot. Your next `omarchy update` rebuilds m1n1, the device trees, U-Boot and Limine from the installed packages. If the kernel you're running doesn't belong to the snapshot's own packages, the restore is refused and the message says why.
 
-The check runs from the snapshot you booted. A snapshot taken before your Mac had it restores unchecked, so compare its packages with the current ones first.
+The check runs from the snapshot you booted, so a snapshot taken before your Mac had this version follows the rules of the version it holds. It may refuse the restore, or restore unchecked, so compare its packages with the current ones first.
 
 A Mac that still boots GRUB, from before the move to Limine, has no snapshot menu, and Omarchy has no other way to restore a snapshot there. The move to Limine makes later snapshots restorable.
 

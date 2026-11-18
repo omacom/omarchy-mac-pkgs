@@ -13,6 +13,36 @@ if command -v udevadm >/dev/null && udevadm verify --help >/dev/null 2>&1; then
 fi
 pass 'stages a udev rule that restores the limit for the SMC battery only'
 
+# asahi-scripts' unit as it ships, which its path unit starts on every SMC event.
+unit=macsmc-battery-charge-control-end-threshold.service
+stub_systemd_boot_targets "$stage"
+printf '#!/bin/sh\nexit 0\n' >"$stage/usr/bin/sh"
+chmod +x "$stage/usr/bin/sh"
+cat >"$stage/usr/lib/systemd/system/$unit" <<'UNIT'
+[Unit]
+Description=Store current charge_control_end_threshold value persistently
+
+[Service]
+Type=simple
+ExecStart=sh -c 'echo "CHARGE_CONTROL_END_THRESHOLD=$(cat /sys/class/power_supply/macsmc-battery/charge_control_end_threshold)" > /etc/udev/macsmc-battery.conf'
+UNIT
+# systemd reads the setting only from [Unit].
+limit=$(systemd-analyze --root="$stage" cat-config "systemd/system/$unit" |
+  awk -F= '/^\[/ { section = $0 } section == "[Unit]" && $1 == "StartLimitIntervalSec" { value = $2 } END { print value }')
+[[ $limit == "0" ]] || fail 'a burst of SMC events never hits the start limit' "(StartLimitIntervalSec=${limit:-unset})"
+pass "lifts the start limit on asahi-scripts' charge-threshold unit"
+
+# verify warns about a setting systemd ignores but still exits 0, so any output
+# fails, unless a trivial unit fails too, as in emulated containers.
+printf '[Service]\nExecStart=sh -c true\n' >"$stage/usr/lib/systemd/system/probe.service"
+if verify=$(systemd-analyze --root="$stage" verify --man=no "/usr/lib/systemd/system/$unit" 2>&1) && [[ -z $verify ]]; then
+  pass 'systemd accepts the drop-in without warnings'
+elif probe=$(systemd-analyze --root="$stage" verify --man=no /usr/lib/systemd/system/probe.service 2>&1) && [[ -z $probe ]]; then
+  fail 'systemd accepts the drop-in without warnings' "$verify"
+else
+  pass 'systemd-analyze cannot verify units here; drop-in verification not run'
+fi
+
 battery="$work/sys/macsmc-battery"
 saved="$work/etc/udev/macsmc-battery.conf"
 mkdir -p "$battery" "${saved%/*}" "$work/bin"
