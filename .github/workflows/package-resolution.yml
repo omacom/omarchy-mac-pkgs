@@ -1,7 +1,7 @@
 name: Package resolution
 
-# Resolves the aarch64 platform package sets against the live Arch Linux ARM,
-# asahi-alarm and pkgs.omarchy.org databases. Nothing is installed: the check
+# Resolves the aarch64 platform package sets against the live Arch Linux ARM
+# and pkgs.omarchy.org databases. Nothing is installed: the check
 # only reads databases inside a disposable pacman root, so an x86 Arch Linux
 # container with Architecture = aarch64 answers the same as an aarch64 host.
 on:
