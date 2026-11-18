@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.2.6` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.2.7` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
@@ -48,6 +48,10 @@ The default decodes H.264, HEVC and VP9 on the Apple Video Decoder with copy-bac
 On a Mac whose GPU has no driver yet, such as the M3 Max, the only OpenGL renderer is Mesa's software one: llvmpipe, or softpipe where Mesa is built without LLVM. mpv rejects a software renderer while probing, and mpv 0.41 then aborts with `vo_x11_init: Assertion '!vo->x11' failed`: its Wayland context does not clean up after a failed init, and the X11 context it tries next asserts on the leftover (fixed upstream in mpv-player/mpv@a58dd8ac41, not yet in a release). `gpu-sw=yes` lets mpv draw on llvmpipe or softpipe there instead. It changes nothing where the context mpv picks has a hardware renderer.
 
 On an M3 Max, llvmpipe plays video but cannot keep up with it. These figures assume a Mesa built with LLVM (Arch's 26.2.3). Fullscreen on the 3456×2160 panel with mpv 0.41.0, 30-second 30 fps clips cost about 10.7 cores and drop 350 of 900 frames at 1080p H.264, and about 12 cores with 526 dropped at 4K H.264 or HEVC. Decoding goes to software: without a GPU render node libva cannot name its driver, so `vaapi-copy` fails over. Forced with `LIBVA_DRIVER_NAME=v4l2_request`, AVD decodes all three, and decoding alone falls from 0.23 to 0.08 of a core at 1080p H.264 and from 1.1 to 0.24 at 4K HEVC, but as many frames drop, because drawing is the cost. Current mesa-aurora is built without LLVM, so until omacom/omarchy-pkgs#1474 is resolved such a Mac gets softpipe, which draws a fraction of a frame per second: on a 13" M3 Air, about 0.2 fps at 1080p and 720p. mpv still plays rather than aborting.
+
+## Focus boost on the 16-inch M4 Max
+
+`omarchy-mac-focus-boost.service` runs only on `apple,j616c`. Within 3 seconds of keyboard, trackpad or mouse input or a window change, it sets `uclamp.min` to 822 on every process of the focused Hyprland app, and back to 0 afterwards. A fullscreen app using at least 0.75 of a core keeps the boost without input. It reads input only to time it. It changes only processes whose real and effective uid are the session owner's, so a Hyprland socket that names another user's process changes nothing; it gives up on a socket reply over 64 KiB or 1 s and drops an event line over 64 KiB. Stopping the service puts every boosted process back to 0. `sudo systemctl mask --now omarchy-mac-focus-boost` turns it off: the package enables the unit with a `multi-user.target.wants` link under `/usr/lib`, which `systemctl disable` can't remove.
 
 ## Battery charge limit
 

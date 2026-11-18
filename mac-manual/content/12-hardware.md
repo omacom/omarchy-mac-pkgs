@@ -98,3 +98,7 @@ pacman-conf --repo-list
 For an update that stopped, add the update output and `/var/log/pacman.log`. For an installer that stopped, add the app's log folder under `~/Library/Logs/`.
 
 Never post passwords, Wi-Fi credentials, private keys or complete connection profiles.
+
+## Focus boost on the 16-inch M4 Max
+
+On this Mac only, the app you are using gets a faster CPU for 3 seconds after each key press, click or window change, and everything else stays on the efficient setting. Fullscreen games keep the boost. To turn it off for good, run `sudo systemctl mask --now omarchy-mac-focus-boost`; `disable` doesn't stick, because the package turns the service on itself. `sudo systemctl unmask omarchy-mac-focus-boost` and a restart turn it back on.

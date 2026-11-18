@@ -1,0 +1,298 @@
+#!/usr/bin/python3
+# While you type, click or switch windows, the focused app on the 16-inch M4 Max gets a fast CPU; the rest stay cheap.
+# It raises the app's uclamp.min through uclampset, and a fullscreen game keeps the boost without input.
+# Runs as root: reading input and raising uclamp.min both need it. Input events are only timed, never kept.
+import glob
+import json
+import os
+import re
+import select
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+# 822 of 1024 is the 3.6 GHz step of a 4.5 GHz P core. Sustained work reaches 4.5 GHz by itself.
+BOOST = 822
+HOLD_SECONDS = 3.0
+RESCAN_SECONDS = 2.0
+DEVICE_RESCAN_SECONDS = 10.0
+GAME_CORES = 0.75
+REPLY_BYTES = 65536
+REPLY_SECONDS = 1.0
+EVENT_LINE_BYTES = 65536
+SESSION_SOCKETS = "/run/user/*/hypr/*/.socket2.sock"
+CGROUP_ROOT = "/sys/fs/cgroup"
+PROC_ROOT = "/proc"
+INPUT_LIST = "/proc/bus/input/devices"
+INPUT_ROOT = "/dev/input"
+WANTED_INPUT = re.compile(r"keyboard|touch|trackpad|touchpad|mouse", re.I)
+SKIPPED_INPUT = re.compile(r"jack|lid|power|button|switch|accel|als", re.I)
+
+
+def log(message):
+    print(f"omarchy-mac-focus-boost: {message}", flush=True)
+
+
+def owned(pid, uid):
+    """Whether the process's real and effective uid are the session owner's."""
+    try:
+        with open(f"{PROC_ROOT}/{pid}/status") as file:
+            for line in file:
+                if line.startswith("Uid:"):
+                    real, effective = (int(field) for field in line.split()[1:3])
+                    return real == uid and effective == uid
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def uclampset(pid, value):
+    subprocess.run(["uclampset", "-m", str(value), "-a", "-p", str(pid)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def clamp(pids, value, uid):
+    """Sets uclamp.min on the processes the session owner owns, and nobody else's."""
+    for pid in pids:
+        if owned(pid, uid):
+            uclampset(pid, value)
+
+
+def session():
+    """(uid, Hyprland's runtime directory) of the newest session, or None."""
+    sockets = sorted(glob.glob(SESSION_SOCKETS), key=os.path.getmtime)
+    if not sockets:
+        return None
+    directory = os.path.dirname(sockets[-1])
+    return os.stat(directory).st_uid, directory
+
+
+def user_pids(uid):
+    output = subprocess.run(["pgrep", "-u", str(uid)], capture_output=True, text=True).stdout
+    return {int(pid) for pid in output.split()}
+
+
+def cgroup_of(pid):
+    try:
+        with open(f"{PROC_ROOT}/{pid}/cgroup") as file:
+            return file.read().strip().split("::", 1)[1]
+    except (OSError, IndexError):
+        return None
+
+
+def app_cgroups(cgroup):
+    """The cgroup and its siblings of the same app: a Flatpak browser keeps its renderers in a second scope."""
+    if not cgroup:
+        return []
+    parent, leaf = cgroup.rsplit("/", 1)
+    match = re.match(r"(app-.+?)-[0-9a-f]+\.scope$", leaf)
+    if not match:
+        return [cgroup]
+    pattern = f"{CGROUP_ROOT}{parent}/{match.group(1)}-*.scope"
+    return sorted(f"{parent}/{os.path.basename(path)}" for path in glob.glob(pattern))
+
+
+def app_pids(cgroups):
+    pids = set()
+    for cgroup in cgroups:
+        try:
+            with open(f"{CGROUP_ROOT}{cgroup}/cgroup.procs") as file:
+                pids |= {int(pid) for pid in file.read().split()}
+        except OSError:
+            pass
+    return pids
+
+
+def app_cpu_usec(cgroups):
+    total = 0
+    for cgroup in cgroups:
+        try:
+            with open(f"{CGROUP_ROOT}{cgroup}/cpu.stat") as file:
+                total += int(file.readline().split()[1])
+        except (OSError, IndexError, ValueError):
+            pass
+    return total
+
+
+def focused(directory):
+    """(pid, fullscreen) of the focused window; a reply over REPLY_BYTES or REPLY_SECONDS counts as none."""
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    deadline = time.monotonic() + REPLY_SECONDS
+    data = b""
+    try:
+        connection.settimeout(REPLY_SECONDS)
+        connection.connect(f"{directory}/.socket.sock")
+        connection.sendall(b"j/activewindow")
+        while True:
+            connection.settimeout(max(0.001, deadline - time.monotonic()))
+            chunk = connection.recv(REPLY_BYTES + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > REPLY_BYTES or time.monotonic() >= deadline:
+                return None, False
+    except OSError:
+        return None, False
+    finally:
+        connection.close()
+    try:
+        window = json.loads(data or b"{}")
+        return int(window.get("pid", 0)) or None, bool(window.get("fullscreen", 0))
+    except ValueError:
+        return None, False
+
+
+def split_events(pending, chunk):
+    """Complete event lines and the unfinished rest. A line longer than EVENT_LINE_BYTES is dropped whole: None as the rest skips to its end."""
+    if pending is None:
+        if b"\n" not in chunk:
+            return [], None
+        pending, chunk = b"", chunk.split(b"\n", 1)[1]
+    *lines, rest = (pending + chunk).split(b"\n")
+    return lines, rest if len(rest) <= EVENT_LINE_BYTES else None
+
+
+def input_devices():
+    """The event nodes of keyboards, trackpads and mice."""
+    found = set()
+    with open(INPUT_LIST) as file:
+        for block in file.read().split("\n\n"):
+            name = re.search(r'^N: Name="(.*)"$', block, re.M)
+            event = re.search(r"^H: Handlers=.*\b(event\d+)\b", block, re.M)
+            if name and event and WANTED_INPUT.search(name[1]) and not SKIPPED_INPUT.search(name[1]):
+                found.add(f"{INPUT_ROOT}/{event[1]}")
+    return found
+
+
+class Inputs:
+    def __init__(self):
+        self.descriptors = {}
+        self.checked = 0.0
+
+    def refresh(self):
+        if time.monotonic() - self.checked < DEVICE_RESCAN_SECONDS:
+            return
+        self.checked = time.monotonic()
+        wanted = input_devices()
+        for path in set(self.descriptors) - wanted:
+            os.close(self.descriptors.pop(path))
+        for path in wanted - set(self.descriptors):
+            try:
+                self.descriptors[path] = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError:
+                pass
+
+    def drain(self, descriptor):
+        try:
+            while os.read(descriptor, 4096):
+                pass
+        except BlockingIOError:
+            pass
+        except OSError:
+            for path, open_descriptor in list(self.descriptors.items()):
+                if open_descriptor == descriptor:
+                    os.close(self.descriptors.pop(path))
+
+
+def run(uid, directory):
+    log(f"following uid {uid}, boost {BOOST} for {HOLD_SECONDS} s after input")
+    clamp(user_pids(uid), 0, uid)
+    events = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    events.connect(f"{directory}/.socket2.sock")
+    boosted = set()
+    try:
+        follow(uid, directory, events, boosted)
+    finally:
+        # Every way out, a stop signal included, puts the boosted app back to 0.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        clamp(boosted, 0, uid)
+        events.close()
+
+
+def follow(uid, directory, events, boosted):
+    """The event loop. It records a process in boosted before raising it, so a stop always undoes it."""
+    inputs = Inputs()
+    buffer, cgroups, active = b"", [], False
+    fullscreen, game, cpu_sample = False, False, None
+    last_input = last_scan = time.monotonic()
+    focus_changed = True
+    while True:
+        inputs.refresh()
+        now = time.monotonic()
+        timeout = RESCAN_SECONDS if active else DEVICE_RESCAN_SECONDS
+        if active and not game:
+            timeout = min(timeout, max(0.05, last_input + HOLD_SECONDS - now))
+        if fullscreen:
+            timeout = min(timeout, RESCAN_SECONDS)
+        if focus_changed:
+            timeout = 0
+        ready, _, _ = select.select([events] + list(inputs.descriptors.values()), [], [], timeout)
+        now = time.monotonic()
+        for source in ready:
+            if source is events:
+                chunk = events.recv(65536)
+                if not chunk:
+                    log("Hyprland went away")
+                    return
+                lines, buffer = split_events(buffer, chunk)
+                if any(line.startswith((b"activewindowv2>>", b"closewindow>>")) for line in lines):
+                    focus_changed = True
+                    last_input = now
+                elif any(line.startswith(b"fullscreen>>") for line in lines):
+                    focus_changed = True
+            else:
+                inputs.drain(source)
+                last_input = now
+        if focus_changed:
+            focus_changed = False
+            pid, fullscreen = focused(directory)
+            new_cgroups = app_cgroups(cgroup_of(pid)) if pid and owned(pid, uid) else []
+            if new_cgroups != cgroups:
+                clamp(boosted, 0, uid)
+                boosted.clear()
+                cgroups, active = new_cgroups, False
+            if not fullscreen or cpu_sample is None or cpu_sample[2] != cgroups:
+                cpu_sample = (now, app_cpu_usec(cgroups), cgroups) if fullscreen else None
+                game = False
+        if fullscreen and cpu_sample and now - cpu_sample[0] >= RESCAN_SECONDS:
+            usec = app_cpu_usec(cgroups)
+            game = (usec - cpu_sample[1]) / 1e6 / (now - cpu_sample[0]) >= GAME_CORES
+            cpu_sample = (now, usec, cgroups)
+        if now - last_input < HOLD_SECONDS or game:
+            if not active or now - last_scan >= RESCAN_SECONDS:
+                current = app_pids(cgroups)
+                added = current - boosted
+                boosted.intersection_update(current)
+                boosted.update(added)
+                clamp(added, BOOST, uid)
+                active, last_scan = True, now
+        elif active:
+            clamp(boosted, 0, uid)
+            boosted.clear()
+            active = False
+
+
+def stop(signum, frame):
+    raise SystemExit(0)
+
+
+def stop_on_signals():
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+
+def main():
+    stop_on_signals()
+    if subprocess.run(["omarchy-hw-apple-silicon"]).returncode:
+        return 0
+    while not (found := session()):
+        time.sleep(RESCAN_SECONDS)
+    run(*found)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
