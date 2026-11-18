@@ -1,6 +1,6 @@
 # omarchy-mac
 
-Apple Silicon defaults and support services for Omarchy. Version: `0.2.6` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
+Apple Silicon defaults and support services for Omarchy. Version: `0.2.7` (candidate). This add-on complements `omarchy` and `omarchy-settings`; it selects no kernel and contains no installer or repository trust configuration. It covers what stays on an installed Mac; installing one is the job of the [Omarchy Installer](https://github.com/omacom/omarchy-mac-installer), and boot support is the separate `omarchy-mac-boot` package beside this one.
 
 ## Build and stage
 
@@ -56,6 +56,14 @@ On an M3 Max, llvmpipe plays video but cannot keep up with it. These figures ass
 A set limit is saved as `CHARGE_CONTROL_END_THRESHOLD=` in `/etc/udev/macsmc-battery.conf`, the file asahi-scripts' own rule restores from, so both agree on one value. The package's udev rule runs `/usr/lib/omarchy-mac/battery-charge-limit-restore` when the SMC battery appears at boot; it reapplies a saved 80 or 100 on Apple Silicon and otherwise leaves the SMC alone. Nothing needs enabling.
 
 asahi-scripts' path unit starts `macsmc-battery-charge-control-end-threshold.service`, which saves the limit, on every SMC battery event, so plugging in the charger or resuming can start it more than five times in ten seconds and leave it `failed` with `start-limit-hit`. Since it only rewrites the same line, the package's drop-in removes its start limit; the drop-in goes once AsahiLinux/asahi-scripts#78 fixes the unit upstream.
+
+## Automatic brightness
+
+`omarchy brightness auto [status [--json]|on|off|toggle|seed [--force]]` turns on automatic brightness for the panel from the ambient light sensor, as macOS does. It runs [wluma](https://github.com/max-baz/wluma) as the user unit `wluma.service` with the sensor alone: no screen capture, and no gamma control, so hyprsunset keeps the colour temperature. It is off until `on` runs. `on` refuses without wluma 5.0 or newer (the message names `omarchy-pkg-add wluma`, or the version it found; the version comes from `pacman -Q wluma`, and a wluma pacman does not know is let through), without a light sensor under `/sys/bus/iio/devices` (`in_illuminance_input` or `in_illuminance_raw`), and with neither a connected internal panel nor a config of the user's own, because wluma on its defaults captures the screen and dims on idle; a refused `on` starts and writes nothing.
+
+wluma learns from manual brightness changes and does nothing until it has data, so `on` first seeds one starting curve per device in `~/.local/state/wluma/`, named as wluma names them: the panel's DRM connector and the keyboard LED (the keyboard curve is only used if you enable the keyboard in your own config). The panel's backlight is picked by the platform's `displays.conf`: the listed Touch Bar backlights are skipped and the preferred one wins. The panel curve climbs from 5% of `max_brightness` in the dark to 100% at 10000 lux; the keyboard is at half of its maximum in the dark and off from 50 lux. A seed never overwrites a file wluma has written; `seed --force` does. `on` also writes `~/.config/wluma/config.toml` when none exists, and never replaces one: the panel with ambient light only, wluma's idle dimming off because Omarchy's own idle chain handles an idle screen, and the keyboard backlight disabled in wluma. With its idle off, wluma would learn the lock screen switching the keyboard off as your choice and leave the keyboard dark in a dark room, so the keyboard is left to whatever else drives it. Every external display is disabled in wluma too: the light sensor is in the laptop and does not see the light at a Studio Display, so a display on a cable keeps the brightness you set.
+
+`status` reports whether the unit is enabled and the current lux reading, which stays empty until the sensor reports.
 
 ## Keyboard function-key mode
 
