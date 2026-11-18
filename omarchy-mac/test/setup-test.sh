@@ -143,8 +143,21 @@ rm "$wants"
 [[ ! -s $CALLS ]] || fail 'repeat setup does not reenable disabled Wi-Fi recovery'
 pass 'explicit disables survive repeated setup'
 
-[[ -f $stage/usr/share/wireplumber/wireplumber.conf.d/asahi-audio-no-suspend.conf ]] || fail 'the vendor speaker policy ships'
-pass 'the vendor speaker no-suspend policy ships'
+no_suspend=$stage/usr/share/wireplumber/wireplumber.conf.d/asahi-audio-no-suspend.conf
+[[ -f $no_suspend ]] || fail 'the vendor speaker policy ships'
+# The J716 has its macaudio card and a separate AOP microphone card. Anchored or
+# not, the "~" pattern keeps the first card's jack and speakers and leaves the second.
+python3 - "$no_suspend" <<'PY' || fail 'the speaker policy keeps every MacBook jack and speaker open, and no microphone card'
+import re
+import sys
+paths = re.findall(r'api\.alsa\.path = "~([^"]*)"', open(sys.argv[1]).read())
+assert len(paths) == 1, paths
+for path in ('hw:AppleJ314,0', 'hw:AppleJ314,1', 'hw:AppleJ416,1', 'hw:AppleJ716,0', 'hw:AppleJ716,1'):
+    assert re.search(paths[0], path) and re.fullmatch(paths[0], path), path
+for path in ('hw:AppleJ416HPAI,0', 'hw:AppleJ700AOP,1', 'hw:AppleJ716AOP,0', 'hw:AppleJ716,2', 'hw:Generic,0'):
+    assert not re.search(paths[0], path) and not re.fullmatch(paths[0], path), path
+PY
+pass 'the vendor speaker no-suspend policy ships, for the jack and speakers only'
 
 # sudo -i clears XDG_RUNTIME_DIR while the owner's session bus still exists at
 # /run/user/UID. systemctl --user cannot reach it then, so setup must not try.
