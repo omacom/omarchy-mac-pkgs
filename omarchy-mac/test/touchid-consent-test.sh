@@ -135,6 +135,9 @@ archive("j616s-other-chip.tar.gz", [("MSRk-00003356-AA", msrk), ("FSC2-00003356-
                                     (named, trust), ("trustobject-current", trust)])
 with open(os.path.join(out, "j616s-isc.img"), "wb") as fd:
     fd.write(filler(1 << 20) + msrk + filler(4096) + fsc2 + j616s_seal + trust + filler(1 << 20))
+# One holding all but the MSRk record: the calibration rebuilds, the key can't.
+with open(os.path.join(out, "j616s-no-key-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + fsc2 + j616s_seal + trust + filler(1 << 20))
 for name, payload in (("j616s-key.bin", im4p), ("j616s-cal.bin", fsc2_im4p)):
     image = der(0x30, der(0x16, b"IMG4") + payload + der(0xA0, j616s_seal))
     with open(os.path.join(out, name), "wb") as fd:
@@ -657,8 +660,10 @@ exec {held}>&-
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 && [[ -z $(key_copies) && ! -e $fixture/etc/touchid-on ]] ||
   fail "a removal goes on once the lock is free" "$(key_copies)"
 mkdir -p "$fixture/etc/touchid-on/in-the-way"
+# The key beside it is removed, so the error names only the record.
+cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
 ! PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 && grep -q 'could not be turned off' "$fixture/out" &&
-  ! grep -q 'stops loading' "$fixture/out" ||
+  ! grep -q 'stops loading' "$fixture/out" && grep -Fq "remove $fixture/etc/touchid-on" "$fixture/out" && ! grep -q 'msrk' "$fixture/out" ||
   fail "a record that can't be removed fails and never says Touch ID stops loading" "$(<"$fixture/out")"
 rm -rf "$fixture/etc/touchid-on"
 touch "$fixture/keybag"
@@ -692,6 +697,9 @@ cp "$work/factory/j616s-key.bin" "$fixture/firmware/updates/apple/msrk-j616s.bin
 machine apple,j614s apple,t6040 apple,arm-platform
 [[ $(eligibility) == "unsupported:board" ]] || fail 'a T6040 board the driver has not been tried on is unsupported'
 j616s
+printf '%s\0' apple,j614s apple,t6040 apple,arm-platform >"$tree/compatible"
+[[ $(eligibility) == "unsupported:board" ]] || fail 'an unlisted board whose sensor sits at the root is unsupported too' "$(eligibility)"
+j616s
 echo ready >"$fixture/activation"
 container=$work/factory/j616s-isc.img
 out=$(run touchid-enable 2>&1) || fail 'an M4 Pro turns on' "$out"
@@ -707,15 +715,23 @@ container=$work/factory/j616s-isc.img
 ! out=$(run touchid-enable 2>&1) && [[ $out == *"is not an M4 Pro MacBook Pro's"* && ! -e $fixture/etc/touchid-on ]] &&
   [[ -z $(find "$fixture/firmware" -name '*j616s*') ]] ||
   fail "records sealed for another SoC give an M4 Pro nothing, and it says why" "$out"
+# A calibration rebuilt by a run whose key then can't be read goes with it.
+j616s
+container=$work/factory/j616s-no-key-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"sensor key could not be read"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j616s*') ]] ||
+  fail "an M4 Pro whose key can't be read keeps no calibration rebuilt for it" "$out$(find "$fixture/firmware" -name '*j616s*')"
 unset container
 printf 'apple/mesacal-j616s.bin\0../../etc/shadow\0' >"$tree/spi@429108000/fingerprint@0/firmware-name"
 ! out=$(run touchid-enable 2>&1) && [[ $out == *"unexpected firmware file"* ]] || fail 'a firmware name outside apple/ is refused' "$out"
 mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
 cp "$work/factory/j616s-key.bin" "$fixture/firmware/updates/apple/msrk-j616s.bin"
+cp "$work/factory/j616s-cal.bin" "$fixture/firmware/updates/apple/mesacal-j616s.bin"
+printf partial >"$fixture/firmware/updates/apple/mesacal-j616s.bin.new"
 touch "$fixture/etc/touchid-on"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
-  [[ ! -e $fixture/firmware/updates/apple/msrk-j616s.bin && ! -e $fixture/etc/touchid-on ]] ||
-  fail "turning it off deletes an M4 Pro's sensor key"
+  [[ -z $(find "$fixture/firmware" -name '*j616s*') && ! -e $fixture/etc/touchid-on ]] ||
+  fail "turning it off deletes an M4 Pro's sensor key and the calibration rebuilt with it"
 pass 'the 16-inch M4 Pro rebuilds its calibration and sensor key from its own factory records'
 
 if command -v systemd-analyze >/dev/null; then

@@ -2,8 +2,8 @@
 # omarchy-lifecycle-dispatch disable-fingerprint: Omarchy's fingerprint removal
 # runs this as root once the fingerprints are deleted. Removing the owner's
 # agreement stops the driver loading, and writing, at boot; the key store stays.
-# A Neo's or a 16-inch M4 Pro's sensor key goes too: turning Touch ID on again
-# rebuilds it.
+# The sensor key a Neo or a 16-inch M4 Pro rebuilt goes too, with the M4 Pro's
+# calibration: turning Touch ID on again rebuilds them.
 omarchy-hw-apple-silicon || exit 0
 
 # Waits for a Touch ID setup still running, which could otherwise install its
@@ -17,15 +17,22 @@ elif ! flock -w 300 "$lock_fd"; then
   exit 1
 fi
 
-keys=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin)
-present=0
-for key in "${keys[@]}"; do
-  [[ -e $key || -e $key.new ]] && present=1
+# What Touch ID setup rebuilt from the factory records; the next setup rebuilds it.
+rebuilt=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin
+  /usr/lib/firmware/updates/apple/mesacal-j616s.bin)
+records=(/etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf)
+present=()
+for file in "${records[@]}" "${rebuilt[@]}" "${rebuilt[@]/%/.new}"; do
+  [[ -e $file ]] && present+=("$file")
 done
-if [[ -e /etc/omarchy-mac/touchid-on || -e /etc/modprobe.d/omarchy-mac-touchid.conf ]] || (( present )); then
+if (( ${#present[@]} )); then
   # A record left behind, on a read-only root say, loads the driver again.
-  if ! rm -f /etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf "${keys[@]}" "${keys[@]/%/.new}"; then
-    echo "Touch ID could not be turned off: remove /etc/omarchy-mac/touchid-on, /etc/modprobe.d/omarchy-mac-touchid.conf and ${keys[*]}" >&2
+  if ! rm -f "${present[@]}"; then
+    left=()
+    for file in "${present[@]}"; do
+      [[ -e $file ]] && left+=("$file")
+    done
+    echo "Touch ID could not be turned off: remove ${left[*]}" >&2
     exit 1
   fi
   echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."

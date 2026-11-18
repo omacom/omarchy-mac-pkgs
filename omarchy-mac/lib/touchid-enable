@@ -1,7 +1,7 @@
 #!/bin/bash
-# Turns Touch ID on once the owner has agreed: carves this Mac's calibration
-# (and on the Neo installs its sensor root key) if they are missing, records the
-# agreement so the driver loads at every boot, and loads it now.
+# Turns Touch ID on once the owner has agreed: installs this Mac's calibration
+# and, on the Neo and the 16-inch M4 Pro, its sensor root key if missing, records
+# the agreement so the driver loads at every boot, and loads it now.
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
