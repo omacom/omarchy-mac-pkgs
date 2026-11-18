@@ -1,0 +1,315 @@
+#!/bin/bash
+
+# omarchy:summary=Turn automatic brightness from the ambient light sensor on or off
+# omarchy:args=[status [--json]|on|off|toggle|seed [--force]]
+# omarchy:examples=omarchy brightness auto | omarchy brightness auto off | omarchy brightness auto seed --force
+
+set -euo pipefail
+
+sys_root=/sys
+displays_conf=/usr/share/omarchy-platform/displays.conf
+unit=wluma.service
+wluma_floor=5.0
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/wluma
+config_file=${XDG_CONFIG_HOME:-$HOME/.config}/wluma/config.toml
+
+# Starting curves, as lux:per-mille of the device's maximum. wluma keeps learning from manual changes on top of them.
+panel_curve="0:50 5:120 20:220 50:320 150:450 400:600 1000:780 3000:920 10000:1000"
+keyboard_curve="0:500 3:400 10:250 25:100 50:0"
+
+usage() {
+  echo "Usage: omarchy brightness auto [status [--json]|on|off|toggle|seed [--force]]" >&2
+  exit 2
+}
+
+sensor_dir() {
+  local dir
+  for dir in "$sys_root"/bus/iio/devices/*; do
+    if [[ -e $dir/in_illuminance_input || -e $dir/in_illuminance_raw ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The lux reading, or nothing while the sensor has none (reads fail with ENODATA until it reports).
+read_lux() {
+  local dir file value
+  dir=$(sensor_dir) || return 0
+  for file in in_illuminance_input in_illuminance_raw; do
+    if value=$(cat "$dir/$file" 2>/dev/null) && [[ $value =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "${value%.*}"
+      return 0
+    fi
+  done
+}
+
+first_dir() {
+  local dir
+  for dir in "$@"; do
+    if [[ -d $dir ]]; then
+      echo "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The built-in panel's backlight, by the platform's displays.conf: skip the listed Touch Bar backlights, take the preferred
+# one when present, else the first left.
+panel_backlight() {
+  local dir name skip=" " prefer="" kind value first=""
+  if [[ -r $displays_conf ]]; then
+    while read -r kind value _; do
+      case "$kind" in
+        "backlight-skip") skip+="$value " ;;
+        "backlight-prefer") prefer=$value ;;
+      esac
+    done <"$displays_conf"
+  fi
+  for dir in "$sys_root"/class/backlight/*; do
+    name=${dir##*/}
+    if [[ ! -d $dir || $skip == *" $name "* ]]; then
+      continue
+    fi
+    if [[ $name == "$prefer" ]]; then
+      echo "$dir"
+      return 0
+    fi
+    if [[ -z $first ]]; then
+      first=$dir
+    fi
+  done
+  if [[ -z $first ]]; then
+    return 1
+  fi
+  echo "$first"
+}
+
+# wluma names the panel after its DRM connector.
+panel_connector() {
+  local dir name
+  for dir in "$sys_root"/class/drm/card*-eDP-*; do
+    if [[ -f $dir/status && $(<"$dir/status") == "connected" ]]; then
+      name=${dir##*/}
+      echo "${name#*-}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Writes $2 to $1 through a temp file, so a failed write leaves the old file or none. Each step returns its own
+# status: the callers run this on the left of ||, where set -e is off.
+write_file() {
+  local file=$1
+  mkdir -p "${file%/*}"
+  printf '%s' "$2" >"$file.tmp" && mv "$file.tmp" "$file" && return 0
+  rm -f "$file.tmp"
+  return 1
+}
+
+# Writes one wluma data file unless it exists: name, device maximum, curve.
+write_curve() {
+  local name=$1 maximum=$2 curve=$3 force=$4 body content
+  local file=$state_dir/$name.yaml
+  if [[ ! $maximum =~ ^[1-9][0-9]*$ ]]; then
+    echo "Cannot read max_brightness for $name, so no curve is seeded for it." >&2
+    return 1
+  fi
+  if [[ -e $file ]] && (( force != 1 )); then
+    return 0
+  fi
+  body=$(awk -v maximum="$maximum" -v curve="$curve" 'BEGIN {
+    count = split(curve, points, " ")
+    for (index_ = 1; index_ <= count; index_++) {
+      split(points[index_], pair, ":")
+      value = int(maximum * pair[2] / 1000 + 0.5)
+      printf "  - als: %d\n    luma: 0\n    value: %d\n", pair[1], value
+    }
+  }') || return 1
+  printf -v content 'output_name: %s\nentries:\n  brightness:\n%s\n  dim: []\n  temperature: []\n' "$name" "$body"
+  write_file "$file" "$content"
+}
+
+seed() {
+  local force=0 panel keyboard connector seeded=0
+  if [[ ${1:-} == "--force" ]]; then
+    force=1
+  elif [[ -n ${1:-} ]]; then
+    usage
+  fi
+  if panel=$(panel_backlight) && connector=$(panel_connector); then
+    write_curve "$connector" "$(<"$panel/max_brightness")" "$panel_curve" "$force" || return 1
+    seeded=1
+  fi
+  if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
+    write_curve "${keyboard##*/}" "$(<"$keyboard/max_brightness")" "$keyboard_curve" "$force" || return 1
+    seeded=1
+  fi
+  if (( seeded == 0 )); then
+    echo "No internal display backlight or keyboard backlight found to seed." >&2
+    return 1
+  fi
+}
+
+# wluma on no config runs on its defaults (screen capture, idle dimming), so a machine with neither a connected
+# internal panel nor a config of the user's own stays stopped.
+panel_or_config() {
+  [[ -e $config_file ]] || panel_connector >/dev/null
+}
+
+# Ambient light only for the panel: no screen capture, gamma left to hyprsunset, idle dimming left to Omarchy's idle
+# chain, the keyboard backlight left to whatever else drives it, every external display left alone.
+write_config() {
+  local connector keyboard panel content block dir name seen=" "
+  if [[ -e $config_file ]]; then
+    return 0
+  fi
+  if ! connector=$(panel_connector); then
+    echo "No internal panel is connected and there is no wluma config, so wluma does not start." >&2
+    return 1
+  fi
+  if ! panel=$(panel_backlight); then
+    echo "No internal panel backlight found and there is no wluma config, so wluma does not start." >&2
+    return 1
+  fi
+  printf -v content '[idle]\nenabled = false\n\n[[output.backlight]]\nname = "%s"\npath = "%s"\ncapturer = "none"\ngamma = false\n' "$connector" "$panel"
+  # wluma finds every kbd_backlight on its own and, with its idle off, learns the lock screen's keyboard-off as the
+  # user's choice, so the keyboard stays dark in a dark room. Naming the LED with enabled = false drops it.
+  if keyboard=$(first_dir "$sys_root"/class/leds/*kbd_backlight*); then
+    printf -v block '\n[[keyboard]]\nname = "%s"\npath = "%s"\nenabled = false\n' "${keyboard##*/}" "$keyboard"
+    content+=$block
+  fi
+  # wluma drives every connected display it finds a backlight for, and a Studio Display has one. The sensor sits in the
+  # laptop and does not see the light at an external display, so every other connector is named once with
+  # enabled = false. Every connector present when the config is written is covered; the config is never rewritten, so one that appears later is not.
+  for dir in "$sys_root"/class/drm/card*-*; do
+    [[ -d $dir ]] || continue
+    name=${dir##*/}
+    name=${name#*-}
+    if [[ $name == eDP-* || $seen == *" $name "* ]]; then
+      continue
+    fi
+    seen+="$name "
+    printf -v block '\n[[output.backlight]]\nname = "%s"\nenabled = false\n' "$name"
+    content+=$block
+  done
+  write_file "$config_file" "$content"
+}
+
+# The real state: is the unit running. is-enabled answers "disabled" for a unit that starts from the target's vendor link.
+enabled() {
+  systemctl --user is-active --quiet "$unit"
+}
+
+# wluma 5 added the keyboard and output tables the config uses. wluma 4 has no --version and would start on any flag,
+# so the version comes from the package database. A wluma pacman does not know (a user build) is let through.
+wluma_usable() {
+  local found order
+  if ! command -v wluma >/dev/null; then
+    echo "wluma is not installed. Install it with: omarchy-pkg-add wluma" >&2
+    return 1
+  fi
+  found=$(pacman -Q wluma 2>/dev/null) || return 0
+  found=${found#* }
+  # A vercmp that gives no number lets wluma through, as an unknown package does; only an answer below the floor refuses.
+  order=$(vercmp "$found" "$wluma_floor" 2>/dev/null)
+  if [[ $order =~ ^-?[0-9]+$ ]] && (( order < 0 )); then
+    echo "wluma $wluma_floor or newer is required, found ${found%-*}" >&2
+    return 1
+  fi
+}
+
+# The unit's start condition: wluma, and a sensor that reports a number. The sensor's driver may load after login
+# (a guarded loader) and the sensor needs a few seconds to report, so this waits up to 60 s. A Mac with no sensor
+# and no always-on processor node to load a driver for it, or a kernel whose sensor never reports, skips the unit.
+ready() {
+  local tries=60
+  wluma_usable || return 1
+  panel_or_config || return 1
+  while [[ -z $(read_lux) ]]; do
+    if ! sensor_dir >/dev/null && ! compgen -G "$sys_root/bus/platform/devices/*.aop" >/dev/null; then
+      return 1
+    fi
+    (( --tries > 0 )) || return 1
+    sleep 1
+  done
+}
+
+# Run by the unit before every start: the starting curves and the config, each only where none exists yet.
+prepare() {
+  write_config || return 1
+  seed || return 0
+}
+
+turn_on() {
+  wluma_usable || exit 1
+  if ! sensor_dir >/dev/null; then
+    echo "No ambient light sensor found." >&2
+    exit 1
+  fi
+  # Without a config wluma runs on its defaults: it captures the screen and dims on idle.
+  if ! panel_or_config; then
+    echo "No internal panel is connected and there is no wluma config, so wluma would run on its defaults. Wake the panel, or write $config_file first." >&2
+    exit 1
+  fi
+  systemctl --user unmask "$unit"
+  if [[ -z $(read_lux) ]]; then
+    echo "Waiting up to 60 s for the light sensor to report before wluma starts." >&2
+  fi
+  # The start limit is checked before ExecCondition, so skipped starts still count; a login plus
+  # several quick on/off cycles would refuse the sixth start with a burst of 5; clear failed first.
+  systemctl --user reset-failed "$unit" 2>/dev/null || true
+  systemctl --user start "$unit"
+}
+
+# A mask is the one off switch that outlives the vendor link which turns the unit on for everyone.
+turn_off() {
+  systemctl --user mask --now "$unit"
+}
+
+status() {
+  local lux state=off
+  lux=$(read_lux)
+  case $(systemctl --user is-active "$unit" 2>/dev/null || true) in
+    active) state=on ;;
+    activating) state=starting ;;
+  esac
+  if [[ ${1:-} == "--json" ]]; then
+    printf '{"enabled":%s,"lux":%s}\n' "$([[ $state == "on" ]] && echo true || echo false)" "${lux:-null}"
+  elif [[ -z ${1:-} ]]; then
+    echo "Automatic brightness: $state"
+    if [[ -n $lux ]]; then
+      echo "Ambient light: $lux lux"
+    else
+      echo "Ambient light: no reading"
+    fi
+  else
+    usage
+  fi
+}
+
+if ! omarchy-hw-apple-silicon; then
+  echo "Automatic brightness is only set up for Apple Silicon Macs." >&2
+  exit 1
+fi
+
+# A verb takes at most this many words after it.
+arguments_at_most() {
+  if (( $# - 2 > $1 )); then
+    usage
+  fi
+}
+
+case "${1:-status}" in
+  status) arguments_at_most 1 "$@"; status "${2:-}" ;;
+  on) arguments_at_most 0 "$@"; turn_on ;;
+  off) arguments_at_most 0 "$@"; turn_off ;;
+  toggle) arguments_at_most 0 "$@"; if enabled; then turn_off; else turn_on; fi ;;
+  seed) arguments_at_most 1 "$@"; seed "${2:-}" ;;
+  ready) arguments_at_most 0 "$@"; ready ;;
+  prepare) arguments_at_most 0 "$@"; prepare ;;
+  *) usage ;;
+esac
