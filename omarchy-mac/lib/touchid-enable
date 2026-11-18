@@ -165,11 +165,19 @@ preloaded=0
 if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
   preloaded=1
 fi
+# The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
+# 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
+# Linux to its own xART records. Other Macs keep the kernel's level: the guard
+# blocks matching on M1-family Macs.
+driver_options="xart_writes=1 provision_keybag=1"
+if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j616c; then
+  driver_options+=" xart_guard=1"
+fi
 # A write that fails partway never replaces the options, since a file without
 # them would load a read-only driver at every boot.
 { mkdir -p -m 0755 "${options%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-    "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+    "options apple_sep $driver_options" >"$options.new" &&
   chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
   { rm -f "$options.new" 2>/dev/null; fail "the driver's options could not be written to $options"; }
 mkdir -p -m 0755 "${loaded%/*}"

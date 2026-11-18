@@ -590,6 +590,12 @@ mkdir -p "$fixture/etc/modprobe.conf.new/in-the-way"
 ! ask ready '' && grep -q 'options could not be written' "$fixture/out" && [[ ! -e $fixture/etc/modprobe.conf ]] ||
   fail "options that can't be written for an earlier agreement fail" "$(<"$fixture/out")"
 rm -rf "$fixture/etc/modprobe.conf.new"
+machine apple,j616c apple,t6041 apple,arm-platform
+mkdir -p "$fixture/etc" && touch "$fixture/etc/touchid-on"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1' "$fixture/etc/modprobe.conf" ||
+  fail 'an M4 Max turned on before the driver options existed gets them with the xART guard on' "$(<"$fixture/out")"
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc" && touch "$fixture/etc/touchid-on"
 rm "$fixture/etc/touchid-on"
 ! ask ready n && grep -q 'experimental' "$fixture/out" && [[ ! -s $fixture/calls ]] ||
   fail 'a Touch ID turned off earlier this boot asks again before turning back on'
@@ -764,6 +770,8 @@ for file in cal:mesacal-j616c.bin key:msrk-j616c.bin; do
     fail "the M4 Max's ${file#*:} is rebuilt from its factory records, root-only" "$out"
 done
 ! grep -Fxq calibration "$fixture/calls" || fail "the M4 Max's calibration is resealed, never carved"
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1' "$fixture/options-at-load" ||
+  fail "the M4 Max's driver loads with the xART guard on, as Touch ID was tried there"
 j616c
 cp "$work/factory/j616c-other-chip.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
 container=$work/factory/j616c-isc.img
