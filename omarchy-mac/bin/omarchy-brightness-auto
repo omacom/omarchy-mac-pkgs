@@ -172,7 +172,7 @@ write_config() {
   fi
   # wluma drives every connected display it finds a backlight for, and a Studio Display has one. The sensor sits in the
   # laptop and does not see the light at an external display, so every other connector is named once with
-  # enabled = false. sysfs lists a connector whether or not a display is plugged in, so a later hotplug is covered too.
+  # enabled = false. sysfs lists a connector whether or not a display is plugged in, so plugging a display into one of these later is covered too.
   for dir in "$sys_root"/class/drm/card*-*; do
     [[ -d $dir ]] || continue
     name=${dir##*/}

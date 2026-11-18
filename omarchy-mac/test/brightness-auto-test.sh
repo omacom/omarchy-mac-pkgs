@@ -32,12 +32,14 @@ if [[ $* == "--user is-enabled wluma.service" ]]; then
 fi
 exit 0
 STUB
+# pacman is stubbed with the rest so every run sees the same package answer; vercmp stays real, so the host needs pacman's tools.
+printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
 # The runtime's Apple predicate: true unless the flag file says this is another machine.
 cat >"$work/bin/omarchy-hw-apple-silicon" <<'STUB'
 #!/bin/bash
 [[ ! -f $NOT_APPLE_FLAG ]]
 STUB
-chmod +x "$work/bin/wluma" "$work/bin/systemctl" "$work/bin/omarchy-hw-apple-silicon"
+chmod +x "$work/bin/wluma" "$work/bin/systemctl" "$work/bin/omarchy-hw-apple-silicon" "$work/bin/pacman"
 export NOT_APPLE_FLAG="$work/not-apple"
 export SYSTEMCTL_LOG="$work/systemctl.log" ENABLED_FLAG="$work/enabled"
 export XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
@@ -140,8 +142,6 @@ pass 'on refuses without a sensor or without wluma'
 
 # wluma 4 has no --version and no keyboard or output tables, so the version comes from the package database: a 4.x
 # package is refused with its version named, a wluma pacman does not know (a user build) is let through.
-printf '#!/bin/bash\n[[ $* == "-Q wluma" ]] || exit 1\n[[ $WLUMA_PKG_VERSION == none ]] && exit 1\necho "wluma ${WLUMA_PKG_VERSION:-5.0.4-1}"\n' >"$work/bin/pacman"
-chmod +x "$work/bin/pacman"
 export WLUMA_PKG_VERSION=4.9.2-1
 rm -rf "$work/config" "$work/state"
 : >"$SYSTEMCTL_LOG"
