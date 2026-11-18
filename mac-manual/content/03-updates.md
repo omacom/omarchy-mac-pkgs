@@ -41,7 +41,7 @@ When a kernel or boot package changes, `omarchy-mac-boot` rebuilds the initramfs
 
 If that check fails, the update refuses to finish, says what failed and does not offer a reboot. Do not reboot. Keep the output and [report it]({{page:hardware}}#reporting-a-problem).
 
-A Mac that boots a kernel or m1n1 its owner builds, rather than the packaged ones, can never pass that check. Its owner can say so by naming the chain on the first line of `/etc/omarchy-mac-boot/owner-boot-chain`. While the file exists, updates skip the packaged boot check and print one line saying the owner manages the boot chain. Making sure the next boot works is up to the owner. To have updates verify the boot files again, for example after going back to the packaged kernel and m1n1, remove the file. Only `omarchy update` reads it: the check before a snapshot restore does not.
+If you build your own kernel or m1n1, you can create an empty file at `/etc/omarchy-mac-boot/owner-boot-chain` to take responsibility for verifying the boot files. While the file exists, `omarchy update` reports that you manage the boot chain and shows the first reason if the packaged check fails. The update can still finish and offer a reboot. Remove the file to restore enforced verification, for example after going back to the packaged kernel and m1n1. The check before a snapshot restore runs regardless of whether the file exists.
 
 ## What is signed, and by what
 

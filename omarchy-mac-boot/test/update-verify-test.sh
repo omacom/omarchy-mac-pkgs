@@ -104,36 +104,50 @@ verify 6.16.0-aurora9-ARCH
 expect_refused "an initramfs built for the previous kernel" "does not hold the $mac_kver modules"
 pass "update-verify refuses a wrong device tree, a stale m1n1, a missing or stale UKI, another Limine or a stale initramfs, and says not to reboot"
 
-# The owner marker bypasses the checker, even with an unsupported kernel or
-# missing boot files. An absent marker must still enforce the packaged chain.
-owner_boot_chain() {
-  mkdir -p "$mac_root/etc/omarchy-mac-boot"
-  printf '%s\n' "$@" >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
-}
+# The owner marker makes the check advisory. Without it, failures block updates.
 expect_skipped() {
+  local expected="Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain."
+  if [[ -n ${1:-} ]]; then
+    expected+=$'\n'"The packaged check would fail: $1. Remove the file to have updates verify again."
+  fi
   (( status == 0 )) || fail "owner-managed verification succeeds" "$(cat "$tmp/out" "$tmp/err")"
   [[ ! -s $tmp/err ]] || fail "owner-managed verification has no checker errors" "$(cat "$tmp/err")"
-  (( $(wc -l <"$tmp/out") == 1 )) || fail "owner-managed verification prints one line" "$(cat "$tmp/out")"
-  grep -Fxq "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain." "$tmp/out" || fail "owner-managed verification explains the skip"
+  printf '%s\n' "$expected" | diff -u - "$tmp/out" || fail "owner-managed verification prints the skip and any advisory"
 }
 limine_mac
-owner_boot_chain "hand-built chain"
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+: >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
 verify
 expect_skipped
 rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 verify
-expect_skipped
+expect_skipped "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing"
+rm "$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+verify
+expect_refused "a Limine Mac without its UKI after removing the owner marker" "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing"
 limine_mac
 sed -i '/^linux-aurora$/d' "$mac_state/installed"
 verify
 expect_refused "a Mac with no packaged kernel" "cannot tell which kernel boots: neither linux-aurora nor linux-asahi installed"
-owner_boot_chain ""
-mkdir -p "$tmp/no-check"
-printf '#!/bin/bash\necho checker-must-not-run >&2\nexit 99\n' >"$tmp/no-check/omarchy-apple-silicon-boot-check"
-chmod +x "$tmp/no-check/omarchy-apple-silicon-boot-check"
-TEST_REBUILDS=$tmp/no-check verify
-expect_skipped
-pass "update-verify skips the checker with an owner marker, including an empty marker, and enforces checks without it"
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+: >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+verify
+expect_skipped "cannot tell which kernel boots: neither linux-aurora nor linux-asahi installed"
+pass "update-verify quietly checks with an owner marker and reports failures without blocking the update"
+
+mkdir -p "$tmp/check-stub"
+cat >"$tmp/check-stub/omarchy-apple-silicon-boot-check" <<'SH'
+#!/bin/bash
+echo 'checker output'
+echo 'Apple Silicon boot check: warning: a checker warning' >&2
+echo 'Apple Silicon boot check: first failure' >&2
+echo 'Apple Silicon boot check: another failure' >&2
+exit 1
+SH
+chmod +x "$tmp/check-stub/omarchy-apple-silicon-boot-check"
+TEST_REBUILDS=$tmp/check-stub verify
+expect_skipped "first failure"
+pass "update-verify reports the first failure reason when the checker also emits other diagnostics"
 
 # update-verify checks only what the next boot reads. What the full boot check
 # also holds against a Mac, the next boot does not read, so it never fails an

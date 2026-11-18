@@ -12,9 +12,8 @@
 # boot partition: its boot files can stay newer than every installed package, so
 # no package transaction would ever rebuild them.
 #
-# A Mac whose owner boots a chain this package does not build, such as a
-# kernel or m1n1 built by hand, names it in /etc/omarchy-mac-boot/owner-boot-chain.
-# Updates leave that chain to its owner and skip the packaged boot check.
+# /etc/omarchy-mac-boot/owner-boot-chain leaves verification to the owner.
+# The packaged check still reports a failure for Macs with a leftover marker.
 
 set -uo pipefail
 
@@ -24,6 +23,14 @@ rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
 if [[ -f $owner_boot_chain ]]; then
   sudo rm -f "$rollback_marker"
   echo "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain."
+  if ! check_errors=$(OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then
+    reason=$(awk '
+      /^Apple Silicon boot check: (warning: |objcopy \(binutils\) is not installed; )/ { next }
+      sub(/^Apple Silicon boot check: /, "") { print; exit }
+    ' <<<"$check_errors")
+    reason=${reason:-${check_errors%%$'\n'*}}
+    printf 'The packaged check would fail: %s. Remove the file to have updates verify again.\n' "${reason:-no reason reported}"
+  fi
   exit 0
 fi
 
