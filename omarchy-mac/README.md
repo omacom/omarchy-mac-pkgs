@@ -63,6 +63,10 @@ The built-in keyboard binds to `hid_apple`, whose `fnmode` decides what the top 
 
 The desktop keyboard migration runs `omarchy-mac-setup-keyboard` on upgraded Macs, naming the line Omarchy generated there according to the updating user's migration history: `fnmode=2` from the install leaf, replaced once by `fnmode=1` (quattro-upstream migration `1789132067`) or `fnmode=3` (mx-mac migration `1790305681`). While a fork migration still owes its rebuild, its own line is the generated one; a stock `fnmode=2` left by a fork run interrupted before it wrote its line looks the same as an owner's restored choice and stays. The first run retires `/etc/modprobe.d/hid_apple.conf` only when it holds exactly that line, keeping a `.omarchy-mac-retired` backup; any other file is the owner's and stays, and later runs, by any user, never retire. It then rebuilds the boot image once, including a rebuild the fork migration still owes, and switches the running keyboard to the configured mode. A failed or interrupted run retries both.
 
+## Headphones
+
+The headphone jack is its own sink beside asahi-audio's speaker filter, so WirePlumber would keep a saved speaker choice when headphones are plugged in. The WirePlumber script `omarchy-mac/headphones-on-plug.lua`, loaded by `omarchy-mac-headphones.conf`, makes the jack's sink the configured default each time it becomes available; on unplug, WirePlumber's own history of configured sinks brings back the one chosen before. A speaker choice made while headphones are in stays until they are plugged in again.
+
 ## Audio watchdog
 
 `omarchy-audio-watchdog` (the user unit `omarchy-audio-watchdog.service`, enabled for every user) restarts PipeWire and WirePlumber when WirePlumber crashes or wedges at full CPU after asahi-audio's DSP filter chains are torn down, as they are at every logout. It restarts only while the screen is unlocked, stopping the shell first, within a restart budget it shares with the microphone mapper's `--repair`.
