@@ -8,6 +8,7 @@ firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
 extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
 agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
 options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
+other_options=${OMARCHY_MAC_TOUCHID_OTHER_OPTIONS:-/etc/modprobe.d/apple-sep.conf}
 module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
 # Set once this script has loaded the driver this boot, so a retry after a
@@ -75,6 +76,14 @@ root_key_installed() {
   done
   return $found
 }
+
+# Only omarchy-mac-touchid.conf sets the driver's options. Its parameters can be
+# set only once, so an apple-sep.conf beside it makes every load fail with
+# EEXIST, and on a kernel that loads the driver at boot that also silences an
+# M1-family Mac's microphones. Nothing is written while one exists.
+if [[ -e $other_options || -L $other_options ]]; then
+  fail "$other_options also sets the Secure Enclave driver's options, and the driver fails to load when they are set twice; remove $other_options, then turn Touch ID on again"
+fi
 
 # One setup or removal at a time: two would share the sensor key's temporary
 # copy, and one could install the other's unfinished key.
