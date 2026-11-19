@@ -16,7 +16,6 @@ loaded=${status_file%/*}/touchid-loaded
 helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
 node_path=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
 keybag=${OMARCHY_MAC_TOUCHID_KEYBAG:-/var/lib/aurora-sep-keybag.bin}
-guard_list=${OMARCHY_MAC_TOUCHID_GUARD_LIST:-/var/lib/aurora-sep-xart-owned.bin}
 esp=${OMARCHY_MAC_TOUCHID_ESP:-/boot/efi}
 container=${OMARCHY_MAC_TOUCHID_CONTAINER:-/dev/disk/by-partlabel/iBootSystemContainer}
 python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
@@ -136,25 +135,9 @@ fi
 # A write that fails partway never replaces the options, since a file without
 # them would load a read-only driver at every boot.
 option_line=$("$helpers/touchid-options") || fail "this Mac's driver options could not be worked out"
-# Committed, as the driver writes it: its magic, then state 1 or 3 at 0x14.
-keybag_committed() {
-  [[ -f $keybag && $(head -c 16 "$keybag" 2>/dev/null) == "APPLE-SEP-KBAG01" ]] &&
-    [[ $(od -An -tu4 -j20 -N4 "$keybag" 2>/dev/null | tr -d ' ') == [13] ]]
-}
-
-# The pin window opens only on an empty guard list and with no keybag in the
-# making, so a try that failed under the guard is set aside first. A committed
-# keybag keeps its list.
-if [[ $option_line == *xart_guard_pins=1* ]] && ! keybag_committed && [[ -e $guard_list || -e $keybag ]]; then
-  aside=${guard_list%/*}/aurora-sep-touchid-retry-$(date +%Y%m%d-%H%M%S)
-  mkdir -p -m 0700 "$aside" || fail "an earlier Touch ID try's state could not be set aside in $aside"
-  for stale in "$guard_list" "$keybag"; do
-    if [[ -e $stale ]] && ! mv -f "$stale" "$aside/"; then
-      fail "an earlier Touch ID try's $stale could not be set aside in $aside"
-    fi
-  done
-  echo "An earlier Touch ID try's state is kept in $aside."
-fi
+# A try that failed under the guard keeps the pin window shut until its state
+# is set aside.
+"$helpers/touchid-retry-aside" || fail "an earlier Touch ID try's state could not be set aside"
 { mkdir -p -m 0755 "${options%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
     "$option_line" >"$options.new" &&

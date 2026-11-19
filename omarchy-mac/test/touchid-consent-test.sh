@@ -39,8 +39,8 @@ printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/omarchy-hw-apple-silicon"
 printf '#!/bin/sh\necho modprobe "$@" >>"%s"\ncp "%s" "%s" 2>/dev/null\n[ -e "%s" ] && exit 1\nmkdir -p "%s"\n[ -e "%s" ] || touch "%s"\n[ -e "%s" ] || touch "%s"\n' \
   "$fixture/calls" "$fixture/etc/modprobe.conf" "$fixture/options-at-load" "$fixture/modprobe-fails" \
   "$fixture/module" "$fixture/no-node" "$fixture/sep-bio" "$fixture/no-keybag" "$fixture/keybag" >"$fixture/bin/modprobe"
-printf '#!/bin/sh\necho systemctl "$@" >>"%s"\n[ "$1" = start ] && printf "%%s\\n" "$(cat "%s")" >"%s"\nexit 0\n' \
-  "$fixture/calls" "$fixture/activation" "$fixture/run/touchid" >"$fixture/bin/systemctl"
+printf '#!/bin/sh\n[ "$1" = is-active ] && { [ -e "%s" ]; exit $?; }\necho systemctl "$@" >>"%s"\n[ "$1" = start ] && printf "%%s\\n" "$(cat "%s")" >"%s"\nexit 0\n' \
+  "$fixture/activating" "$fixture/calls" "$fixture/activation" "$fixture/run/touchid" >"$fixture/bin/systemctl"
 printf '#!/bin/sh\n[ -e "%s" ] || echo /usr/lib/omarchy/mac/enable-fingerprint\n' "$fixture/no-hook" >"$fixture/bin/omarchy-lifecycle-dispatch"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/sleep"
 printf '#!/bin/sh\n[ "$*" = "-p apple_sep" ] || exit 1\nif [ -e "%s" ]; then cat "%s"; else echo "xart_guard_pins:pin up to three (u8)"; fi\n' \
@@ -591,6 +591,7 @@ for name in enable-fingerprint disable-fingerprint; do
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-options|OMARCHY_MAC_TOUCHID_TREE=$tree $ROOT/lib/touchid-options|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-retry-aside|OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag OMARCHY_MAC_TOUCHID_GUARD_LIST=$fixture/guard-list $ROOT/lib/touchid-retry-aside|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
@@ -670,6 +671,48 @@ rm -f "$fixture/etc/modprobe.conf"
 ask blocked '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" &&
   grep -q 'Restart this Mac' "$fixture/out" && [[ ! -s $fixture/calls ]] ||
   fail 'an agreed Mac that reads blocked gets its options and is told to restart' "$(<"$fixture/out")"
+# On the M1 Air, an agreed setup that failed for good (a crash between the
+# agreement and the load included) is set aside, so the restart sets it up again.
+agreed_m1_air() {
+  machine apple,j313 apple,t8103 apple,arm-platform
+  mkdir -p "$fixture/etc"
+  touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+  printf 'spent' >"$fixture/guard-list"
+  keybag_file 0 52
+  echo "$1" >"$fixture/eligibility"
+}
+agreed_m1_air available
+ask failed '' && grep -q 'Restart this Mac' "$fixture/out" && [[ ! -e $fixture/guard-list && ! -e $fixture/keybag ]] &&
+  compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air whose setup failed has its state set aside and is told to restart" "$(<"$fixture/out")"
+for final in not-ready blocked; do
+  agreed_m1_air available
+  ask "$final" '' && grep -q 'Restart this Mac' "$fixture/out" && [[ ! -e $fixture/guard-list ]] ||
+    fail "an agreed M1 Air whose activation recorded $final has its state set aside" "$(<"$fixture/out")"
+done
+# While the activation runs, its earlier status may be stale: nothing moves.
+agreed_m1_air available
+touch "$fixture/activating"
+ask failed '' && [[ -e $fixture/guard-list && -e $fixture/keybag ]] ||
+  fail "an agreed M1 Air whose activation is running is left alone" "$(<"$fixture/out")"
+rm "$fixture/activating"
+# With no status recorded the activation may still be running: nothing moves.
+agreed_m1_air available
+without_status available '' && grep -q 'Restart this Mac' "$fixture/out" && [[ -e $fixture/guard-list && -e $fixture/keybag ]] &&
+  ! compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air with no status recorded is left alone" "$(<"$fixture/out")"
+# A committed keybag keeps its list through the agreed path too.
+agreed_m1_air available
+keybag_file 1 116
+ask failed '' && [[ -e $fixture/guard-list && $(stat -c %s "$fixture/keybag") == 116 ]] ||
+  fail "an agreed M1 Air with a committed keybag keeps it and its list" "$(<"$fixture/out")"
+agreed_m1_air unsupported:kernel
+ask blocked '' && grep -q "this kernel can't set it up" "$fixture/out" && ! grep -q 'Restart this Mac' "$fixture/out" &&
+  [[ -e $fixture/guard-list ]] && ! compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air on a kernel without the pins is told so, not to restart, and nothing moves" "$(<"$fixture/out")"
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 # An agreed Mac whose activation hasn't answered is never asked again, so a no
 # can't claim to leave on a Touch ID that is on.
 without_status available n && ! grep -qE 'experimental|stays off' "$fixture/out" && grep -q "isn't ready yet (no status)" "$fixture/out" &&
