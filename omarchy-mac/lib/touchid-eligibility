@@ -5,6 +5,7 @@
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
+modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
 extractors=${OMARCHY_MAC_TOUCHID_EXTRACTORS:-/usr/lib/linux-aurora}
 python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
 esp=${OMARCHY_MAC_TOUCHID_ESP:-/boot/efi}
@@ -49,7 +50,13 @@ fi
 # their enclave behind an xART guard that blocks matching; the M1 Air (J313)
 # sets up with the guard pinning its setup lockers (touchid-options), the others wait.
 if compatible apple,t8103 && compatible apple,j313; then
-  :
+  # Only a kernel whose guard pins those lockers (omacom/linux-aurora#506) can
+  # finish the setup; a built-in driver shows no parameters and is refused too.
+  params=$("$modinfo" -p apple_sep 2>/dev/null)
+  if ! grep -q '^xart_guard_pins:' <<<"$params"; then
+    echo unsupported:kernel
+    exit 0
+  fi
 elif compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
   echo unsupported:m1-family
   exit 0

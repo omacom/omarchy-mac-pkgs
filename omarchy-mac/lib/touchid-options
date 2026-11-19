@@ -11,8 +11,8 @@ compatible() {
 
 options="xart_writes=1 provision_keybag=1"
 # The M1 Air's first setup rewrites key-store session records macOS created, which
-# the xART guard refuses; xart_guard_pin pins those and keeps the guard on (#486).
+# the xART guard refuses; xart_guard_pins pins those, keeping the guard on (#506).
 if compatible apple,t8103 && compatible apple,j313; then
-  options+=" xart_guard_pin=1"
+  options+=" xart_guard_pins=1"
 fi
 printf 'options apple_sep %s\n' "$options"
