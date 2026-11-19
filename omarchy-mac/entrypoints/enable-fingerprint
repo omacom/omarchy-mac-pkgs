@@ -30,9 +30,9 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
       echo "Touch ID was turned off while this ran, so setup goes on without it."
       exit 0
     elif [[ ! -e $options ]]; then
-      { mkdir -p -m 0755 "${options%/*}" &&
+      { option_line=$(/usr/lib/omarchy-mac/touchid-options) && mkdir -p -m 0755 "${options%/*}" &&
         printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-          "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+          "$option_line" >"$options.new" &&
         chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
         { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
     fi

@@ -174,6 +174,10 @@ printf 'disabled\0' >"$tree/soc/spi@39b108000/fingerprint@0/status"
 [[ $(eligibility) == "none" ]] || fail 'a disabled sensor node is no Touch ID'
 machine apple,j314s apple,t6000 apple,arm-platform
 [[ $(eligibility) == "unsupported:m1-family" ]] || fail 'M1-family Macs wait for their xART guard path'
+machine apple,j293 apple,t8103 apple,arm-platform
+[[ $(eligibility) == "unsupported:m1-family" ]] || fail 'a T8103 board other than the M1 Air still waits for its xART guard path'
+machine apple,j313 apple,t8103 apple,arm-platform
+[[ $(eligibility) == "available" ]] || fail 'the M1 Air J313 is available' "$(eligibility)"
 machine apple,j504 apple,t8122 apple,arm-platform
 [[ $(eligibility) == "unsupported:board" ]] || fail 'a T8122 board whose wiring the driver has not read is unsupported'
 machine apple,j613 apple,t8122 apple,arm-platform
@@ -248,6 +252,16 @@ grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/options
 [[ $(<"$fixture/calls") == $'calibration\nmodprobe apple-sep\nsystemctl start omarchy-mac-touchid-activate.service\nsystemctl try-restart fprintd.service' ]] ||
   fail 'it carves, loads the driver, waits for the activation, then restarts a running fprintd' "$(<"$fixture/calls")"
 [[ $out == *"Touch ID is on."* ]] || fail 'it says so' "$out"
+! grep -q xart_guard "$fixture/etc/modprobe.conf" || fail 'a Mac other than the M1 Air keeps the xART guard'
+# The M1 Air loads with the guard off and carves its calibration under its sensor's name.
+machine apple,j313 apple,t8103 apple,arm-platform
+printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+echo ready >"$fixture/activation"
+out=$(run touchid-enable 2>&1) || fail 'the M1 Air turns on' "$out"
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=0' "$fixture/options-at-load" ||
+  fail 'the M1 Air loads the driver with the xART guard off' "$(<"$fixture/options-at-load")"
+[[ $(<"$fixture/firmware/updates/apple/mesacal-j313.bin") == "calibration" ]] ||
+  fail "the M1 Air's calibration is carved under its sensor's firmware name"
 # A Neo's sensor key is rebuilt only now, from its factory records on the ESP,
 # byte for byte, root-only, and nowhere else.
 neo
@@ -521,6 +535,7 @@ for name in enable-fingerprint disable-fingerprint; do
   sed -e "s|/run/omarchy-mac/touchid|$fixture/run/touchid|g" -e "s|/var/lib/aurora-sep-keybag.bin|$fixture/keybag|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-options|OMARCHY_MAC_TOUCHID_TREE=$tree $ROOT/lib/touchid-options|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
@@ -554,6 +569,15 @@ touch "$fixture/etc/touchid-on"
 ask ready '' && [[ ! -s $fixture/calls && ! -s $fixture/out ]] || fail 'a Touch ID the owner already turned on asks nothing'
 grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" ||
   fail 'a Touch ID turned on before the driver options existed gets them'
+machine apple,j313 apple,t8103 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=0' "$fixture/etc/modprobe.conf" ||
+  fail 'an M1 Air turned on before the driver options existed gets them with the xART guard off' "$(<"$fixture/out")"
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on"
+ask ready '' || fail 'an agreed M2 Max gets its options again' "$(<"$fixture/out")"
 # No options yet, and none can be written.
 rm "$fixture/etc/modprobe.conf"
 mkdir -p "$fixture/etc/modprobe.conf.new/in-the-way"

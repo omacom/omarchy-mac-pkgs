@@ -46,8 +46,11 @@ elif [[ -z $sensor ]]; then
 fi
 
 # The boards the aurora driver has a profile for. M1-family Macs cold-boot
-# their enclave behind an xART guard that blocks matching, so they wait.
-if compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
+# their enclave behind an xART guard that blocks matching; the M1 Air (J313)
+# sets up with the guard off (touchid-options), the others wait.
+if compatible apple,t8103 && compatible apple,j313; then
+  :
+elif compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
   echo unsupported:m1-family
   exit 0
 elif ! compatible apple,t8112 && ! compatible apple,t6020 && ! compatible apple,t6021 && ! compatible apple,t8140 &&
