@@ -10,9 +10,9 @@ compatible() {
 }
 
 options="xart_writes=1 provision_keybag=1"
-# The M1 Air's first setup rewrites a key-store session record macOS created,
-# which the xART guard refuses (omacom/linux-aurora#223), so it runs without it.
+# The M1 Air's first setup rewrites key-store session records macOS created, which
+# the xART guard refuses; xart_guard_pin pins those and keeps the guard on (#486).
 if compatible apple,t8103 && compatible apple,j313; then
-  options+=" xart_guard=0"
+  options+=" xart_guard_pin=1"
 fi
 printf 'options apple_sep %s\n' "$options"

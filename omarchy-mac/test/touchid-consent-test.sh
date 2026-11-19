@@ -252,14 +252,14 @@ grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/options
 [[ $(<"$fixture/calls") == $'calibration\nmodprobe apple-sep\nsystemctl start omarchy-mac-touchid-activate.service\nsystemctl try-restart fprintd.service' ]] ||
   fail 'it carves, loads the driver, waits for the activation, then restarts a running fprintd' "$(<"$fixture/calls")"
 [[ $out == *"Touch ID is on."* ]] || fail 'it says so' "$out"
-! grep -q xart_guard "$fixture/etc/modprobe.conf" || fail 'a Mac other than the M1 Air keeps the xART guard'
+! grep -q xart_guard "$fixture/etc/modprobe.conf" || fail 'a Mac other than the M1 Air gets no xART guard option'
 # The M1 Air loads with the guard off and carves its calibration under its sensor's name.
 machine apple,j313 apple,t8103 apple,arm-platform
 printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
 echo ready >"$fixture/activation"
 out=$(run touchid-enable 2>&1) || fail 'the M1 Air turns on' "$out"
-grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=0' "$fixture/options-at-load" ||
-  fail 'the M1 Air loads the driver with the xART guard off' "$(<"$fixture/options-at-load")"
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard_pin=1' "$fixture/options-at-load" ||
+  fail 'the M1 Air loads the driver with the xART guard pinning its setup lockers' "$(<"$fixture/options-at-load")"
 [[ $(<"$fixture/firmware/updates/apple/mesacal-j313.bin") == "calibration" ]] ||
   fail "the M1 Air's calibration is carved under its sensor's firmware name"
 # A Neo's sensor key is rebuilt only now, from its factory records on the ESP,
@@ -572,8 +572,8 @@ grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/mod
 machine apple,j313 apple,t8103 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"
-ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=0' "$fixture/etc/modprobe.conf" ||
-  fail 'an M1 Air turned on before the driver options existed gets them with the xART guard off' "$(<"$fixture/out")"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard_pin=1' "$fixture/etc/modprobe.conf" ||
+  fail 'an M1 Air turned on before the driver options existed gets them with the pin' "$(<"$fixture/out")"
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"

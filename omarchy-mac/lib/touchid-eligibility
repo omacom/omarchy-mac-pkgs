@@ -47,7 +47,7 @@ fi
 
 # The boards the aurora driver has a profile for. M1-family Macs cold-boot
 # their enclave behind an xART guard that blocks matching; the M1 Air (J313)
-# sets up with the guard off (touchid-options), the others wait.
+# sets up with the guard pinning its setup lockers (touchid-options), the others wait.
 if compatible apple,t8103 && compatible apple,j313; then
   :
 elif compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
