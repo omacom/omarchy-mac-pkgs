@@ -7,7 +7,7 @@ script=$stage/usr/share/wireplumber/scripts/omarchy-mac/headphones-on-plug.lua
 fragment=$stage/usr/share/wireplumber/wireplumber.conf.d/omarchy-mac-headphones.conf
 [[ -f $script && -f $fragment ]] || fail 'the headphones hook and its fragment are staged'
 grep -q 'name = omarchy-mac/headphones-on-plug.lua, type = script/lua' "$fragment" || fail 'the fragment loads the staged script'
-grep -q 'custom.omarchy-mac-headphones-on-plug = optional' "$fragment" || fail 'the main profile loads the hook as optional'
+grep -q 'custom.omarchy-mac-headphones-on-plug = required' "$fragment" || fail 'the main profile requires the hook, since an optional one never loads'
 
 lua - "$script" <<'LUA'
 local hook, sets, metadata_present = nil, {}, true
