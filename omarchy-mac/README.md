@@ -4,7 +4,7 @@ Apple Silicon defaults and support services for Omarchy. Its version, in `versio
 
 ## Build and stage
 
-This directory is self-contained. Copy it anywhere, run `./test/all`, then `./install /absolute/staging/root`. Staging requires Bash, coreutils and findutils; tests also use Python and systemd. Nothing is enabled or started by staging. Its Arch recipe lives in [omacom/omarchy-pkgs](https://github.com/omacom/omarchy-pkgs) and pins a full commit of this repository.
+This directory is self-contained. Copy it anywhere, run `./test/all`, then `./install /absolute/staging/root`. Staging requires Bash, coreutils and findutils; tests also use Python, Lua and systemd. Nothing is enabled or started by staging. Its Arch recipe lives in [omacom/omarchy-pkgs](https://github.com/omacom/omarchy-pkgs) and pins a full commit of this repository.
 
 Runtime dependencies: `omarchy` (the `omarchy-hw-platform` detector and its Apple predicate), Bash, coreutils, grep, sed, gawk, systemd, pciutils, kmod, mkinitcpio, NetworkManager, iwd, Python, PipeWire, pipewire-pulse, libpulse (pactl, parec), WirePlumber, the protected Asahi speaker stack: asahi-audio, speakersafetyd (whose unit this package presets), alsa-ucm-conf-asahi, rtkit and pipewire-alsa; vulkan-asahi, the GPU's Vulkan driver; and asahi-alarm-keyring, for the Asahi repository Omarchy's Apple Silicon pacman template configures. Upgrading this package brings all of them to machines set up before it named them. The hardware video decode stack (avd-fw, libva-v4l2_request-avd), wf-recorder and widevine are defaults in the runtime's Apple package list instead, which an owner may remove. See `ORIGINS.md` for extraction attribution.
 
@@ -65,7 +65,7 @@ The desktop keyboard migration runs `omarchy-mac-setup-keyboard` on upgraded Mac
 
 ## Headphones
 
-The headphone jack is its own sink beside asahi-audio's speaker filter, so WirePlumber would keep a saved speaker choice when headphones are plugged in. The WirePlumber script `omarchy-mac/headphones-on-plug.lua`, loaded by `omarchy-mac-headphones.conf`, makes the jack's sink the configured default each time it becomes available; on unplug, WirePlumber's own history of configured sinks brings back the one chosen before. A speaker choice made while headphones are in stays until they are plugged in again.
+The headphone jack is its own sink beside asahi-audio's speaker filter, so WirePlumber would keep a saved speaker choice when headphones are plugged in. The WirePlumber script `omarchy-mac/headphones-on-plug.lua`, loaded by `omarchy-mac-headphones.conf`, makes the jack's sink the configured default when it sees the jack go from unplugged to plugged, after saving the output in use as a configured one; on unplug, WirePlumber's own history of configured sinks brings that output back. Jack state found when WirePlumber starts switches nothing, so a speaker choice made with headphones in survives the restarts at logout until they are plugged in again.
 
 ## Audio watchdog
 
