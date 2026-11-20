@@ -9,7 +9,7 @@ Omarchy 4.5 is the first release of this stack: its Mac packages are on the `sta
 ## In the first release
 
 - M1 and M2 Macs. The catalogs also admit M3 Macs, except the M3 Ultra Mac Studio, and the MacBook Neo. See [Hardware support]({{page:hardware}}).
-- Touch ID, experimental and off until you turn it on, on MacBooks with an M2, M2 Pro or M2 Max, the M3 MacBook Air and the MacBook Neo. M1-family Macs are not offered it yet: their Secure Enclave starts behind a guard that blocks matching. See [Encryption and passwords]({{page:security}}).
+- Touch ID, experimental and off until you turn it on, on MacBooks with an M2, M2 Pro or M2 Max, the M3 MacBook Air and the MacBook Neo. M1-family Macs are not offered it yet: their Secure Enclave starts behind a guard that blocks matching. See [Turning on Touch ID]({{page:security}}#turning-on-touch-id).
 
 ## Still to come
 
@@ -17,7 +17,8 @@ The move for existing Macs is switched on once it has been accepted for each kin
 
 ## Not in the first release
 
-- M4 Macs, MLX and Secure Enclave disk encryption. Each is separate work.
+- M4 Macs and Secure Enclave disk encryption. Each is separate work.
+- MLX, which is not supported. An optional `omarchy-mac-ml` package exists, but it is not part of the release.
 - Encrypting an unencrypted Mac in place while moving it from an earlier install. It may come later as an opt-in.
 - The Asahi kernel as a supported choice. Every Mac runs Aurora.
 - A portable installer that runs without installing a privileged helper.
