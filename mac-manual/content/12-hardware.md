@@ -4,7 +4,7 @@ description: Which Macs are supported, what works, the known limitations and how
 section: Reference
 ---
 
-Hardware support is the Asahi Linux project's work, plus what the Aurora kernel adds. Every release is qualified on real Macs before it reaches `rc` or `stable`, and nothing below claims more than has been exercised.
+Hardware support is the Asahi Linux project's work, plus what the Aurora kernel adds. Nothing below claims more than has been exercised; installs with a recorded receipt are listed under [Qualified installs](#qualified-installs).
 
 ## Supported Macs
 
@@ -17,20 +17,39 @@ tr '\0' '\n' < /proc/device-tree/compatible
 
 In macOS, `sysctl hw.model` shows the model identifier, such as `MacBookPro18,3`.
 
-The first release is qualified on the MacBook Pro 14" M1 Pro (`apple,j314s`) and the MacBook Pro 16" M2 Max (`apple,j416c`). The signed catalog on each channel lists every identifier it admits, and the installer refuses any other Mac before touching the disk. M1 and M2 Macs only: M3 and M4 Macs are not supported.
+The signed catalogs on edge, rc and stable each admit the same 35 boards, and the installer refuses any other Mac before touching the disk:
+
+| Chip | Boards |
+| --- | --- |
+| M1 | `apple,j274`, `apple,j293`, `apple,j313`, `apple,j456`, `apple,j457`, `apple,j314s`, `apple,j314c`, `apple,j316s`, `apple,j316c`, `apple,j375c`, `apple,j375d` |
+| M2 | `apple,j413`, `apple,j415`, `apple,j473`, `apple,j493`, `apple,j414s`, `apple,j414c`, `apple,j416s`, `apple,j416c`, `apple,j474s`, `apple,j475c`, `apple,j475d`, `apple,j180d` |
+| M3 | `apple,j433`, `apple,j434`, `apple,j504`, `apple,j613`, `apple,j615`, `apple,j514s`, `apple,j514c`, `apple,j514m`, `apple,j516s`, `apple,j516c`, `apple,j516m` |
+| MacBook Neo | `apple,j700` |
+
+The M3 boards and the MacBook Neo are admitted like every other board; `scripts/supported-models.json` in omarchy-mac-installer still lists them as untested, pending per-board receipts ([omarchy-mac-installer#90](https://github.com/omacom/omarchy-mac-installer/pull/90)). The M3 Ultra Mac Studio (`apple,j575d`) and every M4 or later Mac are not admitted.
+
+## Qualified installs
+
+Only installs with a recorded receipt are listed.
+
+| Date | Mac | What was installed | Covered |
+| --- | --- | --- | --- |
+| 2026-11-20 | MacBook Pro 16" M2 Max, `apple,j416c` | stable image `omarchy-mac-4.5.0-r2-2026.11.05-08c81abcef4f`, engine `v0.9.2-omarchy.20261106.0f73bea79639` | Full install through Recovery to first boot ([receipt](https://github.com/omacom/omarchy-mac-installer/issues/213#issuecomment-7027033146)) |
+
+M3 Macs and the MacBook Neo have been tested, but they are listed here only once a receipt is recorded; the M3 MacBook Air record is [omarchy-mac-installer#90](https://github.com/omacom/omarchy-mac-installer/pull/90). On some MacBook Neos the install stops at "Writing boot files" because the light sensor calibration is misread ([omarchy-mac-installer#214](https://github.com/omacom/omarchy-mac-installer/issues/214)).
 
 ## Reference machines
 
 | Machine | Role |
 | --- | --- |
-| MacBook Pro 14" 2021, M1 Pro, `apple,j314s` | Full regression on every release; VM acceptance host |
+| MacBook Pro 14" 2021, M1 Pro, `apple,j314s` | Regression testing; VM acceptance host |
 | MacBook Pro 16" 2023, M2 Max, `apple,j416c` | Multi-display work: five displays through HDMI and USB4. End-to-end installs for installer changes; VM acceptance host |
 
 Boot-critical changes need a cold boot on a test Mac, never only a warm reboot, before a release proceeds. The checklist covers platform identity, desktop and graphics, networking, audio, power and suspend, updates and snapshots.
 
 ## What works
 
-This is what the first release is qualified against on both reference Macs. <span class="status ok">works</span> is expected to work on every admitted Mac; <span class="status wip">in progress</span> and <span class="status wip">known issue</span> are tracked.
+This is the status on the reference Macs. <span class="status ok">works</span> is expected to work on every admitted Mac; <span class="status wip">in progress</span> and <span class="status wip">known issue</span> are tracked.
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -59,9 +78,9 @@ Everything below the desktop is the Asahi Linux project's work, and the authorit
 - [M2 feature support](https://asahilinux.org/docs/platform/feature-support/m2/)
 - [Overview across chips](https://asahilinux.org/docs/platform/feature-support/overview/)
 
-### M3 MacBook Air (edge testers)
+### M3 MacBook Air
 
-M3 Macs are not part of the first release. On an M3 MacBook Air, 13-inch or 15-inch, m1n1 hands the built-in display and the GPU to Linux on every boot, as on M1 and M2 Macs, once `pacman -Q m1n1-aurora` reports 1.6.1.aurora21-1 or newer. Nothing in `/etc/m1n1.conf` is needed for that: m1n1 applies these defaults itself.
+On an M3 MacBook Air, 13-inch or 15-inch, m1n1 hands the built-in display and the GPU to Linux on every boot, as on M1 and M2 Macs, once `pacman -Q m1n1-aurora` reports 1.6.1.aurora21-1 or newer. Nothing in `/etc/m1n1.conf` is needed for that: m1n1 applies these defaults itself.
 
 ```
 chosen.asahi,t8122-dcp=1
@@ -80,7 +99,7 @@ Anything marked work in progress there, Thunderbolt device support among them, i
 
 ### M4 Macs (edge testers)
 
-M4 Macs are not part of the first release. On an M4 MacBook (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
+The installer does not admit M4 Macs. On an M4 MacBook (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
 
 ```
 apple_dart.j713_dcp=1 apple_dart.j713_display=1
@@ -92,7 +111,7 @@ When the running kernel has these options, Omarchy adds both to `GRUB_CMDLINE_LI
 
 ### Experimental J514C login
 
-The 14-inch M3 Max J514C bring-up remains outside the supported release. On a J514C/T6031 install whose boot loader handed the native display and GPU over, the login manager waits for them before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
+The 14-inch M3 Max J514C is admitted but untested. On a J514C/T6031 install whose boot loader handed the native display and GPU over, the login manager waits for them before opening the login screen, for up to 30 seconds plus at most 10 seconds for device events to settle. If either device stays unavailable, login still proceeds for diagnosis. This wait runs automatically and needs no enable parameter; it changes no graphics driver setting.
 
 ## Reporting a problem
 
