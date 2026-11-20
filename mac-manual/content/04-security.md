@@ -41,6 +41,8 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 
 On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
 
+After five fingerprints that don't match, Touch ID locks, and it stays locked after a restart, as on macOS. Your password at a `sudo` prompt or an administrator dialog unlocks it again. The lock screen's password doesn't yet, so use one of those once if Touch ID keeps refusing your finger.
+
 Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.
 
 ## Resetting the Mac for a new owner

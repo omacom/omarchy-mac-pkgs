@@ -1,0 +1,14 @@
+# Adds Touch ID's re-arm to the PAM stacks of a Mac whose owner turned Touch ID
+# on before it existed, and starts watching them, without waiting for a reboot.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/omarchy-mac/touchid-pam
+Target = usr/lib/security/pam_aurora_touchid.so
+
+[Action]
+Description = Updating Touch ID's PAM lines...
+When = PostTransaction
+# Skipped in a chroot or an unbooted root; never fails the transaction.
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-pam.path; systemctl --quiet start omarchy-mac-touchid-pam.service; true; }'
