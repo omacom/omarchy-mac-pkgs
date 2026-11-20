@@ -14,12 +14,12 @@ This manual describes the stack the first release installs. The packages are bui
 4. The remaining Mac features move behind the platform detector and dispatch points: audio, Wi-Fi resume, display, video decode, the encryption lifecycle, snapshots and boot verification.
 5. The generic changes are proposed to omacom/omarchy, in order: the platform detector and profiles; composable boot configuration and generic encryption fixes; the dispatch interface.
 6. The move for existing Macs, a standalone migration script outside the packages, is built and tested for each kind of install.
-7. After cold-boot qualification on the M1 Pro and the M2 Max, the packages are promoted to `rc` and `stable` and the stable installer catalog is published.
+7. After VM acceptance, and a cold boot on a real Mac for any kernel or boot package, the packages are promoted to `rc` and `stable` and the stable installer catalog is published. Installs with a receipt are listed under [Qualified installs]({{page:hardware}}#qualified-installs).
 8. Once the generic changes are merged into Omarchy and the move has been accepted for each kind of install, the move for existing Macs is switched on.
 
 ## Not in the first release
 
-- M3 and M4 Macs, Touch ID, MLX and Secure Enclave disk encryption. Each is separate work.
+- M4 Macs, Touch ID, MLX and Secure Enclave disk encryption. Each is separate work.
 - Encrypting an unencrypted Mac in place while moving it from an earlier install. It may come later as an opt-in.
 - The Asahi kernel as a supported choice. Every Mac runs Aurora.
 - A portable installer that runs without installing a privileged helper.

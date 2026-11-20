@@ -1,6 +1,6 @@
 ---
 title: Omarchy on Apple Silicon
-description: Omarchy on M1 and M2 Macs, installed from macOS and living next to it.
+description: Omarchy on Apple Silicon Macs, installed from macOS and living next to it.
 section: Using it
 ---
 
@@ -9,7 +9,7 @@ Omarchy runs on Apple Silicon Macs next to macOS. It is the same [Omarchy](https
 Everything that is not Mac-specific is upstream Omarchy, so the [Omarchy manual](https://omarchy.org/manual/) applies unchanged. This manual covers only what is different on a Mac.
 
 <div class="note warn" markdown="1">
-Omarchy 4.5 is the first public release of this stack, on the `stable` channel. Mac packages land on Omarchy's `edge` channel first and reach `rc` and `stable` only after cold-boot qualification on a MacBook Pro 14" M1 Pro and a 16" M2 Max. [Install]({{page:install}}) says how to get it. [Status]({{page:status}}) says what is left.
+Omarchy 4.5 is the first public release of this stack, on the `stable` channel. Mac packages land on Omarchy's `edge` channel first and reach `rc` and `stable` only after a VM acceptance run, plus a cold boot on a real Mac when a kernel or boot package changes. [Hardware support]({{page:hardware}}) lists the admitted Macs and the qualified installs. [Install]({{page:install}}) says how to get it. [Status]({{page:status}}) says what is left.
 </div>
 
 ## What a Mac runs

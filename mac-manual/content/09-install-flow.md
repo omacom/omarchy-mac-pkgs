@@ -34,7 +34,7 @@ The engine bundled in the app only inspects the Mac. The engine that performs th
 
 The Mac image is built by the image builder in omarchy-mac-installer from signed packages pinned to one omarchy-mac commit: kernel, initramfs, m1n1, U-Boot, Limine, official Omarchy, the two Mac packages and the whole default package set. It is a complete Omarchy installation with no user yet. The build declares its target platform in a manifest instead of reading the build machine's hardware, and the finished image is inspected, from the initramfs and device trees to m1n1, U-Boot and Limine, before it can reach a catalog.
 
-Before a release, the image is installed and booted in KVM on a test Mac, once plain and once encrypted, and then cold booted on the M1 Pro and the M2 Max. The Aurora kernel cannot boot on QEMU's virtual machine, so the VM harness boots a generic Arch Linux ARM kernel with an initramfs built from the image's own hooks. VM success never stands in for the hardware run.
+Before an image reaches a catalog, it is installed and booted in KVM on a test Mac, once plain and once encrypted. The Aurora kernel cannot boot on QEMU's virtual machine, so the VM harness boots a generic Arch Linux ARM kernel with an initramfs built from the image's own hooks. VM success never stands in for a hardware install; installs with a receipt are listed under [Qualified installs]({{page:hardware}}#qualified-installs).
 
 ## First boot
 

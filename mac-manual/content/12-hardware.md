@@ -32,11 +32,11 @@ The M3 boards and the MacBook Neo are admitted like every other board; `scripts/
 
 Only installs with a recorded receipt are listed.
 
-| Date | Mac | What was installed | Covered |
+| Receipt date | Mac | What was installed | Covered |
 | --- | --- | --- | --- |
-| 2026-11-20 | MacBook Pro 16" M2 Max, `apple,j416c` | stable image `omarchy-mac-4.5.0-r2-2026.11.05-08c81abcef4f`, engine `v0.9.2-omarchy.20261106.0f73bea79639` | Full install through Recovery to first boot ([receipt](https://github.com/omacom/omarchy-mac-installer/issues/213#issuecomment-7027033146)) |
+| 2026-11-20 | M2 Max | stable image `omarchy-mac-4.5.0-r2-2026.11.05-08c81abcef4f`, engine `v0.9.2-omarchy.20261106.0f73bea79639` | Full install through Recovery to first boot ([receipt](https://github.com/omacom/omarchy-mac-installer/issues/213#issuecomment-7027033146)) |
 
-M3 Macs and the MacBook Neo have been tested, but they are listed here only once a receipt is recorded; the M3 MacBook Air record is [omarchy-mac-installer#90](https://github.com/omacom/omarchy-mac-installer/pull/90). On some MacBook Neos the install stops at "Writing boot files" because the light sensor calibration is misread ([omarchy-mac-installer#214](https://github.com/omacom/omarchy-mac-installer/issues/214)).
+M3 Macs and the MacBook Neo are admitted but not yet qualified. The M3 MacBook Air qualification is tracked in [omarchy-mac-installer#90](https://github.com/omacom/omarchy-mac-installer/pull/90), a draft with no installs recorded yet. On some MacBook Neos the install stops at "Writing boot files" because the light sensor calibration is misread ([omarchy-mac-installer#214](https://github.com/omacom/omarchy-mac-installer/issues/214)).
 
 ## Reference machines
 
@@ -49,7 +49,7 @@ Boot-critical changes need a cold boot on a test Mac, never only a warm reboot, 
 
 ## What works
 
-This is the status on the reference Macs. <span class="status ok">works</span> is expected to work on every admitted Mac; <span class="status wip">in progress</span> and <span class="status wip">known issue</span> are tracked.
+This is the status on the M1 Pro and M2 Max reference Macs, where <span class="status ok">works</span> applies. M3 Macs and the MacBook Neo are not yet qualified; [M3 MacBook Air](#m3-macbook-air) covers what is known to differ there. <span class="status wip">in progress</span> and <span class="status wip">known issue</span> are tracked.
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ USB-C and DisplayPort external displays stay off on an M3 Air for now, since the
 
 Anything marked work in progress there, Thunderbolt device support among them, is work in progress here too. The Aurora kernel adds the display, camera and USB4 work described above.
 
-### M4 Macs (edge testers)
+### M4 Macs
 
 The installer does not admit M4 Macs. On an M4 MacBook (`apple,t8132`), the Aurora kernel hands the built-in display to Linux only with two kernel options, and the GPU starts only once that display is there:
 
