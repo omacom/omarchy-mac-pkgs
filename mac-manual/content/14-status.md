@@ -8,7 +8,7 @@ Omarchy 4.5 is the first release of this stack: its Mac packages are on the `sta
 
 ## In the first release
 
-- M1 and M2 Macs. The stable catalog also admits M3 Macs and the MacBook Neo, each marked untested. See [Hardware support]({{page:hardware}}).
+- M1 and M2 Macs. The catalogs also admit M3 Macs, except the M3 Ultra Mac Studio, and the MacBook Neo. See [Hardware support]({{page:hardware}}).
 - Touch ID, experimental and off until you turn it on, on MacBooks with an M2, M2 Pro or M2 Max, the M3 MacBook Air and the MacBook Neo. M1-family Macs are not offered it yet: their Secure Enclave starts behind a guard that blocks matching. See [Encryption and passwords]({{page:security}}).
 
 ## Still to come
