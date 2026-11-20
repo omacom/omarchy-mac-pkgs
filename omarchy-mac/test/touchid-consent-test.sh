@@ -180,7 +180,7 @@ run() {
   PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_FIRMWARE=$fixture/firmware \
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
     OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_OTHER_OPTIONS=$fixture/etc/apple-sep.conf \
-    OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
+    OMARCHY_MAC_TOUCHID_MODULE=$fixture/module OMARCHY_MAC_TOUCHID_CMDLINE=$fixture/cmdline \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
@@ -562,6 +562,7 @@ for name in enable-fingerprint disable-fingerprint; do
   sed -e "s|/run/omarchy-mac/touchid|$fixture/run/touchid|g" -e "s|/var/lib/aurora-sep-keybag.bin|$fixture/keybag|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-options-conflict|$ROOT/lib/touchid-options-conflict|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
@@ -573,7 +574,8 @@ ask() {
   : >"$fixture/calls"
   printf '%s\n' "$2" >"$fixture/answer"
   echo "$1" >"$fixture/run/touchid"
-  PATH="$fixture/bin:$PATH" "$entry/enable-fingerprint" <"$fixture/answer" >"$fixture/out" 2>&1
+  PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_OTHER_OPTIONS=$fixture/etc/apple-sep.conf OMARCHY_MAC_TOUCHID_CMDLINE=$fixture/cmdline \
+    "$entry/enable-fingerprint" <"$fixture/answer" >"$fixture/out" 2>&1
 }
 machine apple,j414c apple,t6021 apple,arm-platform
 ! ask available n && grep -q 'Touch ID stays off' "$fixture/out" && [[ ! -s $fixture/calls ]] ||
@@ -635,6 +637,38 @@ ask blocked '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1'
 without_status available n && ! grep -qE 'experimental|stays off' "$fixture/out" && grep -q "isn't ready yet (no status)" "$fixture/out" &&
   [[ -e $fixture/etc/touchid-on && ! -s $fixture/calls ]] ||
   fail 'an agreed Mac with no status is told to restart, not asked again' "$(<"$fixture/out")"
+# The fingerprint setup refuses beside an apple-sep.conf as touchid-enable does,
+# before asking and before it writes the options an agreed Mac is missing.
+rm -f "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+printf 'options apple_sep xart_writes=1\n' >"$fixture/etc/apple-sep.conf"
+! ask available y && [[ $(<"$fixture/out") == *"$fixture/etc/apple-sep.conf also sets"* && $(<"$fixture/out") == *"remove $fixture/etc/apple-sep.conf"* ]] &&
+  ! grep -q 'Turn on Touch ID' "$fixture/out" && ! grep -q 'experimental' "$fixture/out" && [[ ! -s $fixture/calls && ! -e $fixture/etc/touchid-on ]] ||
+  fail 'an owner who has not agreed is refused, naming the file, before the question and before anything turns on' "$(<"$fixture/out")"
+ask unsupported:board '' && grep -q 'any other fingerprint reader' "$fixture/out" && ! grep -q 'also sets' "$fixture/out" ||
+  fail 'a Mac that cannot use Touch ID lets setup go on whatever apple-sep.conf holds' "$(<"$fixture/out")"
+touch "$fixture/etc/touchid-on"
+! ask ready '' && [[ $(<"$fixture/out") == *"$fixture/etc/apple-sep.conf also sets"* && ! -e $fixture/etc/modprobe.conf && -e $fixture/etc/touchid-on ]] ||
+  fail 'an agreed Mac missing its options is refused beside apple-sep.conf and gets none written' "$(<"$fixture/out")"
+touch "$fixture/etc/modprobe.conf"
+ask ready '' && [[ ! -s $fixture/out ]] || fail 'an agreed Mac that already has its options is left alone' "$(<"$fixture/out")"
+rm -f "$fixture/etc/modprobe.conf" "$fixture/etc/apple-sep.conf"
+ln -s "$fixture/etc/gone" "$fixture/etc/apple-sep.conf"
+! ask available y && [[ $(<"$fixture/out") == *"also sets"* ]] || fail 'a dangling apple-sep.conf link is refused too' "$(<"$fixture/out")"
+rm -f "$fixture/etc/apple-sep.conf" "$fixture/etc/touchid-on"
+ask available y && grep -Fxq enable "$fixture/calls" || fail 'with no apple-sep.conf an owner who says yes turns Touch ID on'
+# The command line sets the same options twice over, so it is refused alike.
+rm -f "$fixture/etc/touchid-on"
+for word in apple_sep.xart_writes=0 apple-sep.provision_keybag=1; do
+  printf 'quiet %s splash\n' "$word" >"$fixture/cmdline"
+  ! ask available y && [[ $(<"$fixture/out") == *"command line sets $word"* && ! -s $fixture/calls ]] ||
+    fail "$word on the kernel command line is refused before the question" "$(<"$fixture/out")"
+  ! run touchid-enable >"$fixture/out" 2>&1 && [[ $(<"$fixture/out") == *"command line sets $word"* && ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] ||
+    fail "$word on the kernel command line stops touchid-enable before it writes anything" "$(<"$fixture/out")"
+done
+printf 'quiet apple_sep.something_else=1 splash\n' >"$fixture/cmdline"
+ask available y && grep -Fxq enable "$fixture/calls" || fail 'an unrelated apple_sep option on the command line is not refused'
+: >"$fixture/cmdline"
+rm -f "$fixture/etc/touchid-on"
 rm -f "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 : >"$fixture/calls"

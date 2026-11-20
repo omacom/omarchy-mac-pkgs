@@ -17,6 +17,11 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   # options are what lets it reach ready after a restart.
   options=/etc/modprobe.d/omarchy-mac-touchid.conf
   if [[ ! -e $options ]]; then
+    # Nothing is written beside an apple-sep.conf, which would make every load fail.
+    if ! conflict=$(/usr/lib/omarchy-mac/touchid-options-conflict); then
+      echo "Touch ID's driver options could not be written: $conflict" >&2
+      exit 1
+    fi
     # Under the Touch ID lock, so a removal running now can't be undone here.
     lock=/run/omarchy-mac/touchid.lock
     if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
@@ -64,6 +69,12 @@ case $status in
     exit 0
     ;;
 esac
+
+# Refused before asking, since touchid-enable would refuse a yes.
+if ! conflict=$(/usr/lib/omarchy-mac/touchid-options-conflict); then
+  echo "Touch ID was not turned on: $conflict" >&2
+  exit 1
+fi
 
 echo "Touch ID on Linux is experimental and can be unstable. It shares this Mac's"
 echo "Secure Enclave with macOS, so back up any data on your macOS partition first."

@@ -1,0 +1,24 @@
+#!/bin/bash
+# The one refusal for another source of the Secure Enclave driver's options beside
+# omarchy-mac-touchid.conf. Its parameters can be set only once, so an
+# apple-sep.conf, or xart_writes or provision_keybag on the kernel command line
+# (kmod adds those to the options it reads), makes every load fail with EEXIST, and
+# on a kernel that loads the driver at boot that also silences an M1-family Mac's
+# microphones. touchid-enable and enable-fingerprint, the two writers of
+# omarchy-mac-touchid.conf, both ask this first.
+# Prints the reason and exits 1 on a conflict; prints nothing otherwise.
+omarchy-hw-apple-silicon || exit 0
+
+other_options=${OMARCHY_MAC_TOUCHID_OTHER_OPTIONS:-/etc/modprobe.d/apple-sep.conf}
+cmdline=${OMARCHY_MAC_TOUCHID_CMDLINE:-/proc/cmdline}
+
+if [[ -e $other_options || -L $other_options ]]; then
+  echo "$other_options also sets the Secure Enclave driver's options, and the driver fails to load when they are set twice; remove $other_options, then turn Touch ID on again"
+  exit 1
+fi
+for word in $(cat "$cmdline" 2>/dev/null); do
+  if [[ $word =~ ^apple[-_]sep\.(xart[-_]writes|provision[-_]keybag)(=|$) ]]; then
+    echo "the kernel command line sets $word, and the driver fails to load when its options are set twice; remove it from the boot loader's command line, then turn Touch ID on again"
+    exit 1
+  fi
+done
