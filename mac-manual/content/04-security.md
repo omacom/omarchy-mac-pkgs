@@ -39,7 +39,7 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 - With FileVault on, macOS can't unlock its disk and won't start, and the startup picker may not open. Getting the Mac back takes a DFU restore, which erases it.
 - With FileVault off, macOS resets its keychain and Touch ID fingerprints and shows a warning.
 
-On a MacBook Air M1, the first setup rewrites three records in that shared state that macOS created. Setup offers Touch ID there only with a kernel whose Secure Enclave driver lets exactly those three through and keeps refusing changes to every other macOS record. Back up macOS before you turn Touch ID on there too.
+On a MacBook Air M1, the first setup rewrites three records in that shared state that macOS created. Setup offers Touch ID there only with a kernel whose Secure Enclave driver lets exactly those three through and keeps refusing changes to every other macOS record. If that Mac later starts a kernel without that driver, Touch ID stays off until one with it is back. Back up macOS before you turn Touch ID on there too.
 
 On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
 

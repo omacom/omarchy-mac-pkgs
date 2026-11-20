@@ -60,8 +60,11 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
         echo "Touch ID was turned off while this ran, so setup goes on without it."
         exit 0
       fi
+      # The activation is a oneshot, so while it runs it is "activating", which
+      # is-active doesn't count as active.
+      activation=$(systemctl show -p ActiveState --value omarchy-mac-touchid-activate.service 2>/dev/null)
       if [[ $(cat /run/omarchy-mac/touchid 2>/dev/null) != "ready" ]] &&
-        ! systemctl is-active --quiet omarchy-mac-touchid-activate.service; then
+        [[ $activation == "inactive" || $activation == "failed" ]]; then
         /usr/lib/omarchy-mac/touchid-retry-aside || exit 1
       fi
       exec {lock_fd}>&-
