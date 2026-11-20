@@ -26,7 +26,7 @@ The signed catalogs on edge, rc and stable each admit the same 35 boards, and th
 | M3 | `apple,j433`, `apple,j434`, `apple,j504`, `apple,j613`, `apple,j615`, `apple,j514s`, `apple,j514c`, `apple,j514m`, `apple,j516s`, `apple,j516c`, `apple,j516m` |
 | MacBook Neo | `apple,j700` |
 
-The installer shows the M3 boards and the MacBook Neo as untested. The M3 Ultra Mac Studio (`apple,j575d`) and every M4 or later Mac are not admitted.
+The M3 boards and the MacBook Neo are admitted like every other board; `scripts/supported-models.json` in omarchy-mac-installer still lists them as untested, pending per-board receipts ([omarchy-mac-installer#90](https://github.com/omacom/omarchy-mac-installer/pull/90)). The M3 Ultra Mac Studio (`apple,j575d`) and every M4 or later Mac are not admitted.
 
 ## Qualified installs
 
