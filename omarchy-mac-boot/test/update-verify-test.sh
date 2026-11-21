@@ -380,6 +380,13 @@ chmod +x "$stubs"/*
 export REBUILD_LOG=$tmp/rebuilds GOOD_BOOT_BIN=$tmp/good-boot.bin
 
 limine_mac
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a coherent Mac without the rollback marker"
+[[ ! -s $REBUILD_LOG ]] || fail "update-verify rebuilds nothing without the rollback marker" "$(cat "$REBUILD_LOG")"
+pass "update-verify rebuilds nothing, boot-ctxr.bin included, without the rollback marker"
+
+limine_mac
 export ESP_BOOT_BIN=$mac_esp/m1n1/boot.bin
 : >"$mac_root/boot/.omarchy-mac-rolled-back"
 : >"$REBUILD_LOG"
@@ -399,7 +406,7 @@ TEST_REBUILDS=$stubs verify
 expect_verified "a Mac with newer boot files after a rollback"
 [[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
 [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a finished rebuild clears the marker"
-pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
+pass "update-verify rebuilds newer boot files after a rollback, with no package change"
 
 limine_mac
 cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
@@ -410,14 +417,18 @@ CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
 grep -qx omarchy-mac-boot-update "$REBUILD_LOG" || fail "a failed boot-ctxr.bin rebuild skips the boot menu rebuild" "$(cat "$REBUILD_LOG")"
 [[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a failed boot-ctxr.bin rebuild passes verification" "$(cat "$tmp/err")"
 [[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed boot-ctxr.bin rebuild clears the marker"
-grep -Fq "Fix what was reported above; the next omarchy update rebuilds them again" "$tmp/err" && ! grep -Fq "the check below says what is left" "$tmp/err" ||
-  fail "a failed boot-ctxr.bin rebuild says the next update tries again" "$(cat "$tmp/err")"
+grep -Fq "Fix what was reported above, then rebuild them:" "$tmp/err" &&
+  grep -Fxq "  sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" &&
+  grep -Fq "create /etc/omarchy-mac-boot/owner-boot-chain" "$tmp/err" && ! grep -Fq "rebuilds them again" "$tmp/err" ||
+  fail "a failed rebuild says how to rebuild the boot files and the way out" "$(cat "$tmp/err")"
 # boot.bin is right now, so the next update's check passes; boot-ctxr.bin is still retried.
 : >"$REBUILD_LOG"
 CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
 [[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "the next update retries only the boot-ctxr.bin rebuild" "$(cat "$REBUILD_LOG")"
 [[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a boot-ctxr.bin rebuild that fails again passes verification" "$(cat "$tmp/err")"
 [[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a boot-ctxr.bin rebuild that fails again clears the marker"
+grep -Fxq "  sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" && grep -Fq "remove it, or create /etc/omarchy-mac-boot/owner-boot-chain" "$tmp/err" ||
+  fail "a failed boot-ctxr.bin retry prints the ctxr rebuild and the way out" "$(cat "$tmp/err")"
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a boot-ctxr.bin rebuild that succeeds on the next update"

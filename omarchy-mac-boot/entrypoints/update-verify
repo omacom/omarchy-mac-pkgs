@@ -47,9 +47,10 @@ if sudo test -f "$rollback_marker"; then
   if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
     echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
     sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo "$boot_ctxr" ||
-      { repair_failed=1; echo "The rebuild after the snapshot restore did not finish" >&2; }
+      { repair_failed="sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
+        echo "The rebuild after the snapshot restore did not finish" >&2; }
   elif ! sudo "$boot_ctxr"; then
-    repair_failed=1
+    repair_failed="sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
     echo "Rebuilding boot-ctxr.bin after the snapshot restore did not finish" >&2
   fi
 fi
@@ -63,8 +64,17 @@ Then run omarchy update again: it checks the boot files before it offers the reb
 MESSAGE
   exit 1
 elif [[ -n $repair_failed ]]; then
-  # The check cannot see boot-ctxr.bin, so a failed rebuild keeps the marker.
-  echo "The boot files were not all rebuilt, so do not reboot yet. Fix what was reported above; the next omarchy update rebuilds them again." >&2
+  # The check cannot see boot-ctxr.bin, so a failed rebuild keeps the marker. Some
+  # failures, such as a TARGET in /etc/default/update-m1n1, repeat until fixed.
+  cat >&2 <<MESSAGE
+
+The boot files were not all rebuilt, so do not reboot yet.
+Fix what was reported above, then rebuild them:
+  $repair_failed
+Then run omarchy update again. A TARGET in /etc/default/update-m1n1 stops boot-ctxr.bin
+from being rebuilt: remove it, or create /etc/omarchy-mac-boot/owner-boot-chain to manage
+this boot chain yourself.
+MESSAGE
   exit 1
 else
   sudo rm -f "$rollback_marker"
