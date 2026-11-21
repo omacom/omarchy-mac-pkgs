@@ -46,6 +46,8 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
     fi
     exec {lock_fd}>&-
   fi
+  # A Mac agreed before the re-arm existed gets its PAM lines here too.
+  /usr/lib/omarchy-mac/touchid-pam || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
   if [[ $status != "ready" ]]; then

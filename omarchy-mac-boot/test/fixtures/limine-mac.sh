@@ -43,10 +43,23 @@ SH
   # -x extracts initrd-tree, the image's files, into the current directory.
   cat >"$mac_stubs/lsinitcpio" <<'SH'
 #!/bin/bash
-[[ -f ${@: -1} ]] || exit 1
+image=${!#}
+[[ -f $image ]] || exit 1
+kind=boot
+if grep -q '^initrd of ' "$image"; then
+  kind=uki
+fi
+list=$MAC_STATE/$kind-initramfs
+[[ -f $list ]] || list=$MAC_STATE/initramfs
 case $1 in
-  -l) cat "$MAC_STATE/initramfs" ;;
-  -a) printf '==> Image: initramfs\n' ;;
+  -l) cat "$list" ;;
+  -a)
+    if [[ -f $list.analyze ]]; then
+      cat "$list.analyze"
+    else
+      printf '==> Image: initramfs\n'
+    fi
+    ;;
   -x) [[ ! -d $MAC_STATE/initrd-tree ]] || cp -a "$MAC_STATE/initrd-tree/." . ;;
   *) exit 1 ;;
 esac
