@@ -405,7 +405,9 @@ limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 : >"$REBUILD_LOG"
 CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
 grep -qx omarchy-mac-boot-update "$REBUILD_LOG" || fail "a failed boot-ctxr.bin rebuild skips the boot menu rebuild" "$(cat "$REBUILD_LOG")"
-pass "a failed boot-ctxr.bin rebuild still leaves the boot menu rebuilt"
+[[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a failed boot-ctxr.bin rebuild passes verification" "$(cat "$tmp/err")"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed boot-ctxr.bin rebuild clears the marker"
+pass "a failed boot-ctxr.bin rebuild rebuilds the menu, fails verification and keeps the marker"
 
 limine_mac
 printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
