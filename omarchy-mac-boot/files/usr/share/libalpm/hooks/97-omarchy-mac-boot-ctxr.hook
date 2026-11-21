@@ -1,0 +1,26 @@
+# After 95-m1n1-install.hook and the overlay and M3 Air hooks, on their paths and operations:
+# rebuild m1n1/boot-ctxr.bin, the Stage 2 an M4-and-later Mac boots, where it exists.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/dtbs/*
+Target = usr/lib/asahi-boot/*
+
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/lib/omarchy-mac-boot/dtb-overlays/*/*.dtbo
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = omarchy-mac-boot
+
+[Action]
+Description = Updating the confined m1n1 image of an M4 and later Mac...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr

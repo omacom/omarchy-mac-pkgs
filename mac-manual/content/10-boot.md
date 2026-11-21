@@ -13,7 +13,7 @@ An Apple Silicon Mac has no UEFI of its own. Everything up to U-Boot is Apple's 
 | Stage | Package | What it does |
 | --- | --- | --- |
 | iBoot | Apple firmware | Enforces the boot policy set in recoveryOS and starts the chosen boot object |
-| m1n1 | `m1n1-aurora` | Asahi's m1n1 built for the Aurora kernel, with the Omarchy boot logo. Stage 1 is the boot object iBoot starts; stage 2 initialises the hardware Apple's firmware leaves alone and passes the device tree on. |
+| m1n1 | `m1n1-aurora` | Asahi's m1n1 built for the Aurora kernel, with the Omarchy boot logo. Stage 1 is the boot object iBoot starts; stage 2 initialises the hardware Apple's firmware leaves alone and passes the device tree on. An M4 or later boots a confined stage 2, `m1n1/boot-ctxr.bin`. |
 | U-Boot | `uboot-asahi` | The UEFI implementation on Apple Silicon, built with a silent console: no banner, no logo, no boot delay. Loads the boot loader from the EFI system partition. |
 | Boot loader | Limine | Loaded from the EFI system partition. Lists one entry per kernel and per snapshot. |
 | Kernel and initramfs | `linux-aurora`, `omarchy-mac-boot` | A systemd initramfs built by mkinitcpio, carrying the vendor firmware and the Apple input drivers, bundled with the kernel as a unified kernel image |
@@ -38,6 +38,7 @@ The initramfs is systemd-based. Omarchy sets the platform's baseline of mkinitcp
 
 - `MODULES` entries for the Apple keyboard and trackpad drivers, added only when the running kernel really has them as modules, so a kernel that builds a driver in does not break a later `mkinitcpio -P`;
 - `apple_pmp`, the power management coprocessor's driver, on the same terms, so an encrypted root does not wait 20 seconds for it before the passphrase prompt;
+- the display gate's Type-C, crossbar and DisplayPort drivers, on the same terms, so an external display works on a first boot or after a slow passphrase;
 - `pwm-apple` and a udev rule, so the keyboard backlight is on at the passphrase prompt;
 - a vendor firmware service that copies Apple firmware onto the root, and a second copy before `cryptsetup-pre.target` on encrypted Macs, so Wi-Fi and input work at the passphrase prompt;
 - a Plymouth drop-in, so the passphrase prompt is graphical;
