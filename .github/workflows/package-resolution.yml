@@ -6,6 +6,7 @@ name: Package resolution
 # container with Architecture = aarch64 answers the same as an aarch64 host.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
   schedule:
