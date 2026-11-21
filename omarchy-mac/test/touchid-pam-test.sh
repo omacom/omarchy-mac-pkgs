@@ -18,8 +18,10 @@ hook=$work/root/usr/share/libalpm/hooks/91-omarchy-mac-touchid-pam.hook
 grep -Fxq 'Target = usr/lib/security/pam_aurora_touchid.so' "$hook" && grep -Fq 'systemd-detect-virt --quiet --chroot ||' "$hook" ||
   fail 'an update that brings the module syncs at once, and never in a chroot'
 removal=$work/root/usr/share/libalpm/hooks/91-omarchy-mac-touchid-pam-remove.hook
-grep -Fxq 'Operation = Remove' "$removal" && grep -Fxq 'When = PreTransaction' "$removal" &&
-  grep -Fq '/usr/lib/omarchy-mac/touchid-pam --remove' "$removal" || fail 'removing the package or the module takes the lines out first'
+grep -Fxq 'Operation = Remove' "$removal" && grep -Fxq 'When = PreTransaction' "$removal" && grep -Fxq 'AbortOnFail' "$removal" &&
+  grep -Fxq 'Exec = /usr/lib/omarchy-mac/touchid-pam --remove' "$removal" ||
+  fail 'removing the package or the module takes the lines out first, and stops if that fails'
+grep -Fxq 'Before=systemd-user-sessions.service' "$units/$unit" || fail "the boot sync finishes before anyone can log in and run Omarchy's setup"
 consent=$units/aurora-touchid-rearm@.service.d/50-omarchy-mac-touchid.conf
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$consent" && grep -Fxq 'ConditionPathExists=/dev/sep-bio-rearm' "$consent" ||
   fail "the helper answers only on the owner's record and a kernel with the re-arm node"
@@ -102,6 +104,20 @@ sync && [[ $(<"$work/pam.d/sudo") == $'auth substack system-auth\naccount includ
   fail 'the managed block goes even after its include changed' "$(<"$work/pam.d/sudo")"
 cp "$work/sudo" "$work/pam.d/sudo"
 pass 'only the managed block is ever removed'
+
+# A block that auth lines now follow (an added factor, say) is withdrawn;
+# lines Linux-PAM reads in any case or indented count as auth lines.
+touch "$work/etc/touchid-on"
+for extra in 'auth required pam_u2f.so' '  AUTH required pam_u2f.so'; do
+  printf 'auth include system-auth\n%s\n%s\n%s\naccount include system-auth\n' "$marker" "$module" "$extra" >"$work/pam.d/sudo"
+  sync && [[ $(<"$work/pam.d/sudo") == "auth include system-auth"$'\n'"$extra"$'\n'"account include system-auth" ]] &&
+    grep -Fq 'taken out' "$work/out" || fail 'a re-arm with an auth line after it is withdrawn' "$extra"
+done
+printf '  Auth   Include   system-auth\naccount include system-auth\n' >"$work/pam.d/sudo"
+sync && [[ $(grep -Fxc -- "$module" "$work/pam.d/sudo") == 1 ]] || fail 'an indented, capitalised include counts'
+rm "$work/etc/touchid-on"
+cp "$work/sudo" "$work/pam.d/sudo"
+pass 'every sync checks the placement, as Linux-PAM reads the stack'
 
 touch "$work/etc/touchid-on"
 rm "$work/pam.d/polkit-1"

@@ -1,5 +1,6 @@
 # Takes Touch ID's re-arm out of the PAM stacks before the package that keeps
-# it, or the module it names, is removed.
+# it, or the module it names, is removed. A cleanup that fails stops the
+# removal, so no stack keeps the line without what keeps it in check.
 [Trigger]
 Type = Path
 Operation = Remove
@@ -9,4 +10,5 @@ Target = usr/lib/security/pam_aurora_touchid.so
 [Action]
 Description = Removing Touch ID's PAM lines...
 When = PreTransaction
-Exec = /usr/bin/sh -c '/usr/lib/omarchy-mac/touchid-pam --remove || true'
+Exec = /usr/lib/omarchy-mac/touchid-pam --remove
+AbortOnFail
