@@ -19,4 +19,9 @@ source_as 1000
 (( status == 0 )) && [[ $(<"$work/out") == "sourced" && ! -s $work/err ]] ||
   fail 'a regular user runs the suite' "$(cat "$work/out" "$work/err")"
 
-pass 'the suites refuse root, where the commands ignore fixture roots, and run as a regular user'
+for suite in "$ROOT"/test/*-test.sh; do
+  [[ ${suite##*/} == "base-test.sh" ]] || grep -Eq '^source .*/base-test\.sh"$' "$suite" ||
+    fail "${suite##*/} sources base-test.sh"
+done
+
+pass 'every suite refuses root, where the commands ignore fixture roots, and runs as a regular user'
