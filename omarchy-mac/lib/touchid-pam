@@ -1,0 +1,101 @@
+#!/bin/bash
+# Keeps pam_aurora_touchid (aurora-touchid-rearm) after `auth include system-auth`
+# in sudo's and polkit's stacks while the owner has Touch ID on and the module
+# is installed, so a password there ends a Touch ID lockout. --remove takes it out.
+
+set -uo pipefail
+
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+pamd=${OMARCHY_MAC_PAMD:-/etc/pam.d}
+module_file=${OMARCHY_MAC_TOUCHID_PAM_MODULE:-/usr/lib/security/pam_aurora_touchid.so}
+lock=${OMARCHY_MAC_TOUCHID_PAM_LOCK:-/run/omarchy-mac/touchid-pam.lock}
+marker='# omarchy-mac: a password here re-arms Touch ID; turning Touch ID off removes this'
+module='-auth      optional                    pam_aurora_touchid.so'
+# As Linux-PAM reads them: leading blanks allowed, the type in any case.
+auth_line='^[[:space:]]*-?auth[[:space:]]'
+include_line='^[[:space:]]*auth[[:space:]]+include[[:space:]]+system-auth[[:space:]]*$'
+omarchy-hw-apple-silicon || exit 0
+
+if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock" && flock -w 30 "$lock_fd"; } 2>/dev/null; then
+  echo "Touch ID's PAM lines were not updated: $lock could not be locked." >&2
+  exit 1
+fi
+# Read under the lock, so a sync queued behind a disable sees the record gone.
+if [[ ${1:-} != "--remove" && -e $agreed && -e $module_file ]]; then
+  wanted=1
+else
+  wanted=0
+fi
+
+# Prints: system-auth includes, the last one's line, the last auth line, managed blocks, the last block's marker line.
+layout() {
+  awk -v marker="$marker" -v module="$module" -v include_pattern="$include_line" -v auth="$auth_line" '
+    { line = tolower($0) }
+    line ~ include_pattern { includes++; at = NR }
+    line ~ auth { last = NR }
+    previous == marker && $0 == module { blocks++; block = NR - 1 }
+    { previous = $0 }
+    END { print includes + 0, at + 0, last + 0, blocks + 0, block + 0 }'
+}
+with_block() {
+  awk -v marker="$marker" -v module="$module" -v at="$1" '{ print } NR == at { print marker; print module }'
+}
+# Only the marker straight followed by the module line is ours.
+without_blocks() {
+  awk -v marker="$marker" -v module="$module" '
+    held && $0 == module { held = 0; next }
+    held { print marker; held = 0 }
+    $0 == marker { held = 1; next }
+    { print }
+    END { if (held) print marker }'
+}
+
+# Writes the new text beside the stack with its owner and mode, and moves it into
+# place only if the text has the expected line count and the stack is unchanged.
+replace() {
+  local file=$1 snapshot=$2 text=$3 lines=$4 new
+  [[ -n $text && $(wc -l <<<"$text") == "$lines" ]] || return 1
+  new=$(mktemp "$file.XXXXXX") || return 1
+  if printf '%s\n' "$text" >"$new" && chown --reference="$file" "$new" && chmod --reference="$file" "$new" &&
+    [[ $(<"$file") == "$snapshot" ]] && mv -fT "$new" "$file"; then
+    return 0
+  fi
+  rm -f "$new"
+  return 1
+}
+
+status=0
+for service in sudo polkit-1; do
+  file=$pamd/$service
+  [[ -f $file && ! -L $file ]] || continue
+  if ! snapshot=$(<"$file") || ! read -r includes at last blocks block < <(layout <<<"$snapshot"); then
+    echo "Touch ID's re-arm: $file could not be read." >&2
+    status=1
+    continue
+  fi
+  lines=$(wc -l <<<"$snapshot")
+  # Safe where the single system-auth include is the last auth line before the block: no factor or jump follows.
+  if (( wanted && blocks == 1 && includes == 1 && block == at + 1 && last == at + 2 )); then
+    continue
+  elif (( wanted && blocks == 0 )); then
+    if (( includes != 1 || last != at )); then
+      echo "Touch ID's re-arm was not added to $file: its last auth line isn't its only 'auth include system-auth'." >&2
+      continue
+    fi
+    text=$(with_block "$at" <<<"$snapshot") || text=""
+    expected=$(( lines + 2 ))
+  elif (( blocks > 0 )); then
+    if (( wanted )); then
+      echo "Touch ID's re-arm was taken out of $file: auth lines follow it there now." >&2
+    fi
+    text=$(without_blocks <<<"$snapshot") || text=""
+    expected=$(( lines - 2 * blocks ))
+  else
+    continue
+  fi
+  if ! replace "$file" "$snapshot" "$text" "$expected"; then
+    echo "Touch ID's re-arm line could not be updated in $file; it was left as it was." >&2
+    status=1
+  fi
+done
+exit "$status"

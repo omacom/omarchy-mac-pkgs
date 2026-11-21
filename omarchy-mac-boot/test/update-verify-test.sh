@@ -34,6 +34,7 @@ verify() {
   (
     eval "$(limine_mac_env "$ROOT/bin" "${1:-}")"
     [[ -z ${TEST_REBUILDS:-} ]] || export PATH="$TEST_REBUILDS:$PATH"
+    export OMARCHY_MAC_BOOT_CTXR=$tmp/ctxr-stub
     bash "$entrypoint"
   ) >"$tmp/out" 2>"$tmp/err"
   status=$?
@@ -51,7 +52,7 @@ expect_refused() {
   local description=$1 reason=$2
   (( status == 1 )) || fail "$description fails update-verify" "status $status: $(cat "$tmp/out" "$tmp/err")"
   grep -Fq "$reason" "$tmp/err" || fail "$description is named" "$(cat "$tmp/err")"
-  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update" "$tmp/err" ||
+  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
     fail "$description says not to reboot and how to rebuild the boot files" "$(cat "$tmp/err")"
 }
 
@@ -102,6 +103,22 @@ limine_mac
 printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/initramfs"
 verify 6.16.0-aurora9-ARCH
 expect_refused "an initramfs built for the previous kernel" "does not hold the $mac_kver modules"
+
+limine_mac
+cp "$mac_state/initramfs" "$mac_state/boot-initramfs"
+printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/uki-initramfs"
+verify 6.16.0-aurora9-ARCH
+expect_refused "a Limine Mac whose UKI initramfs is stale while /boot/initramfs is current" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-aurora.efi does not hold the $mac_kver modules"
+
+limine_mac
+cp "$mac_state/initramfs" "$mac_state/uki-initramfs"
+printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/boot-initramfs"
+verify 6.16.0-aurora9-ARCH
+expect_verified "a Limine Mac whose UKI initramfs is current while /boot/initramfs is stale"
+rm "$mac_root/boot/initramfs-linux-aurora.img"
+verify 6.16.0-aurora9-ARCH
+expect_verified "a Limine Mac whose UKI initramfs is current while /boot/initramfs is absent"
 pass "update-verify refuses a wrong device tree, a stale m1n1, a missing or stale UKI, another Limine or a stale initramfs, and says not to reboot"
 
 # The owner marker makes the check advisory. Without it, failures block updates.
@@ -289,6 +306,25 @@ limine_mac_luks
 printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/initramfs"
 verify
 expect_refused "an encrypted Mac whose initramfs cannot unlock the root" "does not contain sd-encrypt"
+
+limine_mac
+limine_mac_luks
+cp "$mac_state/initramfs" "$mac_state/boot-initramfs"
+printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/uki-initramfs"
+verify
+expect_refused "an encrypted Limine Mac whose UKI initramfs lacks sd-encrypt while /boot/initramfs has it" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-aurora.efi does not contain sd-encrypt"
+
+limine_mac
+limine_mac_luks
+cp "$mac_state/initramfs" "$mac_state/uki-initramfs"
+printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/boot-initramfs"
+verify
+expect_verified "an encrypted Limine Mac whose UKI initramfs has sd-encrypt while /boot/initramfs lacks it"
+rm "$mac_root/boot/initramfs-linux-aurora.img"
+verify
+expect_verified "an encrypted Limine Mac whose UKI initramfs has sd-encrypt while /boot/initramfs is absent"
+
 limine_mac
 limine_mac_luks
 mac_cmdline="root=UUID=r rw rootflags=subvol=@ quiet"
@@ -351,7 +387,8 @@ expect_verified "an unencrypted Mac, which has no passphrase prompt"
 pass "update-verify refuses an encrypted Mac whose boot image does not carry its keyboard layout"
 
 # After a snapshot restore across a boot update the ESP can stay newer than every
-# package, so the marker that restore left has update-verify rebuild it once.
+# package, so the marker that restore left has update-verify rebuild it until
+# the rebuild finishes.
 stubs=$tmp/rebuild-stubs
 mkdir -p "$stubs"
 cat >"$stubs/mkinitcpio" <<'SH'
@@ -364,12 +401,28 @@ echo update-m1n1 >>"$REBUILD_LOG"
 [[ -z ${REBUILD_FAILS:-} ]] || exit 1
 cp "$GOOD_BOOT_BIN" "$ESP_BOOT_BIN"
 SH
+cat >"$tmp/ctxr-stub" <<'SH'
+#!/bin/bash
+echo omarchy-mac-boot-ctxr >>"$REBUILD_LOG"
+[[ $* == --verify ]] || exit 2
+[[ -z ${CTXR_NO_ESP:-} ]] || exit 3
+[[ -z ${CTXR_FAILS:-} ]] || exit 1
+SH
+chmod +x "$tmp/ctxr-stub"
 cat >"$stubs/omarchy-mac-boot-update" <<'SH'
 #!/bin/bash
 echo omarchy-mac-boot-update >>"$REBUILD_LOG"
+[[ -z ${BOOT_UPDATE_FAILS:-} ]] || exit 1
 SH
 chmod +x "$stubs"/*
 export REBUILD_LOG=$tmp/rebuilds GOOD_BOOT_BIN=$tmp/good-boot.bin
+
+limine_mac
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a coherent Mac without the rollback marker"
+[[ ! -s $REBUILD_LOG ]] || fail "update-verify rebuilds nothing without the rollback marker" "$(cat "$REBUILD_LOG")"
+pass "update-verify rebuilds nothing, boot-ctxr.bin included, without the rollback marker"
 
 limine_mac
 export ESP_BOOT_BIN=$mac_esp/m1n1/boot.bin
@@ -377,8 +430,9 @@ export ESP_BOOT_BIN=$mac_esp/m1n1/boot.bin
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a coherent Mac with the rollback marker"
-[[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a coherent Mac rebuilds nothing and clears the marker"
-pass "update-verify clears the rollback marker when the boot files already match"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "a coherent Mac with the marker rebuilds only boot-ctxr.bin, which the check cannot see" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a coherent Mac clears the marker once boot-ctxr.bin is rebuilt"
+pass "update-verify rebuilds boot-ctxr.bin and clears the rollback marker when the other boot files already match"
 
 limine_mac
 cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
@@ -388,9 +442,66 @@ limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a Mac with newer boot files after a rollback"
-[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
 [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a finished rebuild clears the marker"
-pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
+pass "update-verify rebuilds newer boot files after a rollback, with no package change"
+
+limine_mac
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
+grep -qx omarchy-mac-boot-update "$REBUILD_LOG" || fail "a failed boot-ctxr.bin rebuild skips the boot menu rebuild" "$(cat "$REBUILD_LOG")"
+[[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a failed boot-ctxr.bin rebuild passes verification" "$(cat "$tmp/err")"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed boot-ctxr.bin rebuild clears the marker"
+grep -Fq "Fix what was reported above, then rebuild them:" "$tmp/err" &&
+  grep -Fxq "  sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" &&
+  grep -Fq "create /etc/omarchy-mac-boot/owner-boot-chain" "$tmp/err" && ! grep -Fq "rebuilds them again" "$tmp/err" ||
+  fail "a failed boot-ctxr.bin rebuild says how to rebuild it and the way out" "$(cat "$tmp/err")"
+# boot.bin is right now, so the next update's check passes; boot-ctxr.bin is still retried.
+: >"$REBUILD_LOG"
+CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "the next update retries only the boot-ctxr.bin rebuild" "$(cat "$REBUILD_LOG")"
+[[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a boot-ctxr.bin rebuild that fails again passes verification" "$(cat "$tmp/err")"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a boot-ctxr.bin rebuild that fails again clears the marker"
+grep -Fxq "  sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" && grep -Fq "or create /etc/omarchy-mac-boot/owner-boot-chain" "$tmp/err" ||
+  fail "a failed boot-ctxr.bin retry prints the ctxr rebuild and the way out" "$(cat "$tmp/err")"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a boot-ctxr.bin rebuild that succeeds on the next update"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "the retry rebuilds only boot-ctxr.bin" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a boot-ctxr.bin rebuild that succeeds on retry clears the marker"
+pass "a failed boot-ctxr.bin rebuild rebuilds the menu, fails verification, keeps the marker, and is retried until it succeeds"
+
+# A boot menu rebuild that fails after update-m1n1 repaired boot.bin: the check passes,
+# and the message is the full rebuild, with nothing about boot-ctxr.bin's TARGET.
+limine_mac
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+BOOT_UPDATE_FAILS=1 TEST_REBUILDS=$stubs verify
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update " ]] || fail "a failed boot menu rebuild stops the rebuild" "$(cat "$REBUILD_LOG")"
+[[ $status == 1 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a failed boot menu rebuild passes verification" "status $status: $(cat "$tmp/err")"
+! grep -Fq "This Mac might not boot" "$tmp/err" || fail "a failed boot menu rebuild is reported by the boot check, not the rebuild" "$(cat "$tmp/err")"
+grep -Fxq "  sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
+  fail "a failed boot menu rebuild prints the full rebuild" "$(cat "$tmp/err")"
+! grep -Fq "TARGET" "$tmp/err" && ! grep -Fq "owner-boot-chain" "$tmp/err" || fail "a failed boot menu rebuild is told about boot-ctxr.bin's TARGET" "$(cat "$tmp/err")"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed boot menu rebuild clears the marker"
+pass "a failed boot menu rebuild prints the full rebuild, not boot-ctxr.bin's way out, and keeps the marker"
+
+# boot-ctxr.bin could not be looked at, with no ESP mounted: the marker stays for the next
+# update, with a note, and the reboot is still offered.
+limine_mac
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+CTXR_NO_ESP=1 TEST_REBUILDS=$stubs verify
+expect_verified "a Mac whose boot-ctxr.bin could not be checked"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an unchecked boot-ctxr.bin clears the marker"
+grep -Fq "The system ESP is not mounted at /boot/efi or /boot, so the boot-ctxr.bin of an M4 or later was not checked" "$tmp/err" && ! grep -Fq "do not reboot yet" "$tmp/err" ||
+  fail "an unchecked boot-ctxr.bin is noted without holding back the reboot" "$(cat "$tmp/err")"
+pass "an unchecked boot-ctxr.bin keeps the marker and still offers the reboot"
 
 limine_mac
 printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
