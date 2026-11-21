@@ -30,7 +30,9 @@ can_extract() {
 }
 
 sensor=""
-for node in "$tree"/soc/*/fingerprint@*; do
+# The sensor sits on an SPI controller under /soc, or at the root on the M4 Pro
+# and M4 Max.
+for node in "$tree"/soc/*/fingerprint@* "$tree"/*/fingerprint@*; do
   if [[ -r $node/compatible ]] && tr '\0' '\n' <"$node/compatible" | grep -Fxq apple,mesa-fingerprint &&
     [[ ! -r $node/status || $(tr -d '\0' <"$node/status") == "okay" ]]; then
     sensor=$node
@@ -45,13 +47,21 @@ elif [[ -z $sensor ]]; then
   exit 0
 fi
 
+# The 16-inch M4 Pro and M4 Max: on each, Touch ID has enrolled, matched, and
+# matched again after a restart. Their sensor loads a calibration and a root key that are both
+# rebuilt from sealed factory records.
+sealed_board() {
+  { compatible apple,t6040 && compatible apple,j616s; } || { compatible apple,t6041 && compatible apple,j616c; }
+}
+
 # The boards the aurora driver has a profile for. M1-family Macs cold-boot
 # their enclave behind an xART guard that blocks matching, so they wait.
 if compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
   echo unsupported:m1-family
   exit 0
 elif ! compatible apple,t8112 && ! compatible apple,t6020 && ! compatible apple,t6021 && ! compatible apple,t8140 &&
-  ! { compatible apple,t8122 && { compatible apple,j613 || compatible apple,j615; }; }; then
+  ! { compatible apple,t8122 && { compatible apple,j613 || compatible apple,j615; }; } &&
+  ! sealed_board; then
   echo unsupported:board
   exit 0
 fi
@@ -62,20 +72,36 @@ if [[ ! -r $tree/chosen/apfs-preboot-uuid ]]; then
   exit 0
 fi
 
-# The Neo's calibration must be the sealed form its installer writes; the
-# other boards' can be carved from the iBoot System Container at enable time.
+# The node's firmware-name lists the calibration, then, where the board names
+# it, the sensor root key.
 calibration=apple/mesa_calibration.bin
+root_key=apple/msrk-j700.bin
 if [[ -r $sensor/firmware-name ]]; then
-  calibration=$(tr -d '\0' <"$sensor/firmware-name")
+  mapfile -t names < <(tr '\0' '\n' <"$sensor/firmware-name")
+  calibration=${names[0]:-$calibration}
+  root_key=${names[1]:-$root_key}
 fi
-if ! installed "$calibration" && { compatible apple,t8140 || ! can_extract extract-mesa-calibration; }; then
+# touchid-root-key (Python) rebuilds sealed factory data once the owner agrees,
+# from the factory records asahi-installer leaves on the ESP.
+can_reseal() {
+  [[ -r $esp/asahi/all_firmware.tar.gz ]] && command -v "$python" >/dev/null
+}
+# The Neo's calibration must be the sealed form its installer writes, and the
+# 16-inch M4 Pro's and M4 Max's is rebuilt from their factory records like
+# their root key; the other boards' can be carved from the iBoot System
+# Container at enable time.
+if sealed_board; then
+  if ! installed "$calibration" && ! can_reseal; then
+    echo unsupported:no-calibration
+    exit 0
+  fi
+elif ! installed "$calibration" && { compatible apple,t8140 || ! can_extract extract-mesa-calibration; }; then
   echo unsupported:no-calibration
   exit 0
 fi
-# The Neo's sensor key is rebuilt once the owner agrees, by touchid-root-key
-# (Python), from the factory records asahi-installer leaves on the ESP.
-if compatible apple,t8140 && ! installed apple/msrk-j700.bin &&
-  { [[ ! -r $esp/asahi/all_firmware.tar.gz ]] || ! command -v "$python" >/dev/null; }; then
+# The Neo's and the 16-inch M4 Pro's and M4 Max's sensor root key is rebuilt
+# the same way.
+if { compatible apple,t8140 || sealed_board; } && ! installed "$root_key" && ! can_reseal; then
   echo unsupported:no-root-key
   exit 0
 fi

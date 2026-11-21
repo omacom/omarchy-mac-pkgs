@@ -650,3 +650,263 @@ has "mac-release --lane fork [--dry-run]" "the fork lane's usage"
 run "$release" --lane nowhere && fail "an unknown lane was accepted"
 has "unknown lane nowhere" "an unknown lane"
 echo "ok - --lane fork runs the fork adapter, and an unknown lane is refused"
+
+# ── archive download token scope ────────────────────────────────────────────
+mkdir -p "$tmp/archive-src/demo" "$tmp/curl-bin"
+printf 'VERSION = 7\nPATCHLEVEL = 1\nSUBLEVEL = 14\n' >"$tmp/archive-src/demo/Makefile"
+tar -czf "$tmp/fixture.tar.gz" -C "$tmp/archive-src" demo
+fixture_sha=$( { sha256sum "$tmp/fixture.tar.gz" 2>/dev/null || shasum -a 256 "$tmp/fixture.tar.gz"; } | cut -d' ' -f1 )
+
+cat >"$tmp/curl-bin/curl" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+count=0
+if [[ -f $FAKE_CURL_DIR/count ]]; then
+  count=$(<"$FAKE_CURL_DIR/count")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$FAKE_CURL_DIR/count"
+printf '%s\n' "$@" >"$FAKE_CURL_DIR/call-$count.argv"
+
+unescape_curl_quoted() {
+  local raw=$1 out="" character
+  while [[ -n $raw ]]; do
+    if [[ $raw == \\* ]] && (( ${#raw} >= 2 )); then
+      character=${raw:1:1}
+      out+=$character
+      raw=${raw:2}
+    else
+      out+=${raw:0:1}
+      raw=${raw:1}
+    fi
+  done
+  printf '%s' "$out"
+}
+
+out="" read_config=0 url=""
+while (( $# > 0 )); do
+  case $1 in
+    -sS|--no-location|--no-location-trusted) shift ;;
+    -o) out=$2; shift 2 ;;
+    -w|--proto|--retry) shift 2 ;;
+    --config)
+      [[ $2 == "-" ]] || { echo "unexpected --config target: $2" >&2; exit 2; }
+      read_config=1
+      shift 2
+      ;;
+    -*) echo "unexpected curl flag: $1" >&2; exit 2 ;;
+    *) echo "unexpected curl positional argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+if (( read_config )); then
+  cat >"$FAKE_CURL_DIR/call-$count.stdin"
+  while IFS= read -r line; do
+    if [[ $line =~ ^url[[:space:]]*=[[:space:]]*\"(.*)\"$ ]]; then
+      url=$(unescape_curl_quoted "${BASH_REMATCH[1]}")
+    fi
+  done <"$FAKE_CURL_DIR/call-$count.stdin"
+fi
+[[ -n $url ]] || { echo "missing url in curl --config -" >&2; exit 2; }
+printf '%s\n' "$url" >"$FAKE_CURL_DIR/call-$count.url"
+
+status=404
+redirect=""
+while IFS=$'\t' read -r route_url route_code route_redirect; do
+  if [[ $route_url == "$url" || $route_url == "*" ]]; then
+    status=$route_code
+    redirect=$route_redirect
+    break
+  fi
+done <"$FAKE_CURL_ROUTES"
+
+if [[ $status == exit:* ]]; then
+  exit "${status#exit:}"
+elif [[ $status == "200" ]]; then
+  cp "$FAKE_CURL_TARBALL" "$out"
+else
+  printf 'redirect or error body\n' >"$out"
+fi
+printf '%s\n%s' "$status" "$redirect"
+STUB
+chmod +x "$tmp/curl-bin/curl"
+printf '#!/bin/bash\nexit 0\n' >"$tmp/curl-bin/sleep"
+chmod +x "$tmp/curl-bin/sleep"
+
+test_token="test-gh-token-scope-000000"
+reset_curl_case() {
+  rm -rf "$tmp/curl-case"
+  mkdir -p "$tmp/curl-case"
+  : >"$tmp/curl-routes"
+}
+add_curl_route() {
+  printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >>"$tmp/curl-routes"
+}
+with_fake_curl() {
+  PATH="$tmp/curl-bin:$PATH" \
+    FAKE_CURL_DIR=$tmp/curl-case \
+    FAKE_CURL_ROUTES=$tmp/curl-routes \
+    FAKE_CURL_TARBALL=$tmp/fixture.tar.gz \
+    GH_TOKEN=${fake_curl_token-$test_token} \
+    "$@"
+}
+expect_archive() {
+  local url=$1 expected_calls=$2 label=$3
+  with_fake_curl lib archive_sha256 "$url" >"$tmp/out" 2>&1 || fail "$label failed"
+  [[ $(tail -n 1 "$tmp/out") == "$fixture_sha" ]] || fail "$label hashed wrong archive"
+  [[ $(<"$tmp/curl-case/count") == "$expected_calls" ]] || fail "$label did not make $expected_calls hop(s)"
+}
+assert_no_token_in_argv() {
+  local call_index=$1 label=$2 secret=${3:-$test_token}
+  ! grep -Fq -- "$secret" "$tmp/curl-case/call-$call_index.argv" || fail "$label: secret appeared in curl argv"
+  ! grep -Fxq -- "--location-trusted" "$tmp/curl-case/call-$call_index.argv" || fail "$label: --location-trusted was passed to curl"
+  grep -Fxq -- "--no-location" "$tmp/curl-case/call-$call_index.argv" || fail "$label: --no-location missing from curl argv"
+  grep -Fxq -- "--no-location-trusted" "$tmp/curl-case/call-$call_index.argv" || fail "$label: --no-location-trusted missing from curl argv"
+  ! grep -Eq -- '^https?://' "$tmp/curl-case/call-$call_index.argv" || fail "$label: URL appeared in curl argv"
+}
+assert_has_stdin_auth() {
+  local call_index=$1 label=$2 expected_header=${3:-"Authorization: Bearer $test_token"} secret=${4:-$test_token}
+  assert_no_token_in_argv "$call_index" "$label" "$secret"
+  [[ -f $tmp/curl-case/call-$call_index.stdin ]] || fail "$label: expected curl --config - stdin on hop $call_index"
+  grep -Fxq -- "header = \"$expected_header\"" "$tmp/curl-case/call-$call_index.stdin" ||
+    fail "$label: missing Authorization header on hop $call_index"
+}
+assert_no_auth() {
+  local call_index=$1 label=$2
+  assert_no_token_in_argv "$call_index" "$label"
+  ! grep -Fq -- "Authorization:" "$tmp/curl-case/call-$call_index.argv" || fail "$label: Authorization in argv on hop $call_index"
+  [[ -f $tmp/curl-case/call-$call_index.stdin ]] || fail "$label: expected curl --config - stdin on hop $call_index"
+  ! grep -Fq -- "Authorization:" "$tmp/curl-case/call-$call_index.stdin" || fail "$label: Authorization sent on hop $call_index"
+}
+
+# 1. github.com -> codeload.github.com keeps auth via stdin, never argv.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "302" "https://codeload.github.com/omacom/demo/tar.gz/commit"
+add_curl_route "https://codeload.github.com/omacom/demo/tar.gz/commit" "200" ""
+expect_archive "https://github.com/omacom/demo/archive/commit.tar.gz" "2" "github.com -> codeload.github.com"
+assert_has_stdin_auth 1 "github.com -> codeload.github.com"
+assert_has_stdin_auth 2 "github.com -> codeload.github.com"
+
+# 2. Uppercase/port GitHub URL with intermediate redirect and :443 codeload keeps auth.
+reset_curl_case
+add_curl_route "HTTPS://GITHUB.COM:443/omacom/demo/old.tar.gz" "302" "HTTPS://GITHUB.COM:443/owner/repo/archive/commit.tar.gz"
+add_curl_route "HTTPS://GITHUB.COM:443/owner/repo/archive/commit.tar.gz" "302" "https://codeload.github.com:443/owner/repo/tar.gz/commit"
+add_curl_route "https://codeload.github.com:443/owner/repo/tar.gz/commit" "200" ""
+expect_archive "HTTPS://GITHUB.COM:443/omacom/demo/old.tar.gz" "3" "uppercase/port github.com"
+assert_has_stdin_auth 1 "uppercase/port github.com"
+assert_has_stdin_auth 2 "uppercase/port intermediate redirect"
+assert_has_stdin_auth 3 "codeload.github.com:443"
+echo "ok - archive_sha256 sends the GitHub token via stdin to github.com and codeload.github.com only"
+
+# 3. Non-GitHub initial URLs never receive Authorization.
+for non_github_url in \
+  "https://mirror.example.invalid/owner/repo/archive/commit.tar.gz" \
+  "https://github.com.evil.example/owner/repo/archive/commit.tar.gz" \
+  "https://github.com@evil.example/owner/repo/archive/commit.tar.gz" \
+  "https://github.com:443@evil.example/omacom/demo/archive/commit.tar.gz" \
+  "https://github.com:8443/owner/repo/archive/commit.tar.gz" \
+  "http://github.com/owner/repo/archive/commit.tar.gz"; do
+  reset_curl_case
+  add_curl_route "$non_github_url" "200" ""
+  expect_archive "$non_github_url" "1" "non-GitHub URL $non_github_url"
+  assert_no_auth 1 "non-GitHub URL $non_github_url"
+done
+
+# 3b. Non-ASCII lookalike host (U+0130) under UTF-8 locale never receives Authorization.
+reset_curl_case
+add_curl_route "https://gİthub.com/omacom/demo/archive/commit.tar.gz" "200" ""
+LC_ALL=C.UTF-8 expect_archive "https://gİthub.com/omacom/demo/archive/commit.tar.gz" "1" "lookalike host gİthub.com"
+assert_no_auth 1 "lookalike host gİthub.com"
+
+# 4. Off-GitHub redirect and HTTPS->HTTP downgrade drop Authorization on hop 2.
+for redirect_target in \
+  "https://other.example/owner/repo/archive/commit.tar.gz" \
+  "http://codeload.github.com/owner/repo/tar.gz/commit"; do
+  reset_curl_case
+  add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "302" "$redirect_target"
+  add_curl_route "$redirect_target" "200" ""
+  expect_archive "https://github.com/omacom/demo/archive/commit.tar.gz" "2" "redirect to $redirect_target"
+  assert_has_stdin_auth 1 "redirect to $redirect_target"
+  assert_no_auth 2 "redirect to $redirect_target"
+done
+
+# 4b. Redirect URL with query token stays in stdin config, never in curl argv.
+query_url="https://codeload.github.com/omacom/demo/tar.gz/commit?token=query-secret-123"
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "302" "$query_url"
+add_curl_route "$query_url" "200" ""
+expect_archive "https://github.com/omacom/demo/archive/commit.tar.gz" "2" "codeload query token redirect"
+assert_has_stdin_auth 1 "codeload query token redirect"
+assert_has_stdin_auth 2 "codeload query token redirect"
+assert_no_token_in_argv 2 "codeload query token redirect" "query-secret-123"
+grep -Fxq -- "url = \"$query_url\"" "$tmp/curl-case/call-2.stdin" ||
+  fail "codeload query token redirect: expected query URL in stdin config"
+
+# 5. Non-HTTP(S) redirect is not followed and fails.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "302" "file:///etc/passwd"
+with_fake_curl lib archive_sha256 "https://github.com/omacom/demo/archive/commit.tar.gz" >"$tmp/out" 2>&1 &&
+  fail "file:// redirect was followed"
+has "HTTP 302" "non-HTTP(S) redirect"
+[[ $(<"$tmp/curl-case/count") == "1" ]] || fail "file:// redirect made more than 1 call"
+
+# 5b. Non-HTTP(S) initial URL fails immediately without invoking curl.
+reset_curl_case
+with_fake_curl lib archive_sha256 "file:///etc/passwd" >"$tmp/out" 2>&1 &&
+  fail "file:// initial URL was accepted"
+has "unsupported archive URL" "non-HTTP(S) initial URL"
+[[ ! -e $tmp/curl-case/count ]] || fail "file:// initial URL invoked curl"
+
+# 5c. Malformed redirect URL (curl exit 3) fails immediately without retries.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "302" "http://[bad/x"
+add_curl_route "http://[bad/x" "exit:3" ""
+with_fake_curl lib archive_sha256 "https://github.com/omacom/demo/archive/commit.tar.gz" >"$tmp/out" 2>&1 &&
+  fail "malformed redirect URL was accepted"
+has "malformed archive URL" "malformed redirect URL"
+[[ $(<"$tmp/curl-case/count") == "2" ]] || fail "malformed redirect URL retried instead of stopping"
+
+# 5d. Other curl transport failures (e.g. exit 7) still map to 000 and retry.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "exit:7" ""
+with_fake_curl lib archive_sha256 "https://github.com/omacom/demo/archive/commit.tar.gz" >"$tmp/out" 2>&1 &&
+  fail "transient curl exit 7 succeeded"
+has "after retries" "transient curl exit 7"
+[[ $(<"$tmp/curl-case/count") == "7" ]] || fail "transient curl exit 7 did not retry 7 times"
+
+# 6. Redirect loop (>5 hops) fails promptly with HTTP 302 without 429 retries.
+reset_curl_case
+add_curl_route "*" "302" "https://github.com/omacom/demo/archive/loop.tar.gz"
+with_fake_curl lib archive_sha256 "https://github.com/omacom/demo/archive/loop.tar.gz" >"$tmp/out" 2>&1 &&
+  fail "redirect loop succeeded"
+has "HTTP 302" "redirect loop"
+[[ $(<"$tmp/curl-case/count") == "6" ]] || fail "redirect loop did not stop after 5 redirects (6 calls)"
+
+# 7. Token with embedded newline sends neither Authorization nor injected header.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "200" ""
+fake_curl_token=$'bad\nX-Injected: yes' expect_archive "https://github.com/omacom/demo/archive/commit.tar.gz" "1" "malformed token"
+assert_no_auth 1 "malformed token"
+! grep -Fq -- "X-Injected:" "$tmp/curl-case/call-1.stdin" || fail "malformed token injected a header"
+
+# 7b. Token containing quotes and backslashes is escaped in curl --config -.
+reset_curl_case
+add_curl_route "https://github.com/omacom/demo/archive/commit.tar.gz" "200" ""
+fake_curl_token='tok"a\b' expect_archive "https://github.com/omacom/demo/archive/commit.tar.gz" "1" "quoted token"
+assert_has_stdin_auth 1 "quoted token" 'Authorization: Bearer tok\"a\\b' 'tok"a\b'
+
+# 8. mac-aurora-pin download_archive_sha256 keeps token out of argv and off-GitHub redirects.
+k3=$(hex d)
+reset_curl_case
+add_curl_route "https://github.com/aurora-silicon/linux/archive/$k3.tar.gz" "302" "https://other.example/aurora/$k3.tar.gz"
+add_curl_route "https://other.example/aurora/$k3.tar.gz" "200" ""
+mkdir -p "$tmp/aurora-token-recipe"
+cp "$tmp/aurora-before/PKGBUILD" "$tmp/aurora-token-recipe/PKGBUILD"
+FAKE_KERNEL_HEAD=$k3 FAKE_KERNEL_VERSION=7.1.14 \
+  with_fake_curl run "$pin" pin --dry-run --recipe "$tmp/aurora-token-recipe" ||
+  fail "mac-aurora-pin dry run with redirected archive download failed"
+has "+sha256sums=('$fixture_sha'" "mac-aurora-pin archive checksum"
+[[ $(<"$tmp/curl-case/count") == "2" ]] || fail "mac-aurora-pin did not make 2 hops"
+assert_has_stdin_auth 1 "mac-aurora-pin hop 1"
+assert_no_auth 2 "mac-aurora-pin off-GitHub redirect"
+echo "ok - non-GitHub URLs, off-GitHub redirects, non-HTTP redirects, redirect loops, bad tokens, and mac-aurora-pin keep the token safe"
