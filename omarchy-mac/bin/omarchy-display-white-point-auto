@@ -1,0 +1,284 @@
+#!/bin/bash
+
+# omarchy:summary=Follow the colour of the room light with the display white point
+# omarchy:args=[--once|--available|--map-cct KELVIN]
+# omarchy:examples=omarchy display white-point auto --once | omarchy display white-point auto --map-cct 2700
+
+# Reads the room's colour temperature from the ambient light sensor and moves hyprsunset's white
+# point part of the way towards it: warm light warms the screen, daylight leaves it at native white.
+# Night light always wins: a temperature this loop did not write is left alone.
+
+set -euo pipefail
+
+# Off Apple Silicon there is nothing to drive (and --available says so).
+if ! omarchy-hw-apple-silicon 2>/dev/null; then
+  [[ " $* " == *" --available "* ]] && exit 1
+  exit 0
+fi
+
+POLL_SECONDS=3
+# Native white of the panel, and the warmest white point this loop sets.
+NATIVE_KELVIN=6500
+WARMEST_KELVIN=4800
+# Below this hyprsunset temperature Omarchy's toggle and bar count night light as on.
+IDENTITY_KELVIN=6000
+# Share of the room-to-panel difference followed, in percent of mired (0 off, 100 match the room).
+STRENGTH_PERCENT=25
+# Weight of each new reading in percent; below MIN_LUX the colour reading is too noisy to use.
+SMOOTH_PERCENT=25
+MIN_LUX=5
+DEADBAND_KELVIN=100
+ROUND_KELVIN=50
+FADE_STEP_KELVIN=20
+# While night light or another owner holds the screen, look again only every this many polls.
+RECHECK_POLLS=10
+# Create this file to turn the automatic white point on (the unit will not start without it, a running loop
+# stops and puts native white back when it goes).
+ON_TOGGLE="$HOME/.local/state/omarchy/toggles/white-point-auto-on"
+# The last temperature this loop wrote, so after a restart it can tell its own white point from night light.
+STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/white-point-auto"
+
+once=0
+available_only=0
+map_cct=""
+
+usage() {
+  echo "Usage: omarchy-display-white-point-auto [--once|--available|--map-cct KELVIN]"
+}
+
+while (($#)); do
+  case "$1" in
+    --once)
+      once=1
+      shift
+      ;;
+    --available)
+      available_only=1
+      shift
+      ;;
+    --map-cct)
+      if [[ -z ${2:-} ]]; then
+        usage >&2
+        exit 1
+      fi
+      map_cct=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+native_millimired=$(( 1000000000 / NATIVE_KELVIN ))
+
+# Sets target, the white point in kelvin for a room colour given in millimired (no subshell).
+millimired_to_target() {
+  local screen=$(( native_millimired + ($1 - native_millimired) * STRENGTH_PERCENT / 100 ))
+  target=$(( 1000000000 / screen ))
+  target=$(( (target + ROUND_KELVIN / 2) / ROUND_KELVIN * ROUND_KELVIN ))
+  (( target > NATIVE_KELVIN )) && target=$NATIVE_KELVIN
+  (( target < WARMEST_KELVIN )) && target=$WARMEST_KELVIN
+  return 0
+}
+
+if [[ -n $map_cct ]]; then
+  [[ $map_cct =~ ^[1-9][0-9]*$ ]] || {
+    echo "the colour temperature must be a positive whole number of kelvin" >&2
+    exit 1
+  }
+  millimired_to_target $(( 1000000000 / map_cct ))
+  echo "$target"
+  exit 0
+fi
+
+# The sensor that reports a colour temperature; Apple AOP names it aop-sensors-als.
+find_sensor() {
+  local d name
+  local iio_devices_dir=${OMARCHY_IIO_DEVICES_DIR:-/sys/bus/iio/devices}
+
+  for d in "$iio_devices_dir"/iio:device*; do
+    [[ -r $d/name ]] || continue
+    name=$(<"$d/name")
+    [[ $name == *als* ]] || continue
+    if [[ -e $d/in_colortemp_input && -e $d/in_illuminance_input ]]; then
+      printf '%s\n' "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
+sensor=$(find_sensor || true)
+
+if [[ $available_only == 1 ]]; then
+  if [[ -n $sensor ]]; then
+    exit 0
+  else
+    exit 1
+  fi
+fi
+
+[[ -n $sensor ]] || exit 0
+[[ -e $ON_TOGGLE ]] || exit 0
+
+last_set=""
+settled=""
+average=""
+stepped_aside=0
+polls=0
+
+load_state() {
+  local saved=""
+  [[ -r $STATE_FILE ]] || return 0
+  read -r saved <"$STATE_FILE" 2>/dev/null || [[ -n $saved ]] || return 0
+  [[ $saved =~ ^[1-9][0-9]{3}$ ]] && last_set=$saved
+  return 0
+}
+
+save_state() {
+  if [[ -n $last_set ]]; then
+    { printf '%s\n' "$last_set" >"$STATE_FILE"; } 2>/dev/null || true
+  else
+    rm -f "$STATE_FILE" 2>/dev/null || true
+  fi
+}
+
+# Sets current from hyprsunset; fails when hyprsunset does not answer.
+read_current() {
+  local output=""
+  output=$(hyprctl hyprsunset temperature 2>/dev/null) || return 1
+  [[ $output =~ ([0-9]+) ]] || return 1
+  current=${BASH_REMATCH[1]}
+}
+
+start_hyprsunset() {
+  pgrep -x -u "$UID" hyprsunset >/dev/null 2>&1 && return 0
+  setsid uwsm-app -- hyprsunset >/dev/null 2>&1 &
+}
+
+# hyprsunset tints slightly even at 6500 K, so native white is its identity matrix.
+set_temperature() {
+  hyprctl hyprsunset temperature "$1" >/dev/null 2>&1 || return 1
+  if (( $1 >= NATIVE_KELVIN )); then
+    hyprctl hyprsunset identity >/dev/null 2>&1 || true
+  fi
+}
+
+fade_to() {
+  local from=$1 to=$2 step=$1
+  while (( step != to )); do
+    if (( to > step )); then
+      step=$(( step + FADE_STEP_KELVIN ))
+      (( step > to )) && step=$to
+    else
+      step=$(( step - FADE_STEP_KELVIN ))
+      (( step < to )) && step=$to
+    fi
+    set_temperature "$step" || return 1
+    (( step == to )) || sleep 0.05
+  done
+}
+
+# Sets average from the sensor, in millimired; a dark room or a missing reading keeps the last one.
+read_room() {
+  local lux="" kelvin="" reading
+  read -r lux <"$sensor/in_illuminance_input" 2>/dev/null || [[ -n $lux ]] || return 0
+  read -r kelvin <"$sensor/in_colortemp_input" 2>/dev/null || [[ -n $kelvin ]] || return 0
+  lux=${lux%%.*}
+  kelvin=${kelvin%%.*}
+  [[ $lux =~ ^[0-9]+$ && $kelvin =~ ^[1-9][0-9]*$ ]] || return 0
+  (( lux >= MIN_LUX && kelvin >= 1500 && kelvin <= 20000 )) || return 0
+  reading=$(( 1000000000 / kelvin ))
+  if [[ -z $average ]]; then
+    average=$reading
+  else
+    average=$(( average + (reading - average) * SMOOTH_PERCENT / 100 ))
+  fi
+}
+
+# hyprsunset is asked when the room asks for another white point, and otherwise once every RECHECK_POLLS,
+# so a night light turned off, or a hyprsunset restart, is noticed.
+tick() {
+  local effective
+  read_room
+  [[ -n $average ]] || return 0
+  millimired_to_target "$average"
+
+  if [[ $target == "$settled" ]] || (( stepped_aside )); then
+    (( polls % RECHECK_POLLS == 0 )) || return 0
+  fi
+
+  if ! read_current; then
+    start_hyprsunset
+    stepped_aside=1
+    return 0
+  fi
+
+  if [[ $current != "$last_set" ]]; then
+    # A warm temperature this loop did not write is night light (or a schedule): leave it.
+    if (( current < IDENTITY_KELVIN )); then
+      stepped_aside=1
+      return 0
+    fi
+    # Anything at or above the identity point is native white as far as the screen goes.
+    effective=$NATIVE_KELVIN
+    last_set=""
+  else
+    effective=$current
+  fi
+  stepped_aside=0
+
+  local difference=$(( target - effective ))
+  (( difference < 0 )) && difference=$(( -difference ))
+  if (( difference >= DEADBAND_KELVIN )) || (( target == NATIVE_KELVIN && effective != NATIVE_KELVIN )); then
+    if fade_to "$effective" "$target"; then
+      last_set=$target
+      (( target == NATIVE_KELVIN )) && last_set=""
+    fi
+    save_state
+  fi
+  settled=$target
+}
+
+# On the way out, put native white back if the screen still shows this loop's white point.
+restore_native() {
+  [[ -n $last_set ]] || return 0
+  read_current || return 0
+  [[ $current == "$last_set" ]] || return 0
+  set_temperature "$NATIVE_KELVIN" || return 0
+  last_set=""
+  save_state
+}
+
+mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
+load_state
+tick
+
+if (( once )); then
+  exit 0
+fi
+
+trap 'restore_native; exit 0' TERM INT
+
+while true; do
+  sleep "$POLL_SECONDS" &
+  wait $! || true
+  polls=$(( polls + 1 ))
+  if [[ ! -e $ON_TOGGLE ]]; then
+    restore_native
+    exit 0
+  fi
+  # Look for the sensor again only when it has gone (resume, a driver reload).
+  if [[ ! -e $sensor/in_colortemp_input ]]; then
+    sensor=$(find_sensor || true)
+    [[ -n $sensor ]] || continue
+  fi
+  tick
+done
