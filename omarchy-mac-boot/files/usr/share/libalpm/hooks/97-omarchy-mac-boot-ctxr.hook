@@ -1,0 +1,23 @@
+# An M4-and-later Mac boots m1n1/boot-ctxr.bin, the confined Stage 2 its Mach-O
+# Stage 1 loads, not m1n1/boot.bin, which is all update-m1n1 rebuilds. After
+# 95-m1n1-install.hook and the overlay and M3 Air hooks, rebuild it from the
+# same inputs so a kernel, device tree, U-Boot or boot loader update reaches
+# it. Every other Mac has no boot-ctxr.bin and is left alone.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/dtbs/*
+Target = usr/lib/asahi-boot/*
+Target = usr/lib/omarchy-mac-boot/dtb-overlays/*/*.dtbo
+
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = omarchy-mac-boot
+
+[Action]
+Description = Updating the confined m1n1 image of an M4 and later Mac...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr

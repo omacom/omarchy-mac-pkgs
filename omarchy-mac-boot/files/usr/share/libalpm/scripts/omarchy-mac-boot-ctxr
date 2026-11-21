@@ -1,0 +1,40 @@
+#!/bin/bash
+# 97-omarchy-mac-boot-ctxr.hook: rebuild m1n1/boot-ctxr.bin with update-m1n1,
+# as 95-m1n1-install.hook rebuilds m1n1/boot.bin, on a Mac that boots it (M4
+# and later, through aura's Mach-O Stage 1). It must fit the 16 MiB slot aura
+# keeps for it; an image that would not is undone and the transaction is told.
+
+set -uo pipefail
+
+esp=${OMARCHY_MAC_BOOT_CTXR_ESP:-}
+if [[ -z $esp ]]; then
+  esp=$(/usr/bin/omarchy-mac-esp 2>/dev/null) || exit 0
+fi
+target=$esp/m1n1/boot-ctxr.bin
+# Only a Mac installed with the confined Stage 2 has the file.
+[[ -f $target && ! -L $target ]] || exit 0
+
+update_m1n1=${OMARCHY_MAC_BOOT_CTXR_UPDATE_M1N1:-/usr/bin/update-m1n1}
+max=$((16 << 20))
+previous=$(mktemp "$esp/m1n1/.boot-ctxr.XXXXXX") || {
+  echo "omarchy-mac-boot-ctxr: could not save $target before rebuilding it" >&2
+  exit 1
+}
+trap 'rm -f "$previous"' EXIT
+cp -p "$target" "$previous" || {
+  echo "omarchy-mac-boot-ctxr: could not save $target before rebuilding it" >&2
+  exit 1
+}
+
+if ! "$update_m1n1" "$target"; then
+  cp -p "$previous" "$target"
+  echo "omarchy-mac-boot-ctxr: update-m1n1 failed; kept the previous $target" >&2
+  exit 1
+fi
+size=$(stat -c %s "$target")
+if (( size == 0 || size > max )); then
+  cp -p "$previous" "$target"
+  echo "omarchy-mac-boot-ctxr: the rebuilt image is $size bytes, outside the 16 MiB slot aura keeps for it; kept the previous $target" >&2
+  exit 1
+fi
+exit 0
