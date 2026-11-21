@@ -1,0 +1,17 @@
+[Unit]
+Description=Omarchy display white point from ambient light
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionPathExists=%h/.local/state/omarchy/toggles/white-point-auto-on
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecCondition=/usr/bin/omarchy-display-white-point-auto --available
+ExecStart=/usr/bin/omarchy-display-white-point-auto
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
