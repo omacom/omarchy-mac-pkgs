@@ -37,4 +37,6 @@ if (( ${#present[@]} )); then
   fi
   echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
 fi
+# Without the record this takes the re-arm out of sudo's and polkit's stacks.
+/usr/lib/omarchy-mac/touchid-pam || exit 1
 exit 0
