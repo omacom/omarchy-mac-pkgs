@@ -217,15 +217,42 @@ if [[ $running_kver != "$kver" ]]; then
   fi
 fi
 
-sudo lsinitcpio -l "$(path "/boot/initramfs-$kernel.img")" >"$workdir/initramfs" 2>/dev/null ||
-  fail "/boot/initramfs-$kernel.img cannot be listed"
-awk -v prefix="usr/lib/modules/$kver/" '{ sub(/^\.\//, "") } index($0, prefix) == 1 { found = 1 } END { exit !found }' \
-  "$workdir/initramfs" || fail "/boot/initramfs-$kernel.img does not hold the $kver modules"
-
 # A Limine Mac (install/hardware/apple/limine-boot.sh) boots the UKI from
 # Limine's menu and GRUB is not part of its boot; a GRUB Mac boots grub.cfg.
 limine_mac=0
 [[ -e $(path /var/lib/omarchy/limine.enabled) && -f $(path /etc/default/limine) ]] && limine_mac=1
+
+has_objcopy=0
+if command -v objcopy >/dev/null 2>&1; then
+  has_objcopy=1
+fi
+
+if (( limine_mac )); then
+  limine_esp=$(limine_esp_path)
+  [[ $limine_esp == /* ]] || fail "/etc/default/limine names no ESP_PATH"
+  limine_uki=$(path "$limine_esp/EFI/Linux/omarchy_$kernel.efi")
+  sudo test -f "$limine_uki" || fail "$limine_esp/EFI/Linux/omarchy_$kernel.efi (the Limine UKI) is missing"
+  initramfs_label="the initramfs inside $limine_esp/EFI/Linux/omarchy_$kernel.efi"
+  if (( has_objcopy )); then
+    initramfs_image=$workdir/uki.initrd
+    sudo objcopy -O binary --only-section=.initrd "$limine_uki" "$initramfs_image" 2>/dev/null &&
+      sudo test -s "$initramfs_image" || fail "cannot read $initramfs_label"
+  else
+    initramfs_image=""
+    echo "Apple Silicon boot check: objcopy (binutils) is not installed; not checking the initramfs inside the UKI" >&2
+  fi
+else
+  initramfs_image=$(path "/boot/initramfs-$kernel.img")
+  initramfs_label="/boot/initramfs-$kernel.img"
+fi
+
+if [[ -n $initramfs_image ]]; then
+  { sudo lsinitcpio -l "$initramfs_image" 2>/dev/null; } >"$workdir/initramfs" ||
+    fail "$initramfs_label cannot be listed"
+  awk -v prefix="usr/lib/modules/$kver/" '{ sub(/^\.\//, "") } index($0, prefix) == 1 { found = 1 } END { exit !found }' \
+    "$workdir/initramfs" || fail "$initramfs_label does not hold the $kver modules"
+fi
+
 grub_cfg=$(path /boot/grub/grub.cfg)
 if (( ! limine_mac )); then
   sudo grep -Fq "vmlinuz-$kernel" "$grub_cfg" && sudo grep -Fq "initramfs-$kernel.img" "$grub_cfg" ||
@@ -256,9 +283,8 @@ root_on_luks() {
 }
 
 sd_encrypt_in_initramfs() {
-  local image analyze
-  image=$(path "/boot/initramfs-$kernel.img")
-  analyze=$(sudo lsinitcpio -a "$image" 2>/dev/null) || return 1
+  local analyze
+  analyze=$(sudo lsinitcpio -a "$initramfs_image" 2>/dev/null) || return 1
   grep -Eq '(^|[[:space:]"=])sd-encrypt([[:space:]"]|$)' <<<"$analyze" && return 0
   grep -Eq '(^|/)(usr/lib/initcpio/)?hooks/sd-encrypt(/|$)' "$workdir/initramfs" && return 0
   # A systemd initramfs has no runtime hook named sd-encrypt and lsinitcpio -a
@@ -347,8 +373,10 @@ elif (( has_crypttab_root )); then
         ;;
     esac
   fi
-  sd_encrypt_in_initramfs ||
-    fail "/boot/initramfs-$kernel.img does not contain sd-encrypt"
+  if [[ -n $initramfs_image ]]; then
+    sd_encrypt_in_initramfs ||
+      fail "$initramfs_label does not contain sd-encrypt"
+  fi
 
   # First-boot window: throwaway keyfile and rd.luks.key= are allowed until
   # owner provisioning finishes (v3 item 1e). After that both must be gone,
@@ -406,12 +434,8 @@ fi
 # the LUKS mapping) the system needs, and the U-Boot slot must hold the
 # installed Limine.
 if (( limine_mac )); then
-  limine_esp=$(limine_esp_path)
-  [[ $limine_esp == /* ]] || fail "/etc/default/limine names no ESP_PATH"
   limine_cfg=$(path "$limine_esp/limine.conf")
-  limine_uki=$(path "$limine_esp/EFI/Linux/omarchy_$kernel.efi")
   limine_efi=$(path /usr/share/limine/BOOTAA64.EFI)
-  sudo test -f "$limine_uki" || fail "$limine_esp/EFI/Linux/omarchy_$kernel.efi (the Limine UKI) is missing"
   sudo test -f "$limine_cfg" || fail "$limine_esp/limine.conf is missing on a Limine Mac"
   # The menu starts its first kernel entry. Another kernel there, such as
   # linux-aurora-wip put ahead by a BOOT_ORDER edit, would boot instead of the
@@ -442,7 +466,7 @@ if (( limine_mac )); then
     fail "the Limine $kernel entry does not name a hash-verified omarchy_$kernel.efi"
   [[ $(sudo b2sum "$limine_uki" | cut -d' ' -f1) == "${limine_path##*#}" ]] ||
     fail "$limine_esp/EFI/Linux/omarchy_$kernel.efi does not match the hash in limine.conf"
-  if command -v objcopy >/dev/null 2>&1; then
+  if (( has_objcopy )); then
     uki_kernel=$workdir/uki.linux
     sudo objcopy -O binary --only-section=.linux "$limine_uki" "$uki_kernel" 2>/dev/null ||
       fail "$limine_esp/EFI/Linux/omarchy_$kernel.efi has no kernel section"
@@ -518,38 +542,24 @@ if (( has_crypttab_root || busybox_luks )) && [[ -f $host_vconsole ]]; then
   vconsole_keymap=$(vconsole_value KEYMAP "$host_vconsole")
   vconsole_layout=$(vconsole_value XKBLAYOUT "$host_vconsole")
   if vconsole_layout_carried "$host_vconsole"; then
-    initrd_dir=$workdir/vconsole-initrd
-    mkdir -p "$initrd_dir"
-    initrd_image=""
-    if (( limine_mac )); then
-      if command -v objcopy >/dev/null 2>&1; then
-        initrd_image=$workdir/uki.initrd
-        sudo objcopy -O binary --only-section=.initrd "$limine_uki" "$initrd_image" 2>/dev/null &&
-          sudo test -s "$initrd_image" ||
-          fail "cannot read the initramfs inside $limine_esp/EFI/Linux/omarchy_$kernel.efi"
-      else
-        echo "Apple Silicon boot check: objcopy (binutils) is not installed; not checking the keyboard layout in the UKI" >&2
-      fi
-    else
-      initrd_image=$(path "/boot/initramfs-$kernel.img")
-    fi
-    if [[ -n $initrd_image ]]; then
-      label="/boot/initramfs-$kernel.img"
-      rebuild="sudo /usr/bin/mkinitcpio -P && sudo omarchy-mac-boot-update"
+    if [[ -n $initramfs_image ]]; then
+      initrd_dir=$workdir/vconsole-initrd
+      mkdir -p "$initrd_dir"
       if (( limine_mac )); then
-        label="the initramfs inside $limine_esp/EFI/Linux/omarchy_$kernel.efi"
         rebuild="sudo omarchy-mac-boot-update"
+      else
+        rebuild="sudo /usr/bin/mkinitcpio -P && sudo omarchy-mac-boot-update"
       fi
       # Both archives: mkinitcpio keeps files that are already compressed, the
       # KEYMAP's .map.gz among them, in the early one.
-      (cd "$initrd_dir" && sudo lsinitcpio -x "$initrd_image" >/dev/null 2>&1) ||
-        fail "$label cannot be extracted"
+      (cd "$initrd_dir" && sudo lsinitcpio -x "$initramfs_image" >/dev/null 2>&1) ||
+        fail "$initramfs_label cannot be extracted"
       boot_image_carries_vconsole "$initrd_dir" "$host_vconsole" ||
-        fail "$label does not carry the keyboard layout of /etc/vconsole.conf (KEYMAP=${vconsole_keymap:-unset} XKBLAYOUT=${vconsole_layout:-unset}), so the disk passphrase prompt may type with another layout; rebuild the boot image with '$rebuild'"
+        fail "$initramfs_label does not carry the keyboard layout of /etc/vconsole.conf (KEYMAP=${vconsole_keymap:-unset} XKBLAYOUT=${vconsole_layout:-unset}), so the disk passphrase prompt may type with another layout; rebuild the boot image with '$rebuild'"
       mapfile -t layout_missing < <(boot_image_layout_missing "$initrd_dir" "$host_vconsole" "$busybox_luks")
       if (( ${#layout_missing[@]} )); then
         missing_text=$(printf '%s, ' "${layout_missing[@]}")
-        fail "$label carries /etc/vconsole.conf but not what loads it at the disk passphrase prompt (missing ${missing_text%, }); rebuild the boot image with '$rebuild'"
+        fail "$initramfs_label carries /etc/vconsole.conf but not what loads it at the disk passphrase prompt (missing ${missing_text%, }); rebuild the boot image with '$rebuild'"
       fi
       sudo rm -rf "$initrd_dir"
     fi

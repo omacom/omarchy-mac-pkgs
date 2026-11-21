@@ -102,6 +102,22 @@ limine_mac
 printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/initramfs"
 verify 6.16.0-aurora9-ARCH
 expect_refused "an initramfs built for the previous kernel" "does not hold the $mac_kver modules"
+
+limine_mac
+cp "$mac_state/initramfs" "$mac_state/boot-initramfs"
+printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/uki-initramfs"
+verify 6.16.0-aurora9-ARCH
+expect_refused "a Limine Mac whose UKI initramfs is stale while /boot/initramfs is current" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-aurora.efi does not hold the $mac_kver modules"
+
+limine_mac
+cp "$mac_state/initramfs" "$mac_state/uki-initramfs"
+printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$mac_state/boot-initramfs"
+verify 6.16.0-aurora9-ARCH
+expect_verified "a Limine Mac whose UKI initramfs is current while /boot/initramfs is stale"
+rm "$mac_root/boot/initramfs-linux-aurora.img"
+verify 6.16.0-aurora9-ARCH
+expect_verified "a Limine Mac whose UKI initramfs is current while /boot/initramfs is absent"
 pass "update-verify refuses a wrong device tree, a stale m1n1, a missing or stale UKI, another Limine or a stale initramfs, and says not to reboot"
 
 # The owner marker makes the check advisory. Without it, failures block updates.
@@ -289,6 +305,25 @@ limine_mac_luks
 printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/initramfs"
 verify
 expect_refused "an encrypted Mac whose initramfs cannot unlock the root" "does not contain sd-encrypt"
+
+limine_mac
+limine_mac_luks
+cp "$mac_state/initramfs" "$mac_state/boot-initramfs"
+printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/uki-initramfs"
+verify
+expect_refused "an encrypted Limine Mac whose UKI initramfs lacks sd-encrypt while /boot/initramfs has it" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-aurora.efi does not contain sd-encrypt"
+
+limine_mac
+limine_mac_luks
+cp "$mac_state/initramfs" "$mac_state/uki-initramfs"
+printf 'usr/lib/modules/%s/kernel/x.ko\nusr/bin/init\n' "$mac_kver" >"$mac_state/boot-initramfs"
+verify
+expect_verified "an encrypted Limine Mac whose UKI initramfs has sd-encrypt while /boot/initramfs lacks it"
+rm "$mac_root/boot/initramfs-linux-aurora.img"
+verify
+expect_verified "an encrypted Limine Mac whose UKI initramfs has sd-encrypt while /boot/initramfs is absent"
+
 limine_mac
 limine_mac_luks
 mac_cmdline="root=UUID=r rw rootflags=subvol=@ quiet"
