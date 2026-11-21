@@ -7,7 +7,8 @@
 export LC_ALL=C
 
 # Package-owned device tree overlays under /usr/lib/omarchy-mac-boot/dtb-overlays
-# (dtb-overlays.sh). With none installed, DTBS keeps update-m1n1's default.
+# (dtb-overlays.sh), merged over the DTBS set above this line, else over the newest
+# kernel's device trees. OMARCHY_DTB_OVERLAYS=0 set above this block turns it off.
 if [ -r /usr/lib/omarchy-mac/boot/dtb-overlays.sh ]; then
   . /usr/lib/omarchy-mac/boot/dtb-overlays.sh
   dtb_overlays_update_m1n1 || :
