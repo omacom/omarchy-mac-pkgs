@@ -1,0 +1,18 @@
+#!/bin/bash
+# Prints the modprobe.d line that lets the Secure Enclave driver set up Touch ID
+# on this Mac, for touchid-enable and enable-fingerprint to write.
+
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+omarchy-hw-apple-silicon || exit 0
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+options="xart_writes=1 provision_keybag=1"
+# The M1 Air's first setup rewrites key-store session records macOS created, which
+# the xART guard refuses; xart_guard_pins pins those, keeping the guard on (#506).
+if compatible apple,t8103 && compatible apple,j313; then
+  options+=" xart_guard_pins=1"
+fi
+printf 'options apple_sep %s\n' "$options"

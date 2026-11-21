@@ -1,0 +1,21 @@
+#!/bin/bash
+# Fails on the M1 Air (J313) unless apple_sep can pin its setup lockers
+# (xart_guard_pins, omacom/linux-aurora#506); every other Mac passes. Eligibility
+# asks it before offering Touch ID, the load unit before loading the driver.
+
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
+omarchy-hw-apple-silicon || exit 0
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+# A built-in driver lists no parameters, so it fails too.
+if compatible apple,t8103 && compatible apple,j313 &&
+  ! grep -q '^xart_guard_pins:' <<<"$("$modinfo" -p apple_sep 2>/dev/null)"; then
+  echo "This kernel's apple_sep has no xart_guard_pins, so Touch ID stays off on this M1 Air until a kernel with it boots." >&2
+  exit 1
+else
+  exit 0
+fi

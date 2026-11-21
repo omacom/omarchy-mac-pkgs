@@ -14,6 +14,9 @@ Before=display-manager.service fprintd.service
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+# An M1 Air set up with the pins that boots a kernel without them keeps the
+# driver off until a kernel with them is back.
+ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready
 ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer
 ExecStart=/usr/bin/modprobe apple-sep
 TimeoutStartSec=30s
