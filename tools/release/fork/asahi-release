@@ -2305,7 +2305,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 if (( abandon )); then
-  (( $# == 0 )) || usage
+  (( $# == 0 && ! dry_run )) || usage
   abandon_active
   exit 0
 fi

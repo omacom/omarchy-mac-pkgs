@@ -14,6 +14,7 @@ The commands that take a Mac change to installed Macs. They orchestrate; the pac
 | `lib/omacom.sh` | Reading omacom recipes and channel databases, pins, pull requests |
 | `test/omacom-lane` | The omacom lane against a fake repository, databases and `gh` |
 | `test/fork-parity` | The fork's own suites run against the relocated fork lane |
+| `test/fork-lane` | The fork lane's options against a release in progress, with nothing reaching the network |
 
 All commands need bash 5; on macOS run them with `/opt/homebrew/bin/bash`. None needs an omarchy-pkgs or omarchy-mx-mac checkout: they clone what they read.
 
@@ -107,7 +108,8 @@ Where omacom has no interface yet, the lane stops and says so rather than workin
 
 ```bash
 tools/release/test/omacom-lane
+tools/release/test/fork-lane
 FORK_PKGS_DIR=<fork checkout> tools/release/test/fork-parity
 ```
 
-`omacom-lane` runs a whole promotion against a fake omacom repository, fake channel databases and a fake `gh`: pin, gates, widening and a scoped advance. `fork-parity` runs the fork's own `test/asahi-release`, `test/asahi-runtime-release` and `test/aurora-mac-pin` against this directory's fork lane. It needs the fork CI's tools (Ubuntu with `libarchive-tools` and `pacman-package-manager`); the fork's Mac-update scenario does not run on macOS, even against the original.
+`omacom-lane` runs a whole promotion against a fake omacom repository, fake channel databases and a fake `gh`: pin, gates, widening and a scoped advance. `fork-lane` checks the fork lane's option combinations, such as `--dry-run` with `--abandon`, against a release in progress in a temporary state root. `fork-parity` runs the fork's own `test/asahi-release`, `test/asahi-runtime-release` and `test/aurora-mac-pin` against this directory's fork lane. It needs the fork CI's tools (Ubuntu with `libarchive-tools` and `pacman-package-manager`); the fork's Mac-update scenario does not run on macOS, even against the original.
