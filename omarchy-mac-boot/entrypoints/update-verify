@@ -41,7 +41,8 @@ echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
 if sudo test -f "$rollback_marker"; then
   if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
     echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
-    sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update ||
+    sudo mkinitcpio -P && sudo update-m1n1 && sudo "${OMARCHY_MAC_BOOT_CTXR:-/usr/share/libalpm/scripts/omarchy-mac-boot-ctxr}" &&
+      sudo omarchy-mac-boot-update ||
       echo "The rebuild did not finish; the check below says what is left" >&2
   fi
 fi
@@ -50,7 +51,7 @@ if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check 
 
 This Mac might not boot what the update installed, so do not reboot yet.
 Fix what the boot check reported above. To rebuild the initramfs, m1n1 and the boot menu:
-  sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update
+  sudo mkinitcpio -P && sudo update-m1n1 && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr && sudo omarchy-mac-boot-update
 Then run omarchy update again: it checks the boot files before it offers the reboot.
 MESSAGE
   exit 1

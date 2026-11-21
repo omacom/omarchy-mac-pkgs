@@ -34,6 +34,7 @@ verify() {
   (
     eval "$(limine_mac_env "$ROOT/bin" "${1:-}")"
     [[ -z ${TEST_REBUILDS:-} ]] || export PATH="$TEST_REBUILDS:$PATH"
+    export OMARCHY_MAC_BOOT_CTXR=$tmp/ctxr-stub
     bash "$entrypoint"
   ) >"$tmp/out" 2>"$tmp/err"
   status=$?
@@ -51,7 +52,7 @@ expect_refused() {
   local description=$1 reason=$2
   (( status == 1 )) || fail "$description fails update-verify" "status $status: $(cat "$tmp/out" "$tmp/err")"
   grep -Fq "$reason" "$tmp/err" || fail "$description is named" "$(cat "$tmp/err")"
-  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update" "$tmp/err" ||
+  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr && sudo omarchy-mac-boot-update" "$tmp/err" ||
     fail "$description says not to reboot and how to rebuild the boot files" "$(cat "$tmp/err")"
 }
 
@@ -364,6 +365,11 @@ echo update-m1n1 >>"$REBUILD_LOG"
 [[ -z ${REBUILD_FAILS:-} ]] || exit 1
 cp "$GOOD_BOOT_BIN" "$ESP_BOOT_BIN"
 SH
+cat >"$tmp/ctxr-stub" <<'SH'
+#!/bin/bash
+echo omarchy-mac-boot-ctxr >>"$REBUILD_LOG"
+SH
+chmod +x "$tmp/ctxr-stub"
 cat >"$stubs/omarchy-mac-boot-update" <<'SH'
 #!/bin/bash
 echo omarchy-mac-boot-update >>"$REBUILD_LOG"
@@ -388,7 +394,7 @@ limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a Mac with newer boot files after a rollback"
-[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-ctxr omarchy-mac-boot-update " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
 [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a finished rebuild clears the marker"
 pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
 

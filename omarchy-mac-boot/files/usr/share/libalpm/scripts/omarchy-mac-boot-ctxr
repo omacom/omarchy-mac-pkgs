@@ -1,40 +1,71 @@
 #!/bin/bash
-# 97-omarchy-mac-boot-ctxr.hook: rebuild m1n1/boot-ctxr.bin with update-m1n1,
-# as 95-m1n1-install.hook rebuilds m1n1/boot.bin, on a Mac that boots it (M4
-# and later, through aura's Mach-O Stage 1). It must fit the 16 MiB slot aura
-# keeps for it; an image that would not is undone and the transaction is told.
+# Rebuild m1n1/boot-ctxr.bin, the Stage 2 an M4-and-later Mac boots, as update-m1n1 rebuilds boot.bin:
+# into a staging name, held to aura's 16 MiB slot, then moved into place.
 
 set -uo pipefail
 
+say() { echo "omarchy-mac-boot-ctxr: $*" >&2; }
+
 esp=${OMARCHY_MAC_BOOT_CTXR_ESP:-}
 if [[ -z $esp ]]; then
-  esp=$(/usr/bin/omarchy-mac-esp 2>/dev/null) || exit 0
+  esp=$(/usr/bin/omarchy-mac-esp 2>/dev/null) || { say "no EFI system partition is mounted; boot-ctxr.bin not checked"; exit 0; }
 fi
 target=$esp/m1n1/boot-ctxr.bin
 # Only a Mac installed with the confined Stage 2 has the file.
 [[ -f $target && ! -L $target ]] || exit 0
 
 update_m1n1=${OMARCHY_MAC_BOOT_CTXR_UPDATE_M1N1:-/usr/bin/update-m1n1}
+config=${OMARCHY_MAC_BOOT_CTXR_CONFIG:-/etc/default/update-m1n1}
 max=$((16 << 20))
-previous=$(mktemp "$esp/m1n1/.boot-ctxr.XXXXXX") || {
-  echo "omarchy-mac-boot-ctxr: could not save $target before rebuilding it" >&2
-  exit 1
-}
-trap 'rm -f "$previous"' EXIT
-cp -p "$target" "$previous" || {
-  echo "omarchy-mac-boot-ctxr: could not save $target before rebuilding it" >&2
-  exit 1
-}
+# Aurora's update-m1n1 builds and trials boot-ctxr.bin itself with its bootchain.py.
+if grep -Fqs AURORA_BOOTCHAIN "$update_m1n1"; then
+  say "update-m1n1 is Aurora's, which keeps boot-ctxr.bin itself; nothing to do"
+  exit 0
+fi
 
-if ! "$update_m1n1" "$target"; then
-  cp -p "$previous" "$target"
-  echo "omarchy-mac-boot-ctxr: update-m1n1 failed; kept the previous $target" >&2
+# What update-m1n1 takes from its configuration before the path it is given, read in a clean shell.
+disabled="" configured=""
+if [[ -e $config ]]; then
+  values=$(env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
+    unset M1N1_UPDATE_DISABLED TARGET
+    . "$1" >/dev/null 2>&1 || exit 1
+    printf "%s\n%s\n" "${M1N1_UPDATE_DISABLED-}" "${TARGET-}"
+  ' _ "$config") || { say "$config cannot be read; boot-ctxr.bin not refreshed"; exit 1; }
+  { IFS= read -r disabled; IFS= read -r configured; } <<<"$values" || :
+fi
+if [[ -n $disabled ]]; then
+  say "M1N1_UPDATE_DISABLED is set in $config; boot-ctxr.bin not refreshed"
+  exit 0
+fi
+if [[ -n $configured ]]; then
+  say "$config sets TARGET=$configured, so update-m1n1 would not write boot-ctxr.bin; it was not refreshed"
   exit 1
 fi
-size=$(stat -c %s "$target")
+
+staging=$(mktemp "$esp/m1n1/.boot-ctxr.XXXXXX") || { say "could not stage a new boot-ctxr.bin on the ESP"; exit 1; }
+# update-m1n1 must create the staging file itself, so a run that wrote somewhere else is caught.
+rm -f "$staging"
+trap 'rm -f "$staging" "$staging.new" "$staging.old"' EXIT
+
+if ! "$update_m1n1" "$staging"; then
+  say "update-m1n1 failed; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+if [[ ! -f $staging || -L $staging ]]; then
+  say "update-m1n1 did not write the staged image; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+size=$(stat -c %s "$staging")
 if (( size == 0 || size > max )); then
-  cp -p "$previous" "$target"
-  echo "omarchy-mac-boot-ctxr: the rebuilt image is $size bytes, outside the 16 MiB slot aura keeps for it; kept the previous $target" >&2
+  say "the rebuilt image is $size bytes, outside the 16 MiB slot aura keeps for it; boot-ctxr.bin is unchanged"
   exit 1
 fi
+# Keep the previous image beside it, as update-m1n1 keeps boot.bin.old.
+cmp -s "$target" "$staging" || cp --preserve=timestamps -f "$target" "$target.old" ||
+  say "could not keep boot-ctxr.bin.old; continuing"
+if ! mv -f "$staging" "$target"; then
+  say "could not move the rebuilt image into place; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+echo "m1n1 confined Stage 2 updated at $target"
 exit 0
