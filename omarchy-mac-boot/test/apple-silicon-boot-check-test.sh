@@ -96,12 +96,18 @@ esac
 SH
 cat >"$stub_bin/lsinitcpio" <<'SH'
 #!/bin/bash
-if [[ "$1" == "-a" && -f "$2" ]]; then
-  cat "${TEST_INITRAMFS_ANALYZE:-$TEST_INITRAMFS_LIST.analyze}"
+list=$TEST_INITRAMFS_LIST
+analyze=${TEST_INITRAMFS_ANALYZE:-$TEST_INITRAMFS_LIST.analyze}
+if [[ -f ${2:-} ]] && grep -q '^initrd of ' "$2"; then
+  list=${TEST_UKI_INITRAMFS_LIST:-$list}
+  analyze=${TEST_UKI_INITRAMFS_ANALYZE:-$analyze}
+fi
+if [[ $1 == "-a" && -f $2 ]]; then
+  cat "$analyze"
   exit 0
 fi
-[[ "$1" == "-l" && -f "$2" ]] || exit 1
-cat "$TEST_INITRAMFS_LIST"
+[[ $1 == "-l" && -f $2 ]] || exit 1
+cat "$list"
 SH
 # mount copies what it would mount and remembers whether that mount is
 # read-only. A read-only mount of a device that is already mounted is refused,
@@ -352,7 +358,7 @@ run_check() {
     OMARCHY_BOOT_CHECK_UNAME="${TEST_UNAME:-$kver}" \
     OMARCHY_APPLE_SILICON_CHANNEL_ROOT="$root" \
     OMARCHY_APPLE_SILICON_CHANNEL_TESTING=1 \
-    PATH="$stub_bin:$ROOT/bin:$PATH" \
+    PATH="$stub_bin:$ROOT/bin:${TEST_PATH:-$PATH}" \
     bash "$check" "$@" >"$test_tmp/out" 2>"$test_tmp/err"
   status=$?
   set -e
@@ -552,7 +558,7 @@ expect_fail "a /boot kernel mkinitcpio did not replace" "/boot/vmlinuz-linux-aur
 system linux-aurora
 printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$test_tmp/initramfs"
 run_check
-expect_fail "an initramfs built for the previous kernel" "does not hold the $kver modules"
+expect_fail "an initramfs built for the previous kernel" "/boot/initramfs-linux-aurora.img does not hold the $kver modules"
 system linux-aurora
 printf 'linux /vmlinuz-linux-aurora\n' >"$root/boot/grub/grub.cfg"
 run_check
@@ -814,9 +820,22 @@ pass "missing sync database warnings are not altered package files"
 # filesystem, and the hash-verified UKI carries the installed kernel.
 cat >"$stub_bin/objcopy" <<'SH'
 #!/bin/bash
-# Fixture UKIs are the kernel bytes followed by a marker: .linux is the file.
-[[ $* == "-O binary --only-section=.linux "* ]] || exit 1
-cp "$4" "$5"
+# Fixture UKIs are the kernel bytes followed by a marker: .linux is the file,
+# and .initrd stands for the embedded initramfs.
+[[ "$1 $2" == "-O binary" && -f $4 ]] || exit 1
+case $3 in
+  --only-section=.linux) cp "$4" "$5" ;;
+  --only-section=.initrd)
+    if [[ ${TEST_UKI_INITRD_FAIL:-0} == "1" ]]; then
+      exit 1
+    elif [[ ${TEST_EMPTY_UKI_INITRD:-0} == "1" ]]; then
+      : >"$5"
+    else
+      printf 'initrd of %s\n' "$4" >"$5"
+    fi
+    ;;
+  *) exit 1 ;;
+esac
 SH
 chmod +x "$stub_bin/objcopy"
 limine_system() {
@@ -865,17 +884,58 @@ printf 'an older kernel\n' >"$uki"
 sed -i "s/#[0-9a-f]*$/#$(b2sum "$uki" | cut -d' ' -f1)/" "$root/boot/efi/limine.conf"
 run_check
 expect_fail "a UKI from another kernel" "does not carry the installed $kver kernel"
-# Without binutils the kernel comparison is skipped and said so; only
-# observable where the host has no objcopy of its own.
-if ! command -v objcopy >/dev/null 2>&1; then
-  limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
-  mv "$stub_bin/objcopy" "$test_tmp/objcopy"
-  run_check
-  mv "$test_tmp/objcopy" "$stub_bin/objcopy"
-  expect_pass "a Limine Mac without binutils"
-  grep -Fq "not checking the kernel inside the UKI" "$test_tmp/err" || fail "a skipped kernel check is named" "$(cat "$test_tmp/err")"
-fi
-pass "the Limine entry's hash and the UKI's kernel are checked"
+# The initramfs checked on a Limine Mac is the UKI's .initrd, not /boot/initramfs-*.img.
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+printf 'usr/lib/modules/6.13.0-old-ARCH/kernel/x.ko\nusr/bin/init\n' >"$test_tmp/stale-initramfs"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/stale-initramfs" run_check
+expect_fail "a Limine Mac whose UKI initramfs lacks the installed kernel modules" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi does not hold the $kver modules"
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+cp "$test_tmp/initramfs" "$test_tmp/current-uki-initramfs"
+printf 'usr/lib/modules/6.13.0-old-ARCH/kernel/x.ko\nusr/bin/init\n' >"$test_tmp/initramfs"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/current-uki-initramfs" run_check
+expect_pass "a Limine Mac with a stale /boot/initramfs and current UKI initramfs"
+rm "$root/boot/initramfs-linux-asahi.img"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/current-uki-initramfs" run_check
+expect_pass "a Limine Mac with no /boot/initramfs and current UKI initramfs"
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+TEST_EMPTY_UKI_INITRD=1 run_check
+expect_fail "a Limine Mac whose UKI initramfs is empty" \
+  "cannot read the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi"
+TEST_UKI_INITRD_FAIL=1 run_check
+expect_fail "a Limine Mac whose UKI has no .initrd section" \
+  "cannot read the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi"
+# Without binutils both UKI section checks are skipped and reported on stderr.
+no_objcopy_path=$test_tmp/no-objcopy-path
+mkdir -p "$no_objcopy_path"
+IFS=: read -ra host_path <<<"$PATH"
+# Walk PATH backwards so ln -sf leaves the first match, as command lookup would.
+for (( i = ${#host_path[@]} - 1; i >= 0; i-- )); do
+  dir=${host_path[i]}
+  [[ $dir == /* && -d $dir ]] || continue
+  find "$dir" -maxdepth 1 -xtype f -perm /111 ! -name objcopy -exec ln -sf -t "$no_objcopy_path" {} +
+done
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+mv "$stub_bin/objcopy" "$test_tmp/objcopy"
+TEST_PATH="$no_objcopy_path" run_check
+expect_pass "a Limine Mac without binutils"
+grep -Fq "objcopy (binutils) is not installed; not checking the initramfs inside the UKI" "$test_tmp/err" ||
+  fail "a skipped initramfs check is named" "$(cat "$test_tmp/err")"
+grep -Fq "not checking the kernel inside the UKI" "$test_tmp/err" ||
+  fail "a skipped kernel check is named" "$(cat "$test_tmp/err")"
+# An encrypted Limine Mac without binutils skips UKI initramfs checks (including sd-encrypt) too.
+limine_system /boot/efi '/dev/mapper/root / btrfs rw,subvol=/@ 0 0' \
+  'root=UUID=r rw rootflags=subvol=@ rd.luks.name=0422663f-9969-4953-900f-b342703b7e84=root quiet'
+mkdir -p "$root/var/lib/omarchy/mac-first-boot"
+: >"$root/var/lib/omarchy/mac-first-boot/pending"
+printf 'root UUID=0422663f-9969-4953-900f-b342703b7e84 none luks\n' >"$root/etc/crypttab"
+rm "$root/boot/initramfs-linux-asahi.img"
+TEST_PATH="$no_objcopy_path" run_check --boot-chain
+mv "$test_tmp/objcopy" "$stub_bin/objcopy"
+expect_pass "an encrypted Limine Mac without binutils and without /boot/initramfs"
+grep -Fq "objcopy (binutils) is not installed; not checking the initramfs inside the UKI" "$test_tmp/err" ||
+  fail "a skipped encrypted initramfs check is named" "$(cat "$test_tmp/err")"
+pass "the Limine entry's hash and the UKI's kernel and initramfs are checked"
 
 limine_system /boot/efi 'UUID=r / ext4 rw,relatime 0 1' 'root=UUID=r rw quiet'
 run_check
