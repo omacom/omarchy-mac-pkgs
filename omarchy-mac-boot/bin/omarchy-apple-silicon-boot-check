@@ -23,6 +23,9 @@
 # over with M1N1_UPDATE_DISABLED. OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1, from a
 # snapshot restore across a boot update, leaves out the ESP's Limine and
 # m1n1/boot.bin: they booted that snapshot, and may be newer than its packages.
+#
+# Where /usr/bin/update-m1n1 is Aurora's, Stage 2 and its trials are checked
+# against what its bootchain.py plans instead (aurora-stage2.sh).
 
 set -euo pipefail
 
@@ -566,9 +569,84 @@ overlay_lib=$(dirname -- "$(realpath -- "$0")")/../lib/omarchy-mac/boot/dtb-over
 # shellcheck source=../lib/dtb-overlays.sh
 source "$overlay_lib"
 
+# The system ESP, found the way asahi-scripts' mount_sys_esp finds it. It is
+# only ever read through a mount that is read-only from the start: a fresh one
+# when the ESP is not mounted, else a read-only bind of the mount it already has.
+mounted_read_only() {
+  local options
+  options=$(findmnt -n -o VFS-OPTIONS --mountpoint "$mountpoint" 2>/dev/null) || return 1
+  [[ ,$options, == *,ro,* ]]
+}
+
+# mount's stdout carries libmount's warnings and infos, and its fstab hint, which
+# a boot clock set after systemd loads units makes wrong on every update. This
+# hides all of them; mount's errors stay on stderr.
+bind_read_only() {
+  sudo mount --bind -o ro "$1" "$mountpoint" >/dev/null || return 1
+  mounted_read_only && return 0
+  sudo mount -o remount,bind,ro "$mountpoint" >/dev/null && mounted_read_only
+}
+
+mount_system_esp() {
+  mountpoint=$(sudo mktemp -d "$(path /run)/omarchy-esp.XXXXXX") || fail "cannot make a private mountpoint"
+  esp_uuid=""
+  esp_node=$(path /proc/device-tree/chosen/asahi,efi-system-partition)
+  [[ ! -r $esp_node ]] || esp_uuid=$(tr -d '\0' <"$esp_node")
+  if [[ -e $(path /boot/efi/.builder) || -e $(path /boot/.builder) || -z $esp_uuid ]]; then
+    if [[ -e $(path /boot/efi/m1n1) ]]; then
+      esp=/boot/efi
+    elif [[ -e $(path /boot/m1n1) ]]; then
+      esp=/boot
+    else
+      fail "the system ESP is not named in the device tree and there is no m1n1 in /boot/efi or /boot"
+    fi
+    bind_read_only "$(path "$esp")" || fail "cannot mount $esp read-only"
+  else
+    esp="PARTUUID=$esp_uuid"
+    existing=$(findmnt -n -r -o TARGET,FSROOT --source "$esp" 2>/dev/null | awk '$2 == "/" { print $1; exit }' || true)
+    if [[ -n $existing ]]; then
+      [[ -d $existing ]] || fail "the system ESP ($esp) is mounted at $existing, which cannot be read"
+      bind_read_only "$existing" || fail "cannot bind the system ESP ($esp) read-only from $existing"
+    else
+      sudo mount -o ro "$esp" "$mountpoint" >/dev/null && mounted_read_only || fail "cannot mount the system ESP ($esp) read-only"
+    fi
+  fi
+}
+
+# U-Boot starts the loader on the system ESP, so the Limine, menu and UKI
+# checked above must be the ones there.
+limine_on_system_esp() {
+  local file
+  if (( limine_mac )); then
+    for file in EFI/BOOT/BOOTAA64.EFI limine.conf "EFI/Linux/omarchy_$kernel.efi"; do
+      sudo cmp -s "$(path "$limine_esp/$file")" "$mountpoint/$file" ||
+        fail "$limine_esp/$file is not the one on the system ESP ($esp), which U-Boot boots; point ESP_PATH in /etc/default/limine at that ESP's mountpoint, then run sudo omarchy-mac-boot-update and omarchy update"
+    done
+  fi
+}
+
+report_running_release() {
+  if (( pending_reboot )); then
+    echo "Apple Silicon boot check: installed $kernel $kver boot files match; running $running_kver, reboot pending"
+  else
+    echo "Apple Silicon boot check: running $kernel $kver; installed boot files match"
+  fi
+}
+
+# Aurora's update-m1n1 hands Stage 2 to its bootchain.py (aurora-stage2.sh).
+aurora_lib=$(dirname -- "$(realpath -- "$0")")/../lib/omarchy-mac/boot/aurora-stage2.sh
+[[ -r $aurora_lib ]] || aurora_lib=$(dirname -- "$(realpath -- "$0")")/../lib/aurora-stage2.sh
+# shellcheck source=../lib/aurora-stage2.sh
+source "$aurora_lib"
+
 # m1n1 stage 2, built the way this update-m1n1 builds it.
 script=$(path /usr/bin/update-m1n1)
 [[ -r $script ]] || fail "/usr/bin/update-m1n1 is not installed"
+if aurora_update_m1n1 "$script"; then
+  aurora_check_stage2 "$script"
+  report_running_release
+  exit 0
+fi
 for step in 'cat "$M1N1" $DTBS >"${TARGET}.new"' 'gzip -c "$U_BOOT" >>"${TARGET}.new"' 'chosen.*=*|display=*|mitigations=*)'; do
   grep -Fq -- "$step" "$script" || fail "/usr/bin/update-m1n1 does not build m1n1/boot.bin the way this check rebuilds it"
 done
@@ -801,65 +879,9 @@ dtb_order() {
   done
 }
 
-# The system ESP, found the way asahi-scripts' mount_sys_esp finds it. It is
-# only ever read through a mount that is read-only from the start: a fresh one
-# when the ESP is not mounted, else a read-only bind of the mount it already has.
-mountpoint=$(sudo mktemp -d "$(path /run)/omarchy-esp.XXXXXX") || fail "cannot make a private mountpoint"
-
-mounted_read_only() {
-  local options
-  options=$(findmnt -n -o VFS-OPTIONS --mountpoint "$mountpoint" 2>/dev/null) || return 1
-  [[ ,$options, == *,ro,* ]]
-}
-
-# mount's stdout carries libmount's warnings and infos, and its fstab hint, which
-# a boot clock set after systemd loads units makes wrong on every update. This
-# hides all of them; mount's errors stay on stderr.
-bind_read_only() {
-  sudo mount --bind -o ro "$1" "$mountpoint" >/dev/null || return 1
-  mounted_read_only && return 0
-  sudo mount -o remount,bind,ro "$mountpoint" >/dev/null && mounted_read_only
-}
-
-esp_uuid=""
-esp_node=$(path /proc/device-tree/chosen/asahi,efi-system-partition)
-[[ ! -r $esp_node ]] || esp_uuid=$(tr -d '\0' <"$esp_node")
-if [[ -e $(path /boot/efi/.builder) || -e $(path /boot/.builder) || -z $esp_uuid ]]; then
-  if [[ -e $(path /boot/efi/m1n1) ]]; then
-    esp=/boot/efi
-  elif [[ -e $(path /boot/m1n1) ]]; then
-    esp=/boot
-  else
-    fail "the system ESP is not named in the device tree and there is no m1n1 in /boot/efi or /boot"
-  fi
-  bind_read_only "$(path "$esp")" || fail "cannot mount $esp read-only"
-else
-  esp="PARTUUID=$esp_uuid"
-  existing=$(findmnt -n -r -o TARGET,FSROOT --source "$esp" 2>/dev/null | awk '$2 == "/" { print $1; exit }' || true)
-  if [[ -n $existing ]]; then
-    [[ -d $existing ]] || fail "the system ESP ($esp) is mounted at $existing, which cannot be read"
-    bind_read_only "$existing" || fail "cannot bind the system ESP ($esp) read-only from $existing"
-  else
-    sudo mount -o ro "$esp" "$mountpoint" >/dev/null && mounted_read_only || fail "cannot mount the system ESP ($esp) read-only"
-  fi
-fi
-
+mount_system_esp
 sudo test -f "$mountpoint/m1n1/boot.bin" || fail "the system ESP ($esp) has no m1n1/boot.bin"
-# U-Boot starts the loader on the system ESP, so the Limine, menu and UKI
-# checked above must be the ones there.
-if (( limine_mac )); then
-  for file in EFI/BOOT/BOOTAA64.EFI limine.conf "EFI/Linux/omarchy_$kernel.efi"; do
-    sudo cmp -s "$(path "$limine_esp/$file")" "$mountpoint/$file" ||
-      fail "$limine_esp/$file is not the one on the system ESP ($esp), which U-Boot boots; point ESP_PATH in /etc/default/limine at that ESP's mountpoint, then run sudo omarchy-mac-boot-update and omarchy update"
-  done
-fi
-report_running_release() {
-  if (( pending_reboot )); then
-    echo "Apple Silicon boot check: installed $kernel $kver boot files match; running $running_kver, reboot pending"
-  else
-    echo "Apple Silicon boot check: running $kernel $kver; installed boot files match"
-  fi
-}
+limine_on_system_esp
 if [[ -n $disabled ]]; then
   echo "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin is its owner's and is not checked"
   report_running_release
