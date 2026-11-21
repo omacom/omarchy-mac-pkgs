@@ -6,9 +6,14 @@ set -uo pipefail
 
 say() { echo "omarchy-mac-boot-ctxr: $*" >&2; }
 
+# With --verify, as update-verify runs it, an ESP that is not mounted exits 3, so the
+# rollback marker stays; the pacman hook runs it without and takes that as success.
+no_esp_status=0
+[[ ${1:-} != --verify ]] || no_esp_status=3
 esp=${OMARCHY_MAC_BOOT_CTXR_ESP:-}
 if [[ -z $esp ]]; then
-  esp=$(/usr/bin/omarchy-mac-esp 2>/dev/null) || { say "no EFI system partition is mounted; boot-ctxr.bin not checked"; exit 0; }
+  esp=$("${OMARCHY_MAC_BOOT_CTXR_FIND_ESP:-/usr/bin/omarchy-mac-esp}" 2>/dev/null) ||
+    { say "no EFI system partition is mounted; boot-ctxr.bin not checked"; exit "$no_esp_status"; }
 fi
 target=$esp/m1n1/boot-ctxr.bin
 # Only a Mac installed with the confined Stage 2 has the file.

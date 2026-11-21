@@ -35,24 +35,34 @@ if [[ -f $owner_boot_chain ]]; then
 fi
 
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
-# The marker stays until the check below passes and every rebuild finished, so
-# a rebuild that does not converge is tried again by the next update. The check
-# cannot see boot-ctxr.bin, so while the marker is there that rebuild runs even
-# when the check passes. A Mac whose owner manages its boot chain never rebuilds
-# here, so the marker means nothing there.
+# The marker stays until the check passes and every rebuild finished. The check
+# can't see boot-ctxr.bin, so that rebuild runs while the marker is there.
 # OMARCHY_MAC_BOOT_CTXR is a test seam; it expands in this shell and runs under sudo.
 boot_ctxr=${OMARCHY_MAC_BOOT_CTXR:-/usr/share/libalpm/scripts/omarchy-mac-boot-ctxr}
-repair_failed=""
+repair_failed="" ctxr_failed="" ctxr_unchecked=""
 if sudo test -f "$rollback_marker"; then
+  ctxr_status=0
   if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
     echo "A snapshot restore left newer boot files on this Mac; rebuilding them from the installed packages"
-    sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo "$boot_ctxr" ||
-      { repair_failed="sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
-        echo "The rebuild after the snapshot restore did not finish" >&2; }
-  elif ! sudo "$boot_ctxr"; then
-    repair_failed="sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
-    echo "Rebuilding boot-ctxr.bin after the snapshot restore did not finish" >&2
+    if sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update; then
+      sudo "$boot_ctxr" --verify
+      ctxr_status=$?
+    else
+      repair_failed="sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
+      echo "The rebuild after the snapshot restore did not finish" >&2
+    fi
+  else
+    sudo "$boot_ctxr" --verify
+    ctxr_status=$?
   fi
+  case $ctxr_status in
+    0) ;;
+    3) ctxr_unchecked=1 ;;
+    *)
+      repair_failed="sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" ctxr_failed=1
+      echo "Rebuilding boot-ctxr.bin after the snapshot restore did not finish" >&2
+      ;;
+  esac
 fi
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
   cat >&2 <<'MESSAGE'
@@ -64,18 +74,22 @@ Then run omarchy update again: it checks the boot files before it offers the reb
 MESSAGE
   exit 1
 elif [[ -n $repair_failed ]]; then
-  # The check cannot see boot-ctxr.bin, so a failed rebuild keeps the marker. Some
-  # failures, such as a TARGET in /etc/default/update-m1n1, repeat until fixed.
+  # The check cannot see boot-ctxr.bin, so a failed rebuild keeps the marker.
   cat >&2 <<MESSAGE
 
 The boot files were not all rebuilt, so do not reboot yet.
 Fix what was reported above, then rebuild them:
   $repair_failed
-Then run omarchy update again. A TARGET in /etc/default/update-m1n1 stops boot-ctxr.bin
-from being rebuilt: remove it, or create /etc/omarchy-mac-boot/owner-boot-chain to manage
-this boot chain yourself.
+Then run omarchy update again.
+MESSAGE
+  # A TARGET in /etc/default/update-m1n1 fails it on every update until it is removed.
+  [[ -z $ctxr_failed ]] || cat >&2 <<'MESSAGE'
+A TARGET in /etc/default/update-m1n1 stops boot-ctxr.bin from being rebuilt: remove it,
+or create /etc/omarchy-mac-boot/owner-boot-chain to manage this boot chain yourself.
 MESSAGE
   exit 1
+elif [[ -n $ctxr_unchecked ]]; then
+  echo "The system ESP is not mounted at /boot/efi or /boot, so the boot-ctxr.bin of an M4 or later was not checked; mount it and run omarchy update again" >&2
 else
   sudo rm -f "$rollback_marker"
 fi

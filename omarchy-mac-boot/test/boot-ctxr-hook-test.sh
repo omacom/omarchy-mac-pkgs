@@ -38,6 +38,19 @@ SIZE=10 BYTE=n bash "$script" || fail "a Mac without boot-ctxr.bin fails the hoo
 [[ ! -s $CALLS && ! -e $esp/m1n1/boot-ctxr.bin ]] || fail "a Mac without boot-ctxr.bin gets one"
 pass "a Mac without the confined Stage 2 is left alone"
 
+# No ESP mounted: the hook takes it as success; update-verify's --verify gets 3, to keep its marker.
+printf '#!/bin/bash\nexit 1\n' >"$tmp/bin/no-esp"
+chmod +x "$tmp/bin/no-esp"
+: >"$CALLS"
+OMARCHY_MAC_BOOT_CTXR_ESP= OMARCHY_MAC_BOOT_CTXR_FIND_ESP=$tmp/bin/no-esp bash "$script" 2>/dev/null || fail "an unmounted ESP fails the hook"
+set +e
+OMARCHY_MAC_BOOT_CTXR_ESP= OMARCHY_MAC_BOOT_CTXR_FIND_ESP=$tmp/bin/no-esp bash "$script" --verify 2>"$tmp/err"
+status=$?
+set -e
+(( status == 3 )) && grep -Fq "no EFI system partition is mounted" "$tmp/err" || fail "--verify does not report an unmounted ESP with status 3" "status $status: $(<"$tmp/err")"
+[[ ! -s $CALLS ]] || fail "an unmounted ESP runs update-m1n1"
+pass "an unmounted ESP passes the hook and exits 3 for update-verify"
+
 # An M4: built into a staging name on the ESP, then moved into place, the previous kept as .old.
 printf 'old image' >"$esp/m1n1/boot-ctxr.bin"
 : >"$CALLS"
