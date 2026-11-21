@@ -1,0 +1,10 @@
+#!/bin/bash
+# Before iwd starts, link the N1 default ahead of the Apple one, which keeps iwd off 6 GHz,
+# on an N1 (centauri, 106b:1900/1901) only. Every other Mac, or a failure here, keeps the Apple default.
+set -o pipefail
+link="${1:-}/run/omarchy-mac/iwd/main.conf"
+if omarchy-hw-apple-silicon && lspci -nn | grep -E '106b:190[01]' >/dev/null; then
+  mkdir -p "${link%/*}" && ln -sfn /usr/lib/omarchy-mac/iwd-centauri/main.conf "$link"
+else
+  rm -f "$link"
+fi
