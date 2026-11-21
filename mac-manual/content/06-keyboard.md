@@ -16,7 +16,7 @@ Apple keyboards have no Print Screen key, so Omarchy's `Print` bindings have no 
 
 ## Keyboard backlight
 
-On Macs with an ambient light sensor, the keyboard backlight follows the room: lit in the dark, off in bright light. Apple Silicon keyboards have no backlight keys; `Ctrl` plus the display brightness keys sets the keyboard backlight by hand, and a level set that way holds until the light in the room changes a lot.
+On Macs with an ambient light sensor, the keyboard backlight follows the room: lit in the dark, off in bright light. Apple Silicon keyboards have no backlight keys; `Ctrl` plus the display brightness keys sets the keyboard backlight by hand, and a level set that way holds until the light in the room changes a lot. In the dark the keys go to the last level you set by hand, or to a quarter of full until you have set one, and a level already lit when you log in is kept.
 
 To turn the automatic keyboard light off, create `~/.local/state/omarchy/toggles/keyboard-light-auto-off`; it stops within a few seconds. Delete the file and run `systemctl --user start omarchy-brightness-keyboard-auto` (or log in again) to turn it back on.
 

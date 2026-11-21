@@ -29,6 +29,12 @@ EFFECTIVELY_OFF_PERCENT=2
 MANUAL_LEVEL_FILE="${XDG_RUNTIME_DIR:-/tmp}/omarchy-brightness-keyboard-manual"
 # Touch this file to turn the automatic keyboard light off (the unit will not start, a running loop stops).
 OFF_TOGGLE="$HOME/.local/state/omarchy/toggles/keyboard-light-auto-off"
+# The dark end of the lux line is the last level set by hand; until there is one, the dark point of
+# macOS's own automatic keyboard light (a quarter of the range).
+DARK_DEFAULT_PERCENT=25
+# Holds that dark-end percent and the last level this loop wrote, so a level found lit at start can be
+# told apart from one the loop left there itself.
+STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/keyboard-light-auto"
 
 once=0
 available_only=0
@@ -70,13 +76,32 @@ lux_to_percent() {
   (( lux < 0 )) && lux=0
 
   if (( lux <= DARK_LUX )); then
-    pct=100
+    pct=$dark_percent
   elif (( lux >= BRIGHT_LUX )); then
     pct=0
   else
-    pct=$(( (100 * (BRIGHT_LUX - lux)) / (BRIGHT_LUX - DARK_LUX) ))
+    pct=$(( (dark_percent * (BRIGHT_LUX - lux)) / (BRIGHT_LUX - DARK_LUX) ))
   fi
 }
+
+dark_percent=$DARK_DEFAULT_PERCENT
+auto_level=""
+
+# Sets dark_percent and auto_level from the state file; a missing or unreadable file keeps the defaults.
+load_state() {
+  local saved_dark="" saved_auto=""
+  [[ -r $STATE_FILE ]] || return 0
+  read -r saved_dark saved_auto <"$STATE_FILE" 2>/dev/null || [[ -n $saved_dark ]] || return 0
+  [[ $saved_dark =~ ^(100|[1-9][0-9]?)$ ]] && dark_percent=$saved_dark
+  [[ $saved_auto =~ ^(0|[1-9][0-9]*)$ ]] && auto_level=$saved_auto
+  return 0
+}
+
+save_state() {
+  { printf '%s %s\n' "$dark_percent" "$auto_level" >"$STATE_FILE"; } 2>/dev/null || true
+}
+
+load_state
 
 if [[ -n $map_lux ]]; then
   [[ $map_lux =~ ^[0-9]+$ ]] || {
@@ -220,6 +245,31 @@ apply_percent() {
   else
     last_set=$target
   fi
+  auto_level=$last_set
+  save_state
+}
+
+# A lit level set by hand becomes the dark end of the line; off by hand is a pause, not a new dark end.
+remember_hand_level() {
+  local level=$1
+  (( level * 100 > max * EFFECTIVELY_OFF_PERCENT )) || return 0
+  dark_percent=$(( (level * 100 + max / 2) / max ))
+  (( dark_percent > 100 )) && dark_percent=100
+  (( dark_percent < 1 )) && dark_percent=1
+  save_state
+}
+
+# A level lit when the loop starts was chosen, by hand or restored from before: keep it like one set by
+# hand. Off, or the level this loop wrote last, is not a choice and the room decides.
+adopt_start_level() {
+  read_level || return 0
+  (( level * 100 > max * EFFECTIVELY_OFF_PERCENT )) || return 0
+  [[ $level != "$auto_level" ]] || return 0
+  read_lux || lux=0
+  last_set=$level
+  paused=1
+  pause_lux=$lux
+  remember_hand_level "$level"
 }
 
 # Off by accident rather than by the keyboard-brightness keys, which record
@@ -257,6 +307,7 @@ tick() {
     else
       paused=1
       pause_lux=$lux
+      remember_hand_level "$current"
       return 0
     fi
   fi
@@ -280,6 +331,8 @@ tick() {
 
 [[ -e $OFF_TOGGLE ]] && exit 0
 
+mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
+adopt_start_level
 tick
 
 if (( once )); then
