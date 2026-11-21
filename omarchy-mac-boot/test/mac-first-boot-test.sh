@@ -512,7 +512,7 @@ expect_handoff "keyring init"
   "$case_dir/pacman-key.log") == $'init\npopulate' ]] ||
   fail "pacman-key initializes and populates the existing platform policy in order"
 ! grep -Eq -- '--(add|lsign-key)' "$case_dir/pacman-key.log" || fail "first boot imports no additional repository key"
-grep -Eq -- '--populate archlinuxarm asahi-alarm omarchy$' "$case_dir/pacman-key.log" ||
+grep -Eq -- '--populate archlinuxarm omarchy$' "$case_dir/pacman-key.log" ||
   fail "the Omarchy release keyring is populated when omarchy-keyring ships it (omarchy-update-keyring requires it)"
 
 new_case keyring-retry
@@ -523,8 +523,8 @@ mv "$case_dir/omarchy-provision-owner" "$root/usr/bin/omarchy-provision-owner"
 : >"$case_dir/systemctl.log"
 expect_handoff "retry after keyring init"
 [[ $(grep -c -- '--init' "$case_dir/pacman-key.log") == 1 ]] || fail "a retry does not initialise the keyring again"
-grep -Eq -- '--populate archlinuxarm asahi-alarm$' "$case_dir/pacman-key.log" ||
-  fail "without omarchy.gpg the populate list stays archlinuxarm asahi-alarm"
+grep -Eq -- '--populate archlinuxarm$' "$case_dir/pacman-key.log" ||
+  fail "without omarchy.gpg only Arch Linux ARM's keyring is populated"
 
 new_case no-rearm-provisioning
 write_esp 'format=1' 'encrypt=0'

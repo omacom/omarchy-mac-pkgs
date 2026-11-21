@@ -1,0 +1,130 @@
+#!/bin/bash
+# Moves this Mac off the [asahi-alarm] repository: drops its pacman.conf
+# section, then the asahi-alarm-keyring package and its signing key. Omarchy
+# builds every package Macs took from it, and this package is only published
+# with them. Machine-wide and idempotent: omarchy-mac-drop-asahi-alarm.service
+# runs it as root at boot and after every pacman transaction until it records
+# a verified cleanup. Anything that still needs the keyring leaves everything
+# in place for the next run, since omarchy-update-keyring reinstalls a listed
+# keyring from a repository that must still exist.
+set -euo pipefail
+
+state=${OMARCHY_MAC_ASAHI_ALARM_STATE:-/var/lib/omarchy/mac-drop-asahi-alarm}
+pacman_conf=${OMARCHY_MAC_PACMAN_CONF:-/etc/pacman.conf}
+platform_keyrings=${OMARCHY_MAC_PLATFORM_KEYRINGS:-/usr/share/omarchy-platform/keyrings}
+pacman_lock=${OMARCHY_MAC_PACMAN_LOCK:-/var/lib/pacman/db.lck}
+lock_wait=${OMARCHY_MAC_PACMAN_LOCK_WAIT:-600}
+repo=asahi-alarm
+keyring=asahi-alarm-keyring
+key=12CE6799A94A3F1B5DDFFE88F576553597FB8FEB
+# Each package Omarchy builds in place of asahi-alarm's, as old:new.
+imports=(asahi-scripts:aurora-scripts asahi-fwextract:aurora-fwextract lzfse:lzfse
+  speakersafetyd:speakersafetyd bankstown:bankstown triforce-lv2:triforce-lv2
+  widevine:widevine muvm:muvm FEX-Emu:fex-emu)
+
+pending() {
+  echo "Pending: $*"
+  exit 0
+}
+
+omarchy-hw-apple-silicon || exit 0
+[[ ! -e $state/done ]] || exit 0
+install -d -m 0755 "$state"
+exec {lock_fd}>"$state/lock"
+flock -n "$lock_fd" || pending "another run is in progress"
+
+# Queued by a pacman hook, so the transaction that queued it may still hold
+# the database. Never run pacman under someone else's transaction.
+for (( waited = 0; waited < lock_wait; waited++ )); do
+  [[ -e $pacman_lock ]] || break
+  sleep 1
+done
+[[ ! -e $pacman_lock ]] || pending "pacman is still busy"
+
+repos=$(pacman-conf --config "$pacman_conf" --repo-list)
+has_repo() { grep -qx "$repo" <<<"$repos"; }
+
+if has_repo; then
+  # What came from the repository, kept from the first run so a retry after
+  # the section is gone still knows.
+  if [[ ! -e $state/inventory ]]; then
+    comm -12 <(pacman -Slq "$repo" | sort -u) <(pacman -Qq | sort) >"$state/inventory.new"
+    mv -f "$state/inventory.new" "$state/inventory"
+  fi
+
+  for import in "${imports[@]}"; do
+    pacman -Q -- "${import%%:*}" &>/dev/null || continue
+    pacman -Si "omarchy/${import#*:}" &>/dev/null ||
+      pending "omarchy/${import#*:} is not in this channel's database yet"
+  done
+  if pacman -Q -- "$keyring" &>/dev/null; then
+    required_by=$(LC_ALL=C pacman -Qi -- "$keyring" | sed -n 's/^Required By *: //p')
+    [[ $required_by == "None" ]] || pending "$required_by still requires $keyring"
+  fi
+  if [[ -f $platform_keyrings ]] && grep -qx "[[:space:]]*${keyring}[[:space:]]*" "$platform_keyrings"; then
+    pending "$platform_keyrings still lists $keyring"
+  fi
+
+  # Rewrite the file pacman reads, through a symlink if there is one, keeping
+  # its mode and owner. Sections end where pacman sees the next header.
+  target=$(readlink -f -- "$pacman_conf")
+  new=$(mktemp "$target.XXXXXX")
+  trap 'rm -f "$new"' EXIT
+  awk -v drop="[$repo]" '
+    { header = $0; gsub(/^[[:space:]]+|[[:space:]]+$/, "", header) }
+    header ~ /^\[.*\]$/ { skip = (header == drop) }
+    !skip
+  ' "$target" >"$new"
+  chmod --reference="$target" "$new"
+  chown --reference="$target" "$new"
+  if [[ $(pacman-conf --config "$new" --repo-list) != "$(grep -vx "$repo" <<<"$repos")" ]]; then
+    echo "Could not remove [$repo] from $target by itself; remove it by hand" >&2
+    exit 1
+  fi
+  [[ -e $target.bak-asahi-alarm ]] || cp -p -- "$target" "$target.bak-asahi-alarm"
+  mv -f -- "$new" "$target"
+  trap - EXIT
+  repos=$(pacman-conf --config "$pacman_conf" --repo-list)
+fi
+
+if pacman -Q -- "$keyring" &>/dev/null; then
+  required_by=$(LC_ALL=C pacman -Qi -- "$keyring" | sed -n 's/^Required By *: //p')
+  [[ $required_by == "None" ]] || pending "$required_by still requires $keyring"
+  pacman -R --noconfirm -- "$keyring" || pending "$keyring could not be removed yet"
+fi
+# Removing the keyring package never removes its key from pacman's keyring.
+if pacman-key --list-keys "$key" &>/dev/null; then
+  pacman-key --delete "$key"
+fi
+
+# What the repository carried that this channel's [omarchy] doesn't take over.
+report=()
+if [[ -s $state/inventory ]]; then
+  while IFS= read -r package; do
+    [[ $package != "$keyring" ]] && local_version=$(pacman -Q -- "$package" 2>/dev/null) || continue
+    local_version=${local_version#* }
+    renamed=""
+    for import in "${imports[@]}"; do
+      [[ ${import%%:*} == "$package" && ${import#*:} != "$package" ]] && renamed=${import#*:}
+    done
+    if [[ -n $renamed ]]; then
+      report+=("$package $local_version: replaced by omarchy/$renamed at the next update")
+    elif sync_version=$(LC_ALL=C pacman -Si "omarchy/$package" 2>/dev/null | sed -n 's/^Version *: //p') &&
+      [[ -n $sync_version ]]; then
+      if (( $(vercmp "$local_version" "$sync_version") > 0 )); then
+        report+=("$package $local_version: newer than omarchy's $sync_version, so pacman keeps it; switch with: pacman -S omarchy/$package")
+      fi
+    elif ! pacman -Si -- "$package" &>/dev/null; then
+      report+=("$package $local_version: no repository carries it any more, so it gets no updates")
+    fi
+  done <"$state/inventory"
+fi
+printf '%s\n' ${report[@]+"${report[@]}"} >"$state/report"
+(( ${#report[@]} == 0 )) || printf '%s\n' "Left from [$repo]:" "${report[@]}"
+
+# Done only once all three are verifiably gone.
+! grep -qx "$repo" <<<"$(pacman-conf --config "$pacman_conf" --repo-list)" || pending "[$repo] is still configured"
+! pacman -Q -- "$keyring" &>/dev/null || pending "$keyring is still installed"
+! pacman-key --list-keys "$key" &>/dev/null || pending "key $key is still in pacman's keyring"
+: >"$state/done"
+echo "Removed [$repo], $keyring and its key"
