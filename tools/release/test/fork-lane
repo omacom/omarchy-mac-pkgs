@@ -70,6 +70,7 @@ echo "ok - --abandon alone drops the release in progress"
 
 seed
 status=0
+# Exit 1 is the expected path: resolving gets as far as cloning missing-pkgs.git, which fails.
 "$BASH" "$release" --lane fork --dry-run "$source_commit" >"$tmp/out" 2>&1 || status=$?
 if (( status != 1 )) || ! grep -Fq "could not clone $tmp/missing-pkgs.git" "$tmp/out"; then
   fail "--dry-run alone resolves its inputs (got $status)"
