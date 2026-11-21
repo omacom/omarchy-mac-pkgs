@@ -59,3 +59,12 @@ printf 'KEYMAP=dk-latin1\nXKBLAYOUT=dk\n' >"$tmp/vconsole.conf"
 out=$(compose "$legacy") || fail "a legacy line sources cleanly"
 [[ $(sed -n 's/^HOOKS=//p' <<<"$out") == "$legacy" ]] || fail "a busybox encrypt Mac keeps its own HOOKS" "$out"
 pass "a legacy busybox encrypt Mac keeps its line"
+
+# Asahi Alarm's stock line already lists asahi but has no busybox encrypt, so
+# 91 turns it into a systemd image that never runs the asahi runscript (#65).
+alarm="base asahi udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck"
+alarm_apple="base asahi omarchy-vendorfw systemd plymouth autodetect microcode modconf kms keyboard sd-vconsole block omarchy-mac-encrypt sd-encrypt filesystems fsck"
+out=$(compose "$alarm") || fail "an Asahi Alarm line sources cleanly"
+[[ $(sed -n 's/^HOOKS=//p' <<<"$out") == "$alarm_apple" ]] ||
+  fail "an Asahi Alarm line that already lists asahi still unpacks the vendor firmware" "$out"
+pass "an Asahi Alarm line that already lists asahi gains omarchy-vendorfw"
