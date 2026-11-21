@@ -1,0 +1,80 @@
+#!/bin/bash
+# Rebuild m1n1/boot-ctxr.bin, the Stage 2 an M4-and-later Mac boots, as update-m1n1 rebuilds boot.bin:
+# into a staging name, held to aura's 16 MiB slot, then moved into place.
+
+set -uo pipefail
+
+say() { echo "omarchy-mac-boot-ctxr: $*" >&2; }
+
+# With --verify, as update-verify runs it, an ESP that is not mounted exits 3, so the
+# rollback marker stays; the pacman hook runs it without and takes that as success.
+no_esp_status=0
+[[ ${1:-} != --verify ]] || no_esp_status=3
+esp=${OMARCHY_MAC_BOOT_CTXR_ESP:-}
+if [[ -z $esp ]]; then
+  esp=$("${OMARCHY_MAC_BOOT_CTXR_FIND_ESP:-/usr/bin/omarchy-mac-esp}" 2>/dev/null) ||
+    { say "no EFI system partition is mounted; boot-ctxr.bin not checked"; exit "$no_esp_status"; }
+fi
+target=$esp/m1n1/boot-ctxr.bin
+# Only a Mac installed with the confined Stage 2 has the file.
+[[ -f $target && ! -L $target ]] || exit 0
+
+update_m1n1=${OMARCHY_MAC_BOOT_CTXR_UPDATE_M1N1:-/usr/bin/update-m1n1}
+config=${OMARCHY_MAC_BOOT_CTXR_CONFIG:-/etc/default/update-m1n1}
+max=$((16 << 20))
+# Aurora's update-m1n1 builds and trials boot-ctxr.bin itself with its bootchain.py.
+if grep -Fqs AURORA_BOOTCHAIN "$update_m1n1"; then
+  say "update-m1n1 is Aurora's, which keeps boot-ctxr.bin itself; nothing to do"
+  exit 0
+fi
+
+# update-m1n1 honors both from the environment too; this run passes its own path.
+disabled=${M1N1_UPDATE_DISABLED-} configured=""
+unset TARGET
+# What update-m1n1 takes from its configuration before the path it is given, read in a clean shell.
+if [[ -e $config ]]; then
+  [[ -r $config ]] || { say "$config cannot be read; boot-ctxr.bin not refreshed"; exit 1; }
+  { IFS= read -r -d '' d; IFS= read -r -d '' configured; } < <(env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
+    unset M1N1_UPDATE_DISABLED TARGET
+    . "$1" >/dev/null 2>&1
+    printf "%s\0%s\0" "${M1N1_UPDATE_DISABLED-}" "${TARGET-}"
+  ' _ "$config") || :
+  [[ -z ${d:-} ]] || disabled=$d
+fi
+if [[ -n $disabled ]]; then
+  say "M1N1_UPDATE_DISABLED is set; boot-ctxr.bin not refreshed"
+  exit 0
+fi
+if [[ -n $configured ]]; then
+  say "$config sets TARGET=$configured, so update-m1n1 would not write boot-ctxr.bin; it was not refreshed"
+  exit 1
+fi
+
+staging=$(mktemp "$esp/m1n1/.boot-ctxr.XXXXXX") || { say "could not stage a new boot-ctxr.bin on the ESP"; exit 1; }
+# update-m1n1 must create the staging file itself, so a run that wrote somewhere else is caught.
+rm -f "$staging"
+trap 'rm -f "$staging" "$staging.new" "$staging.old"' EXIT
+trap 'exit 1' INT TERM HUP
+
+if ! "$update_m1n1" "$staging"; then
+  say "update-m1n1 failed; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+if [[ ! -f $staging || -L $staging ]]; then
+  say "update-m1n1 did not write the staged image; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+size=$(stat -c %s "$staging")
+if (( size == 0 || size > max )); then
+  say "the rebuilt image is $size bytes, outside the 16 MiB slot aura keeps for it; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+# Keep the previous image beside it, as update-m1n1 keeps boot.bin.old.
+cmp -s "$target" "$staging" || cp --preserve=timestamps -f "$target" "$target.old" ||
+  say "could not keep boot-ctxr.bin.old; continuing"
+if ! mv -f "$staging" "$target"; then
+  say "could not move the rebuilt image into place; boot-ctxr.bin is unchanged"
+  exit 1
+fi
+echo "m1n1 confined Stage 2 updated at $target"
+exit 0

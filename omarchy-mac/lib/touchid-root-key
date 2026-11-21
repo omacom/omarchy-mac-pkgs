@@ -1,19 +1,21 @@
 #!/usr/bin/python3 -I
 # SPDX-License-Identifier: MIT
-"""Rebuilds a MacBook Neo's Touch ID sensor root key, apple/msrk-j700.bin,
-once its owner has agreed to turn Touch ID on.
+"""Rebuilds a Touch ID sensor's sealed factory data once its owner has agreed
+to turn Touch ID on: the sensor root key (the MSRk record) on a MacBook Neo,
+apple/msrk-j700.bin, or a 16-inch M4 Pro, apple/msrk-j616s.bin; and with
+--record FSC2 the M4 Pro's calibration, apple/mesacal-j616s.bin.
 
-The key is device-private. asahi-installer leaves this Mac's factory records
-on the ESP, in asahi/all_firmware.tar.gz; the key is the MSRk record's IM4P
-under the FDR sealing manifest (seal-<ECID>), with the trust bundle as secb,
-as macOS stores the other records in its factory cache. Every byte comes from
+Both are device-private. asahi-installer leaves this Mac's factory records
+on the ESP, in asahi/all_firmware.tar.gz; each file is the record's IM4P
+under the FDR sealing manifest (seal-<CHIP>-<ECID>), with the trust bundle as
+secb, as macOS stores the other records in its factory cache. Every byte comes from
 those records, and each must also be found, byte for byte, somewhere in this
 Mac's own iBoot System Container. That proves each record is present there, not
 that it is the active or an authentic one. The logic follows
 omarchy-mac-installer's factory_root_key().
 
-With --check FILE it only says whether FILE is a whole sensor root key: it exits
-3 when FILE is not one, and 1 when it could not tell."""
+With --check FILE it only says whether FILE is a whole sealed record of that
+kind: it exits 3 when FILE is not one, and 1 when it could not tell."""
 
 import argparse
 import hashlib
@@ -28,10 +30,14 @@ RECORD_MAXIMUM = 16 << 20
 MEMBER_MAXIMUM = 1 << 14
 RETAINED_MAXIMUM = 32 << 20
 # The records the key is rebuilt from; anything else in the cache is skipped.
-RECORDS = ("MSRk-", "seal-", "trustobject-")
+RECORDS = ("MSRk-", "FSC2-", "seal-", "trustobject-")
 CONTAINER_MAXIMUM = 1 << 30
-# The Neo's SoC, as its seal-<ECID> record names it.
+# The SoCs whose sensors load sealed factory data, as their seal records name
+# them, and what a refusal calls the Mac. The Neo's is the default.
+CHIPS = {"00008140": "a MacBook Neo", "00006040": "an M4 Pro MacBook Pro"}
 CHIP = "00008140"
+# What each record kind is called in a refusal.
+KINDS = {"MSRk": "sensor root key", "FSC2": "sealed calibration"}
 
 
 class Refused(Exception):
@@ -86,8 +92,8 @@ def der(tag, value):
     return bytes([tag]) + head + value
 
 
-def check_root_key(data):
-    """data, if it is one complete comb { fdrd: IMG4 { IM4P(MSRk), [0] IM4M },
+def check_root_key(data, kind="MSRk"):
+    """data, if it is one complete comb { fdrd: IMG4 { IM4P(kind), [0] IM4M },
     secb: trust bundle } with nothing after it. The envelope only."""
     try:
         if not 0 < len(data) <= RECORD_MAXIMUM:
@@ -115,7 +121,7 @@ def check_root_key(data):
             raise ValueError("missing signed envelope")
         payload = children(data, parts[1][1], parts[1][2])
         if (len(payload) != 4 or ia5(data, payload[0]) != b"IM4P"
-                or ia5(data, payload[1]) != b"MSRk" or payload[2][0] != 0x16
+                or ia5(data, payload[1]) != kind.encode() or payload[2][0] != 0x16
                 or payload[2][1] == payload[2][2] or payload[3][0] != 4
                 or payload[3][1] == payload[3][2]):
             raise ValueError("invalid payload")
@@ -126,24 +132,24 @@ def check_root_key(data):
         if len(manifest) < 2 or ia5(data, manifest[0]) != b"IM4M":
             raise ValueError("missing manifest")
     except (ValueError, IndexError) as error:
-        raise Refused(f"the key is not a whole sensor root key: {error}") from error
+        raise Refused(f"the file is not a whole {KINDS[kind]}: {error}") from error
     return data
 
 
-def reseal(record, seal, trust):
-    """comb { fdrd: IMG4 { the MSRk record's IM4P, [0] seal }, secb: trust }."""
+def reseal(record, seal, trust, kind="MSRk"):
+    """comb { fdrd: IMG4 { the record's IM4P, [0] seal }, secb: trust }."""
     try:
         outer = tlv(record, 0)
         parts = children(record, outer[1], outer[2])
         if (outer[0] != 0x30 or outer[2] != len(record) or len(parts) != 3
                 or ia5(record, parts[0]) != b"IMG4" or parts[1][0] != 0x30):
-            raise ValueError("the MSRk record is not an IMG4")
+            raise ValueError(f"the {kind} record is not an IMG4")
         im4p = bytes(record[parts[0][2]:parts[1][2]])
         manifest = tlv(seal, 0)
         if manifest[0] != 0x30 or manifest[2] != len(seal):
             raise ValueError("the seal record is not one DER manifest")
     except ValueError as error:
-        raise Refused(f"cannot rebuild the sensor root key: {error}") from error
+        raise Refused(f"cannot rebuild the {KINDS[kind]}: {error}") from error
     image = der(0x30, der(0x16, b"IMG4") + im4p + der(0xA0, seal))
     return der(0x30, der(0x16, b"comb")
                + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
@@ -151,7 +157,7 @@ def reseal(record, seal, trust):
 
 
 def factory_records(archive):
-    """name -> bytes for the MSRk, seal and trust bundle records in the
+    """name -> bytes for the MSRk, FSC2, seal and trust bundle records in the
     archive's com.apple.factorydata directory, read into memory only. Other
     entries there (a subdirectory or record a later macOS adds) are skipped."""
     records = {}
@@ -284,7 +290,7 @@ def apple_silicon():
 NOT_WHOLE = 3
 
 
-def check(path):
+def check(path, kind):
     try:
         with open(path, "rb") as fd:
             data = fd.read(RECORD_MAXIMUM + 1)
@@ -292,7 +298,7 @@ def check(path):
         print(f"touchid-root-key: cannot read {path}: {error}", file=sys.stderr)
         return 1
     try:
-        check_root_key(data)
+        check_root_key(data, kind)
     except Refused as error:
         print(f"touchid-root-key: {path}: {error}", file=sys.stderr)
         return NOT_WHOLE
@@ -306,20 +312,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--archive", default="/boot/efi/asahi/all_firmware.tar.gz")
     parser.add_argument("--container", default="/dev/disk/by-partlabel/iBootSystemContainer")
+    parser.add_argument("--chip", choices=sorted(CHIPS), default=CHIP,
+                        help="the SoC the seal record must name (default: the Neo's)")
+    parser.add_argument("--record", choices=sorted(KINDS), default="MSRk",
+                        help="MSRk for the sensor root key, FSC2 for the calibration")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("-o", "--output")
     action.add_argument("--check", metavar="FILE")
     arguments = parser.parse_args()
     if arguments.check:
-        return check(arguments.check)
+        return check(arguments.check, arguments.record)
     try:
         records = factory_records(arguments.archive)
-        _, record = one(records, "MSRk-")
+        _, record = one(records, f"{arguments.record}-")
         seal_name, seal = one(records, "seal-")
-        if not seal_name.upper().startswith(f"SEAL-{CHIP}-"):
-            raise Refused(f"the seal record {seal_name} is not a MacBook Neo's")
+        if not seal_name.upper().startswith(f"SEAL-{arguments.chip}-"):
+            raise Refused(f"the seal record {seal_name} is not {CHIPS[arguments.chip]}'s")
         trust = trust_bundle(records)
-        key = check_root_key(reseal(record, seal, trust))
+        key = check_root_key(reseal(record, seal, trust, arguments.record), arguments.record)
         if not in_container(arguments.container, [record, seal, trust]):
             raise Refused(f"the factory records in {arguments.archive} are not all in this Mac's "
                           f"iBoot System Container ({arguments.container}): they are another Mac's, "

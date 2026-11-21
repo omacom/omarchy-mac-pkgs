@@ -124,6 +124,25 @@ image = der(0x30, der(0x16, b"IMG4") + im4p + der(0xA0, seal))
 with open(os.path.join(out, "key.bin"), "wb") as fd:
     fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
                        + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
+# A 16-inch M4 Pro's: the same MSRk, an FSC2 calibration, and a seal naming
+# its SoC; the key and the calibration they make.
+fsc2_im4p = der(0x30, der(0x16, b"IM4P") + der(0x16, b"FSC2") + der(0x16, b"1") + der(0x04, b"c" * 2500))
+fsc2 = der(0x30, der(0x16, b"IMG4") + fsc2_im4p + der(0xA0, der(0x30, der(0x16, b"IM4M") + der(0x02, b"\x01") + b"\x31\x00")))
+j616s_seal = der(0x30, der(0x16, b"IM4M") + der(0x02, b"\x00") + der(0x04, b"m" * 900))
+archive("j616s.tar.gz", [("MSRk-00003356-AA", msrk), ("FSC2-00003356-AA", fsc2), ("seal-00006040-001E", j616s_seal),
+                         (named, trust), ("trustobject-current", trust)])
+archive("j616s-other-chip.tar.gz", [("MSRk-00003356-AA", msrk), ("FSC2-00003356-AA", fsc2), ("seal-00008140-001E", j616s_seal),
+                                    (named, trust), ("trustobject-current", trust)])
+with open(os.path.join(out, "j616s-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + msrk + filler(4096) + fsc2 + j616s_seal + trust + filler(1 << 20))
+# One holding all but the MSRk record: the calibration rebuilds, the key can't.
+with open(os.path.join(out, "j616s-no-key-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + fsc2 + j616s_seal + trust + filler(1 << 20))
+for name, payload in (("j616s-key.bin", im4p), ("j616s-cal.bin", fsc2_im4p)):
+    image = der(0x30, der(0x16, b"IMG4") + payload + der(0xA0, j616s_seal))
+    with open(os.path.join(out, name), "wb") as fd:
+        fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
+                           + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
 PY
 python3 -I "$work/factory.py" "$work/factory"
 # Any copy of the sensor key under the fixture other than the one named.
@@ -655,8 +674,10 @@ exec {held}>&-
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 && [[ -z $(key_copies) && ! -e $fixture/etc/touchid-on ]] ||
   fail "a removal goes on once the lock is free" "$(key_copies)"
 mkdir -p "$fixture/etc/touchid-on/in-the-way"
+# The key beside it is removed, so the error names only the record.
+cp "$work/factory/key.bin" "$fixture/firmware/updates/apple/msrk-j700.bin"
 ! PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 && grep -q 'could not be turned off' "$fixture/out" &&
-  ! grep -q 'stops loading' "$fixture/out" ||
+  ! grep -q 'stops loading' "$fixture/out" && grep -Fq "remove $fixture/etc/touchid-on" "$fixture/out" && ! grep -q 'msrk' "$fixture/out" ||
   fail "a record that can't be removed fails and never says Touch ID stops loading" "$(<"$fixture/out")"
 rm -rf "$fixture/etc/touchid-on"
 touch "$fixture/keybag"
@@ -664,6 +685,68 @@ run touchid-status
 [[ $(<"$fixture/run/touchid") == "available" && ! -s $fixture/calls ]] ||
   fail 'after turning it off, the next boot leaves it off and only offers it again'
 pass 'enable-fingerprint asks before anything turns on, and turning it off lasts'
+
+# The 16-inch M4 Pro: its sensor sits on an SPI controller at the root of the
+# tree, and its node names a sealed calibration and a sensor root key, both
+# rebuilt from its factory records once the owner agrees.
+j616s() {
+  machine apple,j616s apple,t6040 apple,arm-platform
+  rm -rf "$tree/soc"
+  mkdir -p "$tree/spi@429108000/fingerprint@0" "$fixture/esp/asahi"
+  printf 'apple,mesa-fingerprint\0' >"$tree/spi@429108000/fingerprint@0/compatible"
+  printf 'okay\0' >"$tree/spi@429108000/fingerprint@0/status"
+  printf 'apple/mesacal-j616s.bin\0apple/msrk-j616s.bin\0' >"$tree/spi@429108000/fingerprint@0/firmware-name"
+  cp "$work/factory/j616s.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+}
+j616s
+[[ $(eligibility) == "available" ]] || fail 'an M4 Pro with its factory records on the ESP is available' "$(eligibility)"
+[[ $(run touchid-eligibility sensor) == "$tree/spi@429108000/fingerprint@0" ]] || fail 'its sensor is found at the root of the tree'
+rm "$fixture/esp/asahi/all_firmware.tar.gz"
+[[ $(eligibility) == "unsupported:no-calibration" ]] || fail "an M4 Pro without its factory records can't rebuild its calibration"
+mkdir -p "$fixture/firmware/updates/apple"
+cp "$work/factory/j616s-cal.bin" "$fixture/firmware/updates/apple/mesacal-j616s.bin"
+[[ $(eligibility) == "unsupported:no-root-key" ]] || fail "an M4 Pro with a calibration but no records can't rebuild its sensor key"
+cp "$work/factory/j616s-key.bin" "$fixture/firmware/updates/apple/msrk-j616s.bin"
+[[ $(eligibility) == "available" ]] || fail 'an M4 Pro whose calibration and key are installed needs nothing else'
+machine apple,j614s apple,t6040 apple,arm-platform
+[[ $(eligibility) == "unsupported:board" ]] || fail 'a T6040 board the driver has not been tried on is unsupported'
+j616s
+printf '%s\0' apple,j614s apple,t6040 apple,arm-platform >"$tree/compatible"
+[[ $(eligibility) == "unsupported:board" ]] || fail 'an unlisted board whose sensor sits at the root is unsupported too' "$(eligibility)"
+j616s
+echo ready >"$fixture/activation"
+container=$work/factory/j616s-isc.img
+out=$(run touchid-enable 2>&1) || fail 'an M4 Pro turns on' "$out"
+for file in cal:mesacal-j616s.bin key:msrk-j616s.bin; do
+  installed=$fixture/firmware/updates/apple/${file#*:}
+  cmp -s "$installed" "$work/factory/j616s-${file%%:*}.bin" && [[ $(stat -c %a "$installed") == 600 && ! -e $installed.new ]] ||
+    fail "the M4 Pro's ${file#*:} is rebuilt from its factory records, root-only" "$out"
+done
+! grep -Fxq calibration "$fixture/calls" || fail "the M4 Pro's calibration is resealed, never carved"
+j616s
+cp "$work/factory/j616s-other-chip.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+container=$work/factory/j616s-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"is not an M4 Pro MacBook Pro's"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j616s*') ]] ||
+  fail "records sealed for another SoC give an M4 Pro nothing, and it says why" "$out"
+# A calibration rebuilt by a run whose key then can't be read goes with it.
+j616s
+container=$work/factory/j616s-no-key-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"sensor key could not be read"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j616s*') ]] ||
+  fail "an M4 Pro whose key can't be read keeps no calibration rebuilt for it" "$out$(find "$fixture/firmware" -name '*j616s*')"
+unset container
+printf 'apple/mesacal-j616s.bin\0../../etc/shadow\0' >"$tree/spi@429108000/fingerprint@0/firmware-name"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"unexpected firmware file"* ]] || fail 'a firmware name outside apple/ is refused' "$out"
+mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
+cp "$work/factory/j616s-key.bin" "$fixture/firmware/updates/apple/msrk-j616s.bin"
+cp "$work/factory/j616s-cal.bin" "$fixture/firmware/updates/apple/mesacal-j616s.bin"
+printf partial >"$fixture/firmware/updates/apple/mesacal-j616s.bin.new"
+touch "$fixture/etc/touchid-on"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
+  [[ -z $(find "$fixture/firmware" -name '*j616s*') && ! -e $fixture/etc/touchid-on ]] ||
+  fail "turning it off deletes an M4 Pro's sensor key and the calibration rebuilt with it"
+pass 'the 16-inch M4 Pro rebuilds its calibration and sensor key from its own factory records'
 
 if command -v systemd-analyze >/dev/null; then
   stub_systemd_boot_targets "$work/root"
