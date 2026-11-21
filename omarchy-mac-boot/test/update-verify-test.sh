@@ -352,7 +352,8 @@ expect_verified "an unencrypted Mac, which has no passphrase prompt"
 pass "update-verify refuses an encrypted Mac whose boot image does not carry its keyboard layout"
 
 # After a snapshot restore across a boot update the ESP can stay newer than every
-# package, so the marker that restore left has update-verify rebuild it once.
+# package, so the marker that restore left has update-verify rebuild it until
+# the rebuild finishes.
 stubs=$tmp/rebuild-stubs
 mkdir -p "$stubs"
 cat >"$stubs/mkinitcpio" <<'SH'
@@ -384,8 +385,9 @@ export ESP_BOOT_BIN=$mac_esp/m1n1/boot.bin
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a coherent Mac with the rollback marker"
-[[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a coherent Mac rebuilds nothing and clears the marker"
-pass "update-verify clears the rollback marker when the boot files already match"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "a coherent Mac with the marker rebuilds only boot-ctxr.bin, which the check cannot see" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a coherent Mac clears the marker once boot-ctxr.bin is rebuilt"
+pass "update-verify rebuilds boot-ctxr.bin and clears the rollback marker when the other boot files already match"
 
 limine_mac
 cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
@@ -400,6 +402,7 @@ expect_verified "a Mac with newer boot files after a rollback"
 pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
 
 limine_mac
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
 limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 : >"$mac_root/boot/.omarchy-mac-rolled-back"
 : >"$REBUILD_LOG"
@@ -407,7 +410,20 @@ CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
 grep -qx omarchy-mac-boot-update "$REBUILD_LOG" || fail "a failed boot-ctxr.bin rebuild skips the boot menu rebuild" "$(cat "$REBUILD_LOG")"
 [[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a failed boot-ctxr.bin rebuild passes verification" "$(cat "$tmp/err")"
 [[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a failed boot-ctxr.bin rebuild clears the marker"
-pass "a failed boot-ctxr.bin rebuild rebuilds the menu, fails verification and keeps the marker"
+grep -Fq "Fix what was reported above; the next omarchy update rebuilds them again" "$tmp/err" && ! grep -Fq "the check below says what is left" "$tmp/err" ||
+  fail "a failed boot-ctxr.bin rebuild says the next update tries again" "$(cat "$tmp/err")"
+# boot.bin is right now, so the next update's check passes; boot-ctxr.bin is still retried.
+: >"$REBUILD_LOG"
+CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "the next update retries only the boot-ctxr.bin rebuild" "$(cat "$REBUILD_LOG")"
+[[ $status != 0 ]] && grep -Fq "do not reboot yet" "$tmp/err" || fail "a boot-ctxr.bin rebuild that fails again passes verification" "$(cat "$tmp/err")"
+[[ -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a boot-ctxr.bin rebuild that fails again clears the marker"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a boot-ctxr.bin rebuild that succeeds on the next update"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "omarchy-mac-boot-ctxr " ]] || fail "the retry rebuilds only boot-ctxr.bin" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a boot-ctxr.bin rebuild that succeeds on retry clears the marker"
+pass "a failed boot-ctxr.bin rebuild rebuilds the menu, fails verification, keeps the marker, and is retried until it succeeds"
 
 limine_mac
 printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"
