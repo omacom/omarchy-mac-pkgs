@@ -1,25 +1,24 @@
 ---
 title: Status
-description: Where the Apple Silicon stack stands, and what is deliberately left out of the first release.
+description: What the first release of the Apple Silicon stack ships, and what is deliberately left out of it.
 section: Reference
 ---
 
-This manual describes the stack the first release installs. The packages are built here, in omacom/omarchy-mac-pkgs, against the Omarchy of [omacom/omarchy#14431](https://github.com/omacom/omarchy/pull/14431), following [the convergence spec](https://github.com/omacom/omarchy-mac/blob/quattro-upstream/docs/apple-silicon-convergence.md). Until that release, read every page as the target, not as something you can install today.
+Omarchy 4.5 is the first release of this stack: its Mac packages are on the `stable` channel, and the installer's stable catalog is published. The packages are built here, in omacom/omarchy-mac-pkgs, for official Omarchy, which took in the generic Mac changes through [omacom/omarchy#14431](https://github.com/omacom/omarchy/pull/14431), following [the convergence spec](https://github.com/omacom/omarchy-mac/blob/quattro-upstream/docs/apple-silicon-convergence.md).
 
-## Order of work
+## In the first release
 
-1. The installer app on omacom/omarchy-mac-installer reaches parity with the last qualified Apple Silicon installer.
-2. The Mac packages (`omarchy-mac`, `omarchy-mac-boot`, `linux-aurora`, `m1n1-aurora`, `uboot-asahi` and the carried aquamarine) land on Omarchy's `edge` channel, aarch64 only.
-3. The first test images, built from omarchy-mac's `quattro-upstream` before the packages moved here, are installed on the M2 Max, then on the M1 Pro.
-4. The remaining Mac features move behind the platform detector and dispatch points: audio, Wi-Fi resume, display, video decode, the encryption lifecycle, snapshots and boot verification.
-5. The generic changes are proposed to omacom/omarchy, in order: the platform detector and profiles; composable boot configuration and generic encryption fixes; the dispatch interface.
-6. The move for existing Macs, a standalone migration script outside the packages, is built and tested for each kind of install.
-7. After cold-boot qualification on the M1 Pro and the M2 Max, the packages are promoted to `rc` and `stable` and the stable installer catalog is published.
-8. Once the generic changes are merged into Omarchy and the move has been accepted for each kind of install, the move for existing Macs is switched on.
+- M1 and M2 Macs. The catalogs also admit M3 Macs, except the M3 Ultra Mac Studio, and the MacBook Neo. See [Hardware support]({{page:hardware}}).
+- Touch ID, experimental and off until you turn it on, on MacBooks with an M2, M2 Pro or M2 Max, the M3 MacBook Air and the MacBook Neo. M1-family Macs are not offered it yet: their Secure Enclave starts behind a guard that blocks matching. See [Turning on Touch ID]({{page:security}}#turning-on-touch-id).
+
+## Still to come
+
+The move for existing Macs is switched on once it has been accepted for each kind of install. [Moving an existing Mac]({{page:migrate}}) says where it stands.
 
 ## Not in the first release
 
-- M3 and M4 Macs, Touch ID, MLX and Secure Enclave disk encryption. Each is separate work.
+- M4 Macs and Secure Enclave disk encryption. Each is separate work.
+- MLX, which is not supported. An optional `omarchy-mac-ml` package exists, but it is not part of the release.
 - Encrypting an unencrypted Mac in place while moving it from an earlier install. It may come later as an opt-in.
 - The Asahi kernel as a supported choice. Every Mac runs Aurora.
 - A portable installer that runs without installing a privileged helper.
