@@ -28,7 +28,7 @@ modules() {
     printf "%s|%s|%s|%s\n" "$?" "${MODULES[*]}" "${_omarchy_mac_display_module-unset}" "${_omarchy_mac_display_path-unset}"
   ' _ "$dropin"
 }
-all="phy-apple-t6040-usb2 mux-apple-display-crossbar atc-t6050-dp phy-apple-atc"
+all="phy-apple-t6040-usb2 mux-apple-display-crossbar atc-t6050-dp phy-apple-atc phy-apple-dptx"
 [[ $(modules "$all") == "0|btrfs $all|unset|unset" ]] || fail "the display gate's modules join the initramfs" "$(modules "$all")"
 pass "an M4 kernel's display gate modules join the initramfs"
 [[ $(modules "mux-apple-display-crossbar phy-apple-atc") == "0|btrfs mux-apple-display-crossbar phy-apple-atc|unset|unset" ]] ||
