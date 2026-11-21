@@ -135,7 +135,7 @@ download_archive_sha256() {
     code=$(curl -sS --location-trusted -o "$dest" -w '%{http_code}' --retry 0 "${headers[@]}" "$url" || true)
     if [[ $code == 200 && -s $dest ]]; then
       tar -tzf "$dest" >/dev/null 2>&1 || fail "downloaded $url is not a gzip tarball"
-      sha256sum "$dest" | cut -d' ' -f1
+      sha256_of "$dest"
       return 0
     fi
     if [[ $code == 429 || $code == 000 ]]; then
@@ -362,7 +362,7 @@ fork_pin() {
     fi
     kernel_ver=$(makefile_version)
     if tag=$(latest_published_inputs); then
-      digest=$(sha256sum "$work/published/INPUTS" | cut -d' ' -f1)
+      digest=$(sha256_of "$work/published/INPUTS")
       src=$(sed -n 's/^source=linux-aurora|//p' "$work/published/INPUTS" | head -1)
       published_url=${src%%|*}
       published_sha=${src#*|}
