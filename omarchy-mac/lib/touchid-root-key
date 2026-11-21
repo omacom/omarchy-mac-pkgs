@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Rebuilds a Touch ID sensor's sealed factory data once its owner has agreed
 to turn Touch ID on: the sensor root key (the MSRk record) on a MacBook Neo,
-apple/msrk-j700.bin, or a 16-inch M4 Pro or M4 Max, apple/msrk-j616s.bin or
-apple/msrk-j616c.bin; and with --record FSC2 their calibration,
-apple/mesacal-j616s.bin or apple/mesacal-j616c.bin.
+apple/msrk-j700.bin, a 16-inch M4 Pro or M4 Max, apple/msrk-j616s.bin or
+apple/msrk-j616c.bin, or a 15-inch M5 MacBook Air, apple/msrk-j815.bin; and
+with --record FSC2 the others' calibration, apple/mesacal-j616s.bin,
+apple/mesacal-j616c.bin or apple/mesacal-j815.bin.
 
 Both are device-private. asahi-installer leaves this Mac's factory records
 on the ESP, in asahi/all_firmware.tar.gz; each file is the record's IM4P
@@ -36,7 +37,7 @@ CONTAINER_MAXIMUM = 1 << 30
 # The SoCs whose sensors load sealed factory data, as their seal records name
 # them, and what a refusal calls the Mac. The Neo's is the default.
 CHIPS = {"00008140": "a MacBook Neo", "00006040": "an M4 Pro MacBook Pro",
-         "00006041": "an M4 Max MacBook Pro"}
+         "00006041": "an M4 Max MacBook Pro", "00008142": "an M5 MacBook Air"}
 CHIP = "00008140"
 # What each record kind is called in a refusal.
 KINDS = {"MSRk": "sensor root key", "FSC2": "sealed calibration"}
