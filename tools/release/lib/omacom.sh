@@ -225,19 +225,74 @@ set_digest() {
 }
 
 # ── pins ────────────────────────────────────────────────────────────────────
+is_github_https_url() {
+  local LC_ALL=C
+  [[ $1 =~ ^[Hh][Tt][Tt][Pp][Ss]://([Cc][Oo][Dd][Ee][Ll][Oo][Aa][Dd]\.)?[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm](:443)?/ ]]
+}
+
+is_http_url() {
+  local LC_ALL=C
+  [[ $1 =~ ^[Hh][Tt][Tt][Pp][Ss]?:// && $1 != *[$'\r\n']* ]]
+}
+
+curl_config_quote() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  printf '"%s"' "$value"
+}
+
+# Fetch URL into DESTINATION, following up to 5 HTTP(S) redirects manually so
+# the GitHub token stays on GitHub HTTPS hosts and URLs stay out of curl's argv.
+fetch_archive_attempt() {
+  local current_url=$1 destination=$2 token=${3:-}
+  local redirects config output status_code redirect_url curl_status
+  if ! is_http_url "$current_url"; then
+    die "unsupported archive URL: $current_url"
+  fi
+  for (( redirects = 0; ; redirects++ )); do
+    rm -f "$destination"
+    config="url = $(curl_config_quote "$current_url")"$'\n'
+    if is_github_https_url "$current_url"; then
+      config+="header = $(curl_config_quote 'Accept: application/vnd.github+json')"$'\n'
+      if [[ -n $token && $token != *[$'\r\n']* ]]; then
+        config+="header = $(curl_config_quote "Authorization: Bearer $token")"$'\n'
+      fi
+    fi
+    curl_status=0
+    output=$(curl -sS --no-location --no-location-trusted --proto =http,https -o "$destination" \
+      -w '%{http_code}\n%{redirect_url}' --retry 0 --config - \
+      < <(printf '%s' "$config")) || curl_status=$?
+    if (( curl_status == 3 )); then
+      die "malformed archive URL: $current_url"
+    elif (( curl_status != 0 )); then
+      status_code=000
+      redirect_url=""
+    else
+      status_code=${output%%$'\n'*}
+      redirect_url=${output#*$'\n'}
+    fi
+    if [[ $status_code =~ ^30[12378]$ ]] && is_http_url "$redirect_url" && (( redirects < 5 )); then
+      current_url=$redirect_url
+      continue
+    fi
+    if [[ $status_code != "200" ]]; then
+      rm -f "$destination"
+    fi
+    printf '%s\n' "$status_code"
+    return 0
+  done
+}
+
 # The archive a recipe sources for COMMIT, hashed the way makepkg will:
 # github.com/<repo>/archive/<sha>.tar.gz, never gh api's /tarball/<sha>, which
 # is a different archive. Retries on 429, authenticated when gh has a token.
 archive_sha256() {
   local url=$1 dest=$work/archive.tar.gz attempt=0 delay=2 code token=${GH_TOKEN:-}
-  local headers=(-H 'Accept: application/vnd.github+json')
   [[ -n $token ]] || token=$(gh auth token 2>/dev/null || true)
-  [[ -z $token ]] || headers+=(-H "Authorization: Bearer $token")
   while (( attempt < 7 )); do
     attempt=$((attempt + 1))
-    # curl -L drops Authorization when github.com redirects to codeload;
-    # --location-trusted keeps it, so authenticated retries survive.
-    code=$(curl -sS --location-trusted -o "$dest" -w '%{http_code}' --retry 0 "${headers[@]}" "$url" || true)
+    code=$(fetch_archive_attempt "$url" "$dest" "$token") || return 1
     if [[ $code == 200 && -s $dest ]]; then
       tar -tzf "$dest" >/dev/null 2>&1 || die "$url is not a gzip tarball"
       sha256_of "$dest"
