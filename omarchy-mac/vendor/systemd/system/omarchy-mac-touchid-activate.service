@@ -11,10 +11,16 @@ ConditionPathExists=/dev/sep-bio
 # only once the kernel has made this Mac's keybag.
 ConditionPathExists=/var/lib/aurora-sep-keybag.bin
 Before=fprintd.service
+# fprintd pulls this in as well as the wait: after the wait, the node is there
+# when fprintd's own start runs it.
+After=omarchy-mac-touchid-wait.service
 
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+# fprintd starts this at each of its own starts: once this boot's node has a
+# result, those starts go straight on.
+ExecCondition=/usr/lib/omarchy-mac/touchid-activate --needed
 ExecStart=/usr/lib/omarchy-mac/touchid-activate
 # The script waits up to 45 s for the attach's later retry; this bounds a
 # blocked open, which would otherwise hold up the pacman hook.

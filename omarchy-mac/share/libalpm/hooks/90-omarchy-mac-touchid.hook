@@ -16,4 +16,4 @@ When = PostTransaction
 # Skipped in a chroot or an unbooted root (offline provisioning, image builds,
 # pacman --root, which runs hooks chrooted), as systemd's own hooks are. Never
 # fails the transaction: a unit that fails says why in its journal.
-Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-status.service; systemctl --quiet start omarchy-mac-touchid-activate.service; true; }'
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-status.service; rm -f /run/omarchy-mac/touchid-activated; systemctl --quiet start omarchy-mac-touchid-activate.service; true; }'

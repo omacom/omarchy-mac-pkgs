@@ -22,6 +22,8 @@ grep -Fxq 'ConditionPathExists=/var/lib/aurora-sep-keybag.bin' "$unit" ||
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$unit" ||
   fail "the unit opens /dev/sep-bio only once the owner has agreed, whatever loaded the driver"
 grep -Fxq 'Before=fprintd.service' "$unit" || fail 'fprintd starts after the unit, not alongside it'
+grep -Fxq 'After=omarchy-mac-touchid-wait.service' "$unit" ||
+  fail 'the unit runs after the wait, so a fprintd start that pulls it in finds the node'
 ! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'
 ! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the rule pulls it in'
 pass 'the Touch ID rule, unit and script are staged, and the rule alone starts the unit'
@@ -127,6 +129,33 @@ activate && [[ $(<"$status") == "ready" && $(wc -l <"$fixture/sleeps") == 3 ]] |
 printf '#!/bin/sh\necho >>"%s"\nexit 0\n' "$fixture/sleeps" >"$fixture/bin/sleep"
 pass 'the wait follows the attach as it settles'
 
+# fprintd pulls the activation into each of its starts: once this node has a
+# result those starts go straight on; a new node, an update or
+# enable-fingerprint runs it again.
+needed() {
+  PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_STATUS=$status \
+    "$ROOT/lib/touchid-activate" --needed
+}
+grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/touchid-activate --needed' "$unit" ||
+  fail 'the unit asks whether this node still needs the activation'
+rm -rf "${status%/*}"
+needed || fail 'a boot without a result runs the activation'
+attributes ready attached restored usable
+activate
+! needed || fail 'a later fprintd start skips the activation once the node is ready'
+attributes ready attached restored blocked
+! activate
+! needed || fail 'a later fprintd start skips it after a final failure too, instead of waiting again'
+mv "$fixture/sep-bio" "$fixture/sep-bio.old"
+touch "$fixture/sep-bio"
+needed || fail 'a node the driver made again runs the activation again'
+rm -f "$fixture/sep-bio.old"
+grep -q 'rm -f /run/omarchy-mac/touchid-activated; systemctl --quiet start omarchy-mac-touchid-activate.service;' \
+  "$ROOT/share/libalpm/hooks/90-omarchy-mac-touchid.hook" || fail 'an update runs the activation again'
+grep -q 'rm -f "${status_file%/\*}/touchid-activated"' "$ROOT/lib/touchid-enable" ||
+  fail 'enable-fingerprint runs the activation again'
+pass 'fprintd starts skip the activation once this node has a result; a new node, an update or enable-fingerprint runs it again'
+
 # An update runs the unit again: a later bring-up that fell short does not undo
 # this boot's "ready", but a final failure does.
 attributes ready attached restored usable
@@ -150,7 +179,7 @@ hook=$work/root/usr/share/libalpm/hooks/90-omarchy-mac-touchid.hook
 grep -Fxq 'Target = usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules' "$hook" &&
   grep -Fxq 'Operation = Install' "$hook" && grep -Fxq 'Operation = Upgrade' "$hook" &&
   grep -Fxq 'When = PostTransaction' "$hook" && grep -Fxq 'Description = Checking Touch ID...' "$hook" &&
-  grep -Fxq "Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-status.service; systemctl --quiet start omarchy-mac-touchid-activate.service; true; }'" "$hook" ||
+  grep -Fxq "Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { systemctl --quiet start omarchy-mac-touchid-status.service; rm -f /run/omarchy-mac/touchid-activated; systemctl --quiet start omarchy-mac-touchid-activate.service; true; }'" "$hook" ||
   fail 'the hook records the status, then activates, after the transaction that installs or updates the rule, and never fails it'
 # Run as pacman runs it, booted: the status first, the activation even when the
 # status fails, and the transaction never fails.
@@ -181,6 +210,8 @@ wait_unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-wait.service
 grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
   grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service' "$dropin" ||
   fail 'fprintd starts after the wait and the activation'
+grep -Fxq 'Wants=omarchy-mac-touchid-activate.service' "$dropin" ||
+  fail 'fprintd pulls the activation into its own start, so the order holds whichever is queued first'
 ! grep -qE '^(DeviceAllow|DevicePolicy|ExecStartPre)=' "$dropin" ||
   fail "the drop-in leaves fprintd's devices to libfprint-git, which owns the allowance"
 grep -Fxq 'After=omarchy-mac-touchid-load.service' "$wait_unit" ||

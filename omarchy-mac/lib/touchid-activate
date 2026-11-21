@@ -7,7 +7,22 @@ node=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
 driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
 status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
 attempts=${OMARCHY_MAC_TOUCHID_ATTEMPTS:-90}
+done_file=${OMARCHY_MAC_TOUCHID_DONE:-${status_file%/*}/touchid-activated}
 omarchy-hw-apple-silicon || exit 0
+
+# The node as this boot's driver made it: a driver loaded again makes a new one.
+node_id() {
+  stat -L -c '%d %i %z' "$node" 2>/dev/null
+}
+
+# fprintd pulls this unit into each of its starts, and D-Bus starts it again
+# after every idle exit. Once this node has a result, such a start only waits
+# for an answer that is already there, so the unit's ExecCondition skips it.
+# An update and enable-fingerprint remove the record to run it again.
+if [[ ${1:-} == --needed ]]; then
+  [[ -s $done_file && $(<"$done_file") == "$(node_id)" ]] && exit 1
+  exit 0
+fi
 
 attribute() {
   local file
@@ -25,6 +40,9 @@ record() {
   printf '%s\n' "$1" >"$status_file.new"
   chmod 0644 "$status_file.new"
   mv -f "$status_file.new" "$status_file"
+  node_id >"$done_file.new"
+  chmod 0644 "$done_file.new"
+  mv -f "$done_file.new" "$done_file"
 }
 
 finish() {
