@@ -146,6 +146,23 @@ DTS
 done
 pass "only a node with no status, \"okay\" or \"ok\" has the compatible"
 
+# omarchy-apple-silicon-boot-check runs under pipefail. A match early in a
+# device tree larger than a pipe buffer is still a match: if awk stopped
+# reading, dtc would die of SIGPIPE and the pipeline would report a miss.
+{
+  printf '/dts-v1/;\n/ {\n  compatible = "apple,j293", "apple,t8103";\n'
+  printf '  ane@1000 { compatible = "apple,t8103-ane"; };\n'
+  for i in $(seq 1 8000); do
+    printf '  padding%d { compatible = "omarchy,test-padding"; };\n' "$i"
+  done
+  printf '};\n'
+} | dtc -q -I dts -O dtb -o "$tmp/large.dtb" -
+(( $(dtc -q -I dtb -O dts -o - "$tmp/large.dtb" | wc -c) > 262144 )) ||
+  fail "the large device tree's source is larger than a pipe buffer"
+(set -o pipefail; dtb_overlays_has_compatible "$tmp/large.dtb" apple,t8103-ane) ||
+  fail "under pipefail, an early match in a large device tree has the compatible"
+pass "under pipefail, an early match in a large device tree has the compatible"
+
 # A kernel that ships the node disabled does not keep the overlay out: the
 # overlay merges into the node and enables it in place.
 board_dtb t8103-j293-kernel-ane-disabled.dtb j293 t8103 \
