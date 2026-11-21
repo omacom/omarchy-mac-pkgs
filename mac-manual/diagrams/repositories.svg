@@ -66,7 +66,7 @@
 <g class="node tone-brand">
 <rect x="628" y="190" width="236" height="74"/>
 <text class="n-title" x="640" y="211">Installer app</text>
-<text class="n-sub" x="640" y="230">notarized .pkg, signed</text>
+<text class="n-sub" x="640" y="230">notarized .dmg, signed</text>
 <text class="n-sub" x="640" y="247">channel catalogs</text>
 </g>
 <g class="node">
