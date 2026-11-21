@@ -23,18 +23,21 @@ if grep -Fqs AURORA_BOOTCHAIN "$update_m1n1"; then
   exit 0
 fi
 
+# update-m1n1 honors both from the environment too; this run passes its own path.
+disabled=${M1N1_UPDATE_DISABLED-} configured=""
+unset TARGET
 # What update-m1n1 takes from its configuration before the path it is given, read in a clean shell.
-disabled="" configured=""
 if [[ -e $config ]]; then
-  values=$(env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
+  [[ -r $config ]] || { say "$config cannot be read; boot-ctxr.bin not refreshed"; exit 1; }
+  { IFS= read -r -d '' d; IFS= read -r -d '' configured; } < <(env -i PATH=/usr/bin:/bin OMARCHY_DTB_OVERLAYS=0 bash --noprofile --norc -c '
     unset M1N1_UPDATE_DISABLED TARGET
-    . "$1" >/dev/null 2>&1 || exit 1
-    printf "%s\n%s\n" "${M1N1_UPDATE_DISABLED-}" "${TARGET-}"
-  ' _ "$config") || { say "$config cannot be read; boot-ctxr.bin not refreshed"; exit 1; }
-  { IFS= read -r disabled; IFS= read -r configured; } <<<"$values" || :
+    . "$1" >/dev/null 2>&1
+    printf "%s\0%s\0" "${M1N1_UPDATE_DISABLED-}" "${TARGET-}"
+  ' _ "$config") || :
+  [[ -z ${d:-} ]] || disabled=$d
 fi
 if [[ -n $disabled ]]; then
-  say "M1N1_UPDATE_DISABLED is set in $config; boot-ctxr.bin not refreshed"
+  say "M1N1_UPDATE_DISABLED is set; boot-ctxr.bin not refreshed"
   exit 0
 fi
 if [[ -n $configured ]]; then
@@ -46,6 +49,7 @@ staging=$(mktemp "$esp/m1n1/.boot-ctxr.XXXXXX") || { say "could not stage a new 
 # update-m1n1 must create the staging file itself, so a run that wrote somewhere else is caught.
 rm -f "$staging"
 trap 'rm -f "$staging" "$staging.new" "$staging.old"' EXIT
+trap 'exit 1' INT TERM HUP
 
 if ! "$update_m1n1" "$staging"; then
   say "update-m1n1 failed; boot-ctxr.bin is unchanged"

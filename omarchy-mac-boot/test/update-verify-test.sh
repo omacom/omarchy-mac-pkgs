@@ -52,7 +52,7 @@ expect_refused() {
   local description=$1 reason=$2
   (( status == 1 )) || fail "$description fails update-verify" "status $status: $(cat "$tmp/out" "$tmp/err")"
   grep -Fq "$reason" "$tmp/err" || fail "$description is named" "$(cat "$tmp/err")"
-  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr && sudo omarchy-mac-boot-update" "$tmp/err" ||
+  grep -Fq "do not reboot yet" "$tmp/err" && grep -Fq "sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
     fail "$description says not to reboot and how to rebuild the boot files" "$(cat "$tmp/err")"
 }
 
@@ -368,6 +368,7 @@ SH
 cat >"$tmp/ctxr-stub" <<'SH'
 #!/bin/bash
 echo omarchy-mac-boot-ctxr >>"$REBUILD_LOG"
+[[ -z ${CTXR_FAILS:-} ]] || exit 1
 SH
 chmod +x "$tmp/ctxr-stub"
 cat >"$stubs/omarchy-mac-boot-update" <<'SH'
@@ -394,9 +395,17 @@ limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
 : >"$REBUILD_LOG"
 TEST_REBUILDS=$stubs verify
 expect_verified "a Mac with newer boot files after a rollback"
-[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-ctxr omarchy-mac-boot-update " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " ]] || fail "the rollback rebuild runs in order" "$(cat "$REBUILD_LOG")"
 [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "a finished rebuild clears the marker"
 pass "update-verify rebuilds newer boot files once after a rollback, with no package change"
+
+limine_mac
+limine_mac_boot_bin "$tmp/m1n1.bin" "${mac_dtbs[@]}"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+: >"$REBUILD_LOG"
+CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
+grep -qx omarchy-mac-boot-update "$REBUILD_LOG" || fail "a failed boot-ctxr.bin rebuild skips the boot menu rebuild" "$(cat "$REBUILD_LOG")"
+pass "a failed boot-ctxr.bin rebuild still leaves the boot menu rebuilt"
 
 limine_mac
 printf 'm1n1 stage 2 from the next m1n1-aurora\n' >"$tmp/m1n1.bin"

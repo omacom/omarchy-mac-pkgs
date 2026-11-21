@@ -86,8 +86,25 @@ printf 'TARGET=/boot/efi/m1n1/boot.bin\n' >"$OMARCHY_MAC_BOOT_CTXR_CONFIG"
 if SIZE=10 BYTE=t bash "$script" 2>"$tmp/err"; then fail "a configured TARGET passes"; fi
 [[ ! -s $CALLS && $(<"$esp/m1n1/boot-ctxr.bin") == "good image" ]] || fail "a configured TARGET still runs update-m1n1"
 grep -q "sets TARGET=/boot/efi/m1n1/boot.bin" "$tmp/err" || fail "a configured TARGET is not reported: $(<"$tmp/err")"
+# A configuration whose last command is false still reads; a multi-line value stays one value.
+printf 'M1N1_UPDATE_DISABLED=$(printf "\\nyes")\n[ -n "${NOPE:-}" ] && FOO=1\n' >"$OMARCHY_MAC_BOOT_CTXR_CONFIG"
+: >"$CALLS"
+SIZE=10 BYTE=d bash "$script" 2>"$tmp/err" || fail "a configuration ending in a false test fails the hook: $(<"$tmp/err")"
+grep -q "M1N1_UPDATE_DISABLED is set" "$tmp/err" || fail "a multi-line M1N1_UPDATE_DISABLED is misread: $(<"$tmp/err")"
+printf '[ -n "${NOPE:-}" ] && FOO=1\n' >"$OMARCHY_MAC_BOOT_CTXR_CONFIG"
+SIZE=20 BYTE=e bash "$script" >/dev/null 2>"$tmp/err" || fail "a configuration ending in a false test is refused: $(<"$tmp/err")"
+[[ $(stat -c %s "$esp/m1n1/boot-ctxr.bin") == 20 ]] || fail "a configuration ending in a false test does not rebuild"
 rm "$OMARCHY_MAC_BOOT_CTXR_CONFIG"
 pass "M1N1_UPDATE_DISABLED stands down with a note and a configured TARGET is refused"
+
+# The environment: M1N1_UPDATE_DISABLED there stands down, and a TARGET there is not passed on.
+printf 'good image' >"$esp/m1n1/boot-ctxr.bin"
+: >"$CALLS"
+M1N1_UPDATE_DISABLED=1 SIZE=10 BYTE=v bash "$script" 2>"$tmp/err" || fail "M1N1_UPDATE_DISABLED in the environment fails the hook"
+[[ ! -s $CALLS ]] || fail "M1N1_UPDATE_DISABLED in the environment still rebuilds"
+TARGET=$tmp/elsewhere SIZE=30 BYTE=w bash "$script" >/dev/null || fail "TARGET in the environment fails the hook"
+[[ ! -e $tmp/elsewhere && $(stat -c %s "$esp/m1n1/boot-ctxr.bin") == 30 ]] || fail "TARGET in the environment redirects the rebuild"
+pass "M1N1_UPDATE_DISABLED and TARGET from the environment are handled as update-m1n1 would"
 
 # Aurora's update-m1n1 keeps boot-ctxr.bin itself: stand down.
 printf 'good image' >"$esp/m1n1/boot-ctxr.bin"
