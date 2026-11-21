@@ -157,11 +157,13 @@ if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   # An fprintd that started without the reader found none and kept no
   # allowance for its node, so it starts again with both.
   systemctl try-restart fprintd.service 2>/dev/null
+  "$helpers/touchid-pam" || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   echo "Touch ID is on."
   exit 0
 elif (( preloaded )); then
   # It was loaded before it could be told to write, so the agreement stands and
   # takes effect when it loads again.
+  "$helpers/touchid-pam" || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   echo "Touch ID turns on when this Mac restarts: its driver was already running without permission to write. Restart, then set up the fingerprint again." >&2
   exit 1
 fi

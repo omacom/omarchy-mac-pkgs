@@ -156,7 +156,9 @@ run() {
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
-    OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} "$ROOT/lib/$1" "${@:2}"
+    OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} OMARCHY_MAC_PAMD=$fixture/pam.d \
+    OMARCHY_MAC_TOUCHID_PAM_LOCK=$fixture/run/touchid-pam.lock OMARCHY_MAC_TOUCHID_PAM_MODULE=$fixture/pam_aurora_touchid.so \
+    "$ROOT/lib/$1" "${@:2}"
 }
 eligibility() {
   run touchid-eligibility
@@ -238,7 +240,12 @@ pass 'the boot status records available or why not, and never turns Touch ID on'
 # succeed only once the activation says Touch ID can enrol and match.
 machine apple,j414c apple,t6021 apple,arm-platform
 echo ready >"$fixture/activation"
+mkdir -p "$fixture/pam.d"
+touch "$fixture/pam_aurora_touchid.so"
+printf 'auth include system-auth\naccount include system-auth\n' >"$fixture/pam.d/sudo"
 out=$(run touchid-enable 2>&1) || fail 'an available Mac whose activation reads ready turns on' "$out"
+grep -Fxq -- '-auth      optional                    pam_aurora_touchid.so' "$fixture/pam.d/sudo" ||
+  fail "a password in sudo re-arms Touch ID once it is on" "$(<"$fixture/pam.d/sudo")"
 [[ $(<"$fixture/firmware/updates/apple/mesa_calibration.bin") == "calibration" ]] ||
   fail 'the calibration is carved into the updates firmware directory under the default name'
 [[ -f $fixture/etc/touchid-on && $(stat -c %a "$fixture/etc/touchid-on") == 644 ]] || fail "the owner's agreement is recorded"
@@ -521,13 +528,16 @@ for name in enable-fingerprint disable-fingerprint; do
   sed -e "s|/run/omarchy-mac/touchid|$fixture/run/touchid|g" -e "s|/var/lib/aurora-sep-keybag.bin|$fixture/keybag|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-pam|$fixture/bin/pam-stub|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
 done
 printf '#!/bin/sh\necho enable >>"%s"\nexit 0\n' "$fixture/calls" >"$fixture/bin/enable-stub"
 printf '#!/bin/sh\ncat "%s"\n' "$fixture/eligibility" >"$fixture/bin/eligibility-stub"
-chmod +x "$fixture/bin/enable-stub" "$fixture/bin/eligibility-stub"
+printf '#!/bin/sh\nif [ -e "%s" ]; then echo add >>"%s"; else echo remove >>"%s"; fi\n' \
+  "$fixture/etc/touchid-on" "$fixture/pam-calls" "$fixture/pam-calls" >"$fixture/bin/pam-stub"
+chmod +x "$fixture/bin/enable-stub" "$fixture/bin/eligibility-stub" "$fixture/bin/pam-stub"
 ask() {
   : >"$fixture/calls"
   printf '%s\n' "$2" >"$fixture/answer"
@@ -551,7 +561,9 @@ awk 'length > 80 { exit 1 }' "$fixture/out" || fail 'the prompt fits in 80 colum
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"
+rm -f "$fixture/pam-calls"
 ask ready '' && [[ ! -s $fixture/calls && ! -s $fixture/out ]] || fail 'a Touch ID the owner already turned on asks nothing'
+[[ $(cat "$fixture/pam-calls" 2>/dev/null) == "add" ]] || fail 'a Touch ID turned on before the re-arm existed gets its PAM lines'
 grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" ||
   fail 'a Touch ID turned on before the driver options existed gets them'
 # No options yet, and none can be written.
@@ -596,8 +608,10 @@ without_status available n && ! grep -qE 'experimental|stays off' "$fixture/out"
   fail 'an agreed Mac with no status is told to restart, not asked again' "$(<"$fixture/out")"
 rm -f "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+rm -f "$fixture/pam-calls"
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 && [[ ! -e $fixture/etc/touchid-on && ! -e $fixture/etc/modprobe.conf ]] &&
   grep -q 'key store for Linux stays' "$fixture/out" || fail "turning it off removes the owner's agreement and says the key store stays"
+[[ $(cat "$fixture/pam-calls" 2>/dev/null) == "remove" ]] || fail 'turning it off takes the re-arm out of the PAM stacks, after the record'
 PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 || fail 'turning it off twice is fine'
 # A Neo's sensor key goes too, since turning Touch ID on again rebuilds it.
 mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
