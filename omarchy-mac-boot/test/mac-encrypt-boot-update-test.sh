@@ -1,7 +1,7 @@
 #!/bin/bash
 # Exercise conversion completion with a directory root and stubbed device operations.
 set -euo pipefail
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$(dirname "$0")/base-test.sh"
 source "$ROOT/files/usr/lib/omarchy/initcpio/omarchy-mac-encrypt"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

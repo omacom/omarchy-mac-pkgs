@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$(dirname "$0")/base-test.sh"
 script=$ROOT/files/usr/lib/omarchy/mac-first-boot/omarchy-mac-first-boot
 unit=$ROOT/files/usr/lib/systemd/system/omarchy-mac-first-boot.service
 hardware_dropin=$ROOT/files/usr/lib/systemd/system/omarchy-provision-hardware.service.d/20-mac-first-boot.conf

@@ -19,4 +19,12 @@ source_as 1000
 (( status == 0 )) && [[ $(<"$work/out") == "sourced" && ! -s $work/err ]] ||
   fail 'a regular user runs the suite' "$(cat "$work/out" "$work/err")"
 
-pass 'the suites refuse root, where entrypoints ignore fixture roots, and run as a regular user'
+# The suites that rerun themselves as root in a privileged container are the exceptions.
+for suite in "$ROOT"/test/*-test.sh; do
+  case ${suite##*/} in
+    base-test.sh | mac-encrypt-test.sh | mac-hid-initramfs-test.sh | mac-vconsole-initramfs-test.sh) ;;
+    *) grep -Eq '^source .*/base-test\.sh"$' "$suite" || fail "${suite##*/} sources base-test.sh" ;;
+  esac
+done
+
+pass 'every suite but the three privileged-container ones refuses root, where entrypoints ignore fixture roots, and runs as a regular user'
