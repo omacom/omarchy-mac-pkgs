@@ -176,6 +176,14 @@ ln -sfn ../dotfiles/brave-flags.conf "$flags"
 [[ -L $flags ]] || fail 'a linked flags file stays a link' "$(stat -c %F "$flags")"
 [[ $(<"$dotfile") == $'--disable-features=SomeOtherThing,AcceleratedVideoDecoder\n--ozone-platform=wayland' ]] ||
   fail "a linked flags file's target gets the workaround" "$(cat "$dotfile")"
+touch -d @1000000000 "$dotfile"
+"$setup_user" "$stage"
+(( $(stat -c %Y "$dotfile") == 1000000000 )) || fail "a linked flags file's target that has the workaround is not rewritten"
+printf '%s\n' '--ozone-platform=wayland' >"$dotfile"
+"$setup_user" "$stage"
+[[ -L $flags ]] || fail 'a linked flags file with no list stays a link' "$(stat -c %F "$flags")"
+[[ $(<"$dotfile") == $'--ozone-platform=wayland\n--disable-features=AcceleratedVideoDecoder' ]] ||
+  fail "a linked flags file's target with no list gets the workaround" "$(cat "$dotfile")"
 # The link's target is written through the link, so its directory need not be
 # writable, and a second run with nothing to change still passes.
 printf '%s\n' '--disable-features=SomeOtherThing' >"$dotfile"

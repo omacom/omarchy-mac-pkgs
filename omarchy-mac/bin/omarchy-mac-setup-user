@@ -29,10 +29,20 @@ for flags_dir in "${flag_dirs[@]}"; do
       echo "Preserving read-only browser flags link: $flags"
     elif grep -q -- '^--disable-features=' "$flags"; then
       if [[ -L $flags ]]; then
+        # A target that already has the feature is not rewritten.
         joined=$(mktemp)
-        sed -E "$join_decode_feature" "$flags" >"$joined"
-        cat "$joined" >"$flags"
+        join_status=0
+        if sed -E "$join_decode_feature" "$flags" >"$joined"; then
+          if ! cmp -s "$flags" "$joined"; then
+            cat "$joined" >"$flags" || join_status=$?
+          fi
+        else
+          join_status=$?
+        fi
         rm -f "$joined"
+        if (( join_status != 0 )); then
+          exit $join_status
+        fi
       else
         sed -i -E "$join_decode_feature" "$flags"
       fi
