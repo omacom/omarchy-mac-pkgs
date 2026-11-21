@@ -157,7 +157,8 @@ run() {
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
     OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} OMARCHY_MAC_PAMD=$fixture/pam.d \
-    OMARCHY_MAC_TOUCHID_PAM_LOCK=$fixture/run/touchid-pam.lock "$ROOT/lib/$1" "${@:2}"
+    OMARCHY_MAC_TOUCHID_PAM_LOCK=$fixture/run/touchid-pam.lock OMARCHY_MAC_TOUCHID_PAM_MODULE=$fixture/pam_aurora_touchid.so \
+    "$ROOT/lib/$1" "${@:2}"
 }
 eligibility() {
   run touchid-eligibility
@@ -240,6 +241,7 @@ pass 'the boot status records available or why not, and never turns Touch ID on'
 machine apple,j414c apple,t6021 apple,arm-platform
 echo ready >"$fixture/activation"
 mkdir -p "$fixture/pam.d"
+touch "$fixture/pam_aurora_touchid.so"
 printf 'auth include system-auth\naccount include system-auth\n' >"$fixture/pam.d/sudo"
 out=$(run touchid-enable 2>&1) || fail 'an available Mac whose activation reads ready turns on' "$out"
 grep -Fxq -- '-auth      optional                    pam_aurora_touchid.so' "$fixture/pam.d/sudo" ||

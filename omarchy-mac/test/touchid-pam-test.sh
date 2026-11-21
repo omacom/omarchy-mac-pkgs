@@ -9,27 +9,31 @@ trap 'rm -rf "$work"' EXIT
 # re-arms a locked Touch ID; turning Touch ID off takes it out again.
 "$ROOT/install" "$work/root"
 units=$work/root/usr/lib/systemd/system
-for unit in omarchy-mac-touchid-pam.service omarchy-mac-touchid-pam.path; do
-  [[ -f $units/$unit && $(readlink "$units/multi-user.target.wants/$unit") == "../$unit" ]] ||
-    fail "$unit is staged and pulled in at boot without enabling"
-done
-grep -Fxq 'ExecStart=/usr/lib/omarchy-mac/touchid-pam' "$units/omarchy-mac-touchid-pam.service" &&
-  grep -Fxq 'PathChanged=/etc/pam.d/sudo' "$units/omarchy-mac-touchid-pam.path" &&
-  grep -Fxq 'PathChanged=/etc/pam.d/polkit-1' "$units/omarchy-mac-touchid-pam.path" &&
-  [[ -x $work/root/usr/lib/omarchy-mac/touchid-pam ]] ||
-  fail 'the sync runs at boot and whenever sudo or polkit stacks change'
+unit=omarchy-mac-touchid-pam.service
+[[ -f $units/$unit && $(readlink "$units/multi-user.target.wants/$unit") == "../$unit" ]] &&
+  grep -Fxq 'ExecStart=/usr/lib/omarchy-mac/touchid-pam' "$units/$unit" && [[ -x $work/root/usr/lib/omarchy-mac/touchid-pam ]] ||
+  fail 'the sync runs at every boot without enabling'
+[[ ! -e $units/omarchy-mac-touchid-pam.path ]] || fail "nothing rewrites the stacks while Omarchy's own setup edits them"
 hook=$work/root/usr/share/libalpm/hooks/91-omarchy-mac-touchid-pam.hook
 grep -Fxq 'Target = usr/lib/security/pam_aurora_touchid.so' "$hook" && grep -Fq 'systemd-detect-virt --quiet --chroot ||' "$hook" ||
   fail 'an update that brings the module syncs at once, and never in a chroot'
-pass 'the sync, its units and its pacman hook are staged'
+removal=$work/root/usr/share/libalpm/hooks/91-omarchy-mac-touchid-pam-remove.hook
+grep -Fxq 'Operation = Remove' "$removal" && grep -Fxq 'When = PreTransaction' "$removal" &&
+  grep -Fq '/usr/lib/omarchy-mac/touchid-pam --remove' "$removal" || fail 'removing the package or the module takes the lines out first'
+consent=$units/aurora-touchid-rearm@.service.d/50-omarchy-mac-touchid.conf
+grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$consent" && grep -Fxq 'ConditionPathExists=/dev/sep-bio-rearm' "$consent" ||
+  fail "the helper answers only on the owner's record and a kernel with the re-arm node"
+pass 'the sync, its boot unit, its pacman hooks and the helper condition are staged'
 
 mkdir -p "$work/bin" "$work/pam.d" "$work/etc"
 printf '#!/bin/sh\n[ ! -e "%s" ]\n' "$work/not-a-mac" >"$work/bin/omarchy-hw-apple-silicon"
 chmod +x "$work/bin/omarchy-hw-apple-silicon"
+touch "$work/pam_aurora_touchid.so"
 sync() {
   OMARCHY_MAC_TOUCHID_AGREED=$work/etc/touchid-on OMARCHY_MAC_PAMD=$work/pam.d \
+    OMARCHY_MAC_TOUCHID_PAM_MODULE=$work/pam_aurora_touchid.so \
     OMARCHY_MAC_TOUCHID_PAM_LOCK=$work/run/touchid-pam.lock PATH="$work/bin:$PATH" \
-    "$ROOT/lib/touchid-pam" >"$work/out" 2>&1
+    "$ROOT/lib/touchid-pam" "$@" >"$work/out" 2>&1
 }
 module='-auth      optional                    pam_aurora_touchid.so'
 marker='# omarchy-mac: a password here re-arms Touch ID; turning Touch ID off removes this'
@@ -79,18 +83,40 @@ rm "$work/etc/touchid-on"
 sync || fail 'the lines are removed' "$(cat "$work/out")"
 cmp -s "$work/sudo" "$work/pam.d/sudo" && cmp -s "$work/polkit-1" "$work/pam.d/polkit-1" ||
   fail 'turning Touch ID off gives back the stacks as they were'
-pass 'without the record the module and its comment go, and nothing else'
+touch "$work/etc/touchid-on"
+sync && sync --remove && cmp -s "$work/sudo" "$work/pam.d/sudo" && cmp -s "$work/polkit-1" "$work/pam.d/polkit-1" ||
+  fail '--remove takes them out whatever the record says'
+sync && mv "$work/pam_aurora_touchid.so" "$work/gone.so" && sync && cmp -s "$work/sudo" "$work/pam.d/sudo" ||
+  fail 'without the module the lines go'
+mv "$work/gone.so" "$work/pam_aurora_touchid.so"
+rm "$work/etc/touchid-on"
+pass 'without the record or the module, or with --remove, the module and its comment go, and nothing else'
+
+# Only the managed block is ours: an administrator's own line stays, and the
+# block goes even when the include it followed has changed.
+printf 'auth include system-auth\n%s\naccount include system-auth\n' "$module" >"$work/own"
+cp "$work/own" "$work/pam.d/sudo"
+sync && cmp -s "$work/own" "$work/pam.d/sudo" || fail "an administrator's own module line is never removed"
+printf 'auth substack system-auth\n%s\n%s\naccount include system-auth\n' "$marker" "$module" >"$work/pam.d/sudo"
+sync && [[ $(<"$work/pam.d/sudo") == $'auth substack system-auth\naccount include system-auth' ]] ||
+  fail 'the managed block goes even after its include changed' "$(<"$work/pam.d/sudo")"
+cp "$work/sudo" "$work/pam.d/sudo"
+pass 'only the managed block is ever removed'
 
 touch "$work/etc/touchid-on"
 rm "$work/pam.d/polkit-1"
-printf 'auth include system-auth\nauth include system-auth\n' >"$work/twice"
-cp "$work/twice" "$work/pam.d/sudo"
-sync || fail 'a stack it cannot place the line in is not an error' "$(cat "$work/out")"
-cmp -s "$work/twice" "$work/pam.d/sudo" && grep -Fq "exactly one 'auth include system-auth'" "$work/out" &&
-  [[ ! -e $work/pam.d/polkit-1 ]] || fail 'an unusual stack stays as it is and says why; a missing polkit stack is not created'
+for stack in 'auth include system-auth\nauth include system-auth' 'auth include system-auth\nauth required pam_u2f.so' \
+  'auth [success=1 default=ignore] pam_exec.so quiet /bin/true\nauth required pam_deny.so'; do
+  printf "$stack\naccount include system-auth\n" >"$work/odd"
+  cp "$work/odd" "$work/pam.d/sudo"
+  sync || fail 'a stack it cannot place the line in is not an error' "$(cat "$work/out")"
+  cmp -s "$work/odd" "$work/pam.d/sudo" && grep -Fq "isn't its only 'auth include system-auth'" "$work/out" ||
+    fail 'a stack whose last auth line is not its only system-auth include stays as it is and says why' "$stack"
+done
+[[ ! -e $work/pam.d/polkit-1 ]] || fail 'a missing polkit stack is not created'
 ln -sfn "$work/sudo" "$work/pam.d/polkit-1"
 sync && [[ -L $work/pam.d/polkit-1 ]] && cmp -s "$work/sudo" "$work/pam.d/polkit-1" || fail 'a symlinked stack is left alone'
-pass 'a stack with no single system-auth include, a missing one and a symlink are left alone'
+pass 'a stack where the include is not the single last auth line, a missing one and a symlink are left alone'
 
 cp "$work/sudo" "$work/pam.d/sudo"
 rm "$work/pam.d/polkit-1"

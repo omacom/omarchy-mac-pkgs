@@ -1,6 +1,6 @@
 # Keeps Touch ID's re-arm in sudo's and polkit's PAM stacks to the owner's
-# record (lib/touchid-pam). Runs at boot, and from omarchy-mac-touchid-pam.path
-# whenever those stacks change, as the fingerprint setup writes them.
+# record (lib/touchid-pam) at every boot. Omarchy's fingerprint setup writes
+# polkit's stack after enrolling, so polkit gets the line from the next boot.
 [Unit]
 Description=Keep Touch ID's re-arm in the PAM stacks
 After=local-fs.target

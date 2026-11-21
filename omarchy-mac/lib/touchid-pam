@@ -1,26 +1,58 @@
 #!/bin/bash
 # Keeps pam_aurora_touchid (aurora-touchid-rearm) after `auth include system-auth`
-# in sudo's and polkit's stacks while the owner has Touch ID on, and takes it
-# out otherwise: a password there then ends a Touch ID lockout.
+# in sudo's and polkit's stacks while the owner has Touch ID on and the module
+# is installed, so a password there ends a Touch ID lockout. --remove takes it out.
 
 set -uo pipefail
 
 agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
 pamd=${OMARCHY_MAC_PAMD:-/etc/pam.d}
+module_file=${OMARCHY_MAC_TOUCHID_PAM_MODULE:-/usr/lib/security/pam_aurora_touchid.so}
 lock=${OMARCHY_MAC_TOUCHID_PAM_LOCK:-/run/omarchy-mac/touchid-pam.lock}
 marker='# omarchy-mac: a password here re-arms Touch ID; turning Touch ID off removes this'
 module='-auth      optional                    pam_aurora_touchid.so'
 include='^auth[[:space:]]+include[[:space:]]+system-auth[[:space:]]*$'
 omarchy-hw-apple-silicon || exit 0
 
+if [[ ${1:-} == "--remove" ]]; then
+  wanted=0
+elif [[ -e $agreed && -e $module_file ]]; then
+  wanted=1
+else
+  wanted=0
+fi
+
 if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock" && flock -w 30 "$lock_fd"; } 2>/dev/null; then
   echo "Touch ID's PAM lines were not updated: $lock could not be locked." >&2
   exit 1
 fi
 
-# Writes a stack's new text beside it with the same owner and mode, then moves it into place.
+# The managed block is the marker straight followed by the module line; nothing else is ours.
+has_block() {
+  awk -v marker="$marker" -v module="$module" 'previous == marker && $0 == module { found = 1 } { previous = $0 } END { exit !found }' "$1"
+}
+without_block() {
+  awk -v marker="$marker" -v module="$module" '
+    held && $0 == module { held = 0; next }
+    held { print marker; held = 0 }
+    $0 == marker { held = 1; next }
+    { print }
+    END { if (held) print marker }' "$1"
+}
+# Only where the single system-auth include is the last auth line: nothing after it, and no jump crosses it.
+with_block() {
+  local includes last_auth
+  includes=$(grep -nE "$include" "$1" | cut -d: -f1)
+  last_auth=$(grep -nE '^-?auth[[:space:]]' "$1" | tail -n 1 | cut -d: -f1)
+  [[ -n $includes && $includes != *$'\n'* && $includes == "$last_auth" ]] || return 10
+  awk -v marker="$marker" -v module="$module" -v line="$includes" '{ print } NR == line { print marker; print module }' "$1"
+}
+
+# Writes a stack's new text beside it with the same owner and mode, then moves it into place,
+# only when the text has the expected number of lines.
 replace() {
-  local file=$1 text=$2 new
+  local file=$1 text=$2 lines=$3 new
+  [[ -n $text && $(wc -l <<<"$text") == "$lines" ]] || return 1
   new=$(mktemp "$file.XXXXXX") || return 1
   if printf '%s\n' "$text" >"$new" && chown --reference="$file" "$new" && chmod --reference="$file" "$new" && mv -fT "$new" "$file"; then
     return 0
@@ -33,26 +65,26 @@ status=0
 for service in sudo polkit-1; do
   file=$pamd/$service
   [[ -f $file && ! -L $file ]] || continue
-  if grep -Fxq -- "$module" "$file"; then
-    present=1
+  # Counted as the edits see it, without trailing blank lines.
+  lines=$(wc -l <<<"$(<"$file")")
+  if (( wanted )); then
+    has_block "$file" && continue
+    text=$(with_block "$file")
+    case $? in
+      0) expected=$(( lines + 2 )) ;;
+      10)
+        echo "Touch ID's re-arm was not added to $file: its last auth line isn't its only 'auth include system-auth'." >&2
+        continue
+        ;;
+      *) text="" ;;
+    esac
   else
-    present=0
+    has_block "$file" || continue
+    text=$(without_block "$file") || text=""
+    expected=$(( lines - 2 ))
   fi
-  if [[ -e $agreed ]]; then
-    (( present )) && continue
-    includes=$(grep -Ec "$include" "$file")
-    if (( includes != 1 )); then
-      echo "Touch ID's re-arm was not added to $file: it needs exactly one 'auth include system-auth' line." >&2
-      continue
-    fi
-    text=$(awk -v marker="$marker" -v module="$module" -v pattern="$include" '{ print } $0 ~ pattern { print marker; print module }' "$file") || text=""
-  else
-    (( present )) || continue
-    text=$(awk -v marker="$marker" -v module="$module" '$0 != marker && $0 != module' "$file") || text=""
-  fi
-  # Never writes a stack that lost its system-auth include: sudo would then refuse everyone.
-  if ! grep -Eq "$include" <<<"$text" || ! replace "$file" "$text"; then
-    echo "Touch ID's re-arm line could not be updated in $file." >&2
+  if ! replace "$file" "$text" "$expected"; then
+    echo "Touch ID's re-arm line could not be updated in $file; it was left as it was." >&2
     status=1
   fi
 done
