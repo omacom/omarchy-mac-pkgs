@@ -1,0 +1,26 @@
+# Before any package changes: room on the system ESP for what this transaction stages there,
+# the vendor firmware asahi-fwupdate rebuilds and the UKI and Limine the boot update replaces.
+[Trigger]
+Type = Package
+Operation = Install
+Operation = Upgrade
+Target = aurora-fwextract
+Target = asahi-fwextract
+Target = mkinitcpio
+
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
+Target = usr/lib/firmware/*
+Target = usr/lib/modprobe.d/*
+Target = usr/share/limine/BOOTAA64.EFI
+
+[Action]
+Description = Checking for room on the EFI system partition...
+When = PreTransaction
+Exec = /usr/bin/omarchy-mac-esp-space --pacman
+NeedsTargets
+AbortOnFail

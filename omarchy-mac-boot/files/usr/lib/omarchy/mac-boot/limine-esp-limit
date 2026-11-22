@@ -1,0 +1,47 @@
+#!/bin/bash
+# Usage: limine-esp-limit [LIMINE_DEFAULT [ESP]]
+# limine-snapper-sync fills up to 85% of the ESP with snapshot kernels, less room than a firmware
+# update stages on a 500 MB ESP. Sets the limit that leaves that room, dropping the oldest
+# snapshot entries first, unless the owner set either value.
+
+set -uo pipefail
+
+limine_default=${1:-/etc/default/limine}
+esp=${2:-}
+marker="# omarchy-mac-boot: snapshot boot entries leave room on the EFI system partition for firmware and boot image updates."
+
+[[ -f $limine_default ]] || exit 0
+if [[ -z $esp ]]; then
+  esp=$(omarchy-mac-esp 2>/dev/null) || exit 0
+fi
+
+# The block is the marker and the two lines after it; anything else is the owner's.
+owned=$(awk -v marker="$marker" '
+  $0 == marker { skip = 2; next }
+  skip > 0 && /^(MAX_SNAPSHOT_ENTRIES|LIMIT_USAGE_PERCENT)=/ { skip--; next }
+  { skip = 0 }
+  /^[[:space:]]*(MAX_SNAPSHOT_ENTRIES|LIMIT_USAGE_PERCENT)[[:space:]]*=/ { print; exit }
+' "$limine_default")
+[[ -z $owned ]] || exit 0
+
+size=$(df -Pk -- "$esp" 2>/dev/null | awk 'NR == 2 { print $2 }')
+reserve=$(omarchy-mac-esp-space --esp "$esp" --firmware --boot-image --print-need) || exit 1
+[[ $size =~ ^[0-9]+$ && $reserve =~ ^[0-9]+$ ]] && (( size > 0 )) || exit 1
+percent=$(( (size - reserve) * 100 / size ))
+(( percent <= 85 )) || percent=85
+(( percent >= 1 )) || percent=1
+
+block=$(printf '%s\nMAX_SNAPSHOT_ENTRIES=auto\nLIMIT_USAGE_PERCENT=%s' "$marker" "$percent")
+current=$(awk -v marker="$marker" '$0 == marker { found = 1; print; for (i = 0; i < 2 && (getline line) > 0; i++) print line; exit }' "$limine_default")
+[[ $current != "$block" ]] || exit 0
+
+tmp=$(mktemp "$limine_default.XXXXXX") || exit 1
+trap 'rm -f "$tmp"' EXIT
+awk -v marker="$marker" '
+  $0 == marker { skip = 2; next }
+  skip > 0 && /^(MAX_SNAPSHOT_ENTRIES|LIMIT_USAGE_PERCENT)=/ { skip--; next }
+  { skip = 0; print }
+' "$limine_default" >"$tmp" || exit 1
+printf '%s\n' "$block" >>"$tmp" || exit 1
+chmod --reference="$limine_default" "$tmp" 2>/dev/null || true
+mv -f "$tmp" "$limine_default"

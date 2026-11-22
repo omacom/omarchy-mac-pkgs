@@ -41,6 +41,14 @@ When a kernel or boot package changes, `omarchy-mac-boot` rebuilds the initramfs
 
 If that check fails, the update refuses to finish, says what failed and does not offer a reboot. Do not reboot. Keep the output and [report it]({{page:hardware}}#reporting-a-problem).
 
+### Room on the EFI system partition
+
+The vendor firmware, Limine and the unified kernel image live on the EFI system partition, which is 500 MB on Macs installed so far. A firmware update writes a whole new copy beside the live firmware before it swaps them, and a new kernel image or Limine is written beside the live one and then renamed over it, so each needs its own size free. Before a transaction that updates any of them changes anything, `omarchy-mac-boot` removes what an earlier update left half-written and checks for that room. If it is not there, the update stops with nothing changed and says how much it needs. Free space on `/boot/efi`, for example by removing older snapshot boot entries with `sudo limine-snapper-remove`, and run `omarchy update` again.
+
+A Mac where an earlier update already ran out of room, leaving a half-written `vendorfw.new` or a boot menu naming a kernel image that is gone, is repaired by the next `omarchy update`: once the room is there, it finishes the firmware update, rebuilds the initramfs, m1n1 and the boot menu, then checks the result before it offers the reboot.
+
+To keep that room, snapshot boot entries may only fill the EFI system partition up to what leaves it, oldest first: on a 500 MB partition that is about one older kernel besides the current one. A `LIMIT_USAGE_PERCENT` or `MAX_SNAPSHOT_ENTRIES` you set yourself in `/etc/default/limine` is kept.
+
 If you build your own kernel or m1n1, you can create an empty file at `/etc/omarchy-mac-boot/owner-boot-chain` to take responsibility for verifying the boot files. While the file exists, `omarchy update` reports that you manage the boot chain and shows the first reason if the packaged check fails. The update can still finish and offer a reboot. Remove the file to restore enforced verification, for example after going back to the packaged kernel and m1n1. The check before a snapshot restore runs regardless of whether the file exists.
 
 ## What is signed, and by what

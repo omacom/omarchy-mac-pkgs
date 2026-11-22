@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# omarchy:summary=Check that the EFI system partition of an Apple Silicon Mac has room for the firmware and boot image an update stages
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+# asahi-fwupdate writes a whole new vendorfw beside the live one before the swap,
+# and the UKI and Limine are staged beside theirs before a rename, so each needs
+# its new copy's room free. Leftovers of a failed run are removed first.
+
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-mac-esp-space [--esp PATH] [--firmware] [--boot-image] [--pacman] [--print-need] [--firmware-pending FILE]
+  --firmware    room for asahi-fwupdate to stage a new vendorfw
+  --boot-image  room to stage a new UKI and Limine beside the live ones
+  --pacman      read pacman's hook targets on stdin: aurora-fwextract or asahi-fwextract
+                asks for --firmware, any other target for --boot-image
+  --print-need  print the KiB needed and exit, without checking or cleaning
+  --firmware-pending FILE
+                created when a half-written vendorfw.new is removed, so update-verify
+                finishes the firmware update (default /var/lib/omarchy/mac-boot/firmware-pending)
+USAGE
+}
+
+say() { echo "omarchy-mac-esp-space: $*" >&2; }
+
+esp="" firmware=0 boot_image=0 pacman=0 print_need=0 firmware_pending=/var/lib/omarchy/mac-boot/firmware-pending
+while (( $# )); do
+  case $1 in
+    --esp) esp=${2:-}; shift ;;
+    --firmware) firmware=1 ;;
+    --boot-image) boot_image=1 ;;
+    --pacman) pacman=1 ;;
+    --print-need) print_need=1 ;;
+    --firmware-pending) firmware_pending=${2:-}; shift ;;
+    -h | --help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if (( pacman )); then
+  while IFS= read -r target; do
+    case $target in
+      "") ;;
+      aurora-fwextract | asahi-fwextract) firmware=1 ;;
+      *) boot_image=1 ;;
+    esac
+  done
+fi
+
+if [[ -z $esp ]]; then
+  # An image build or a chroot has no system ESP to check; the boot check covers the rest.
+  esp=$(omarchy-mac-esp 2>/dev/null) || exit 0
+fi
+[[ -d $esp ]] || { say "$esp is not a directory"; exit 1; }
+
+margin=$((16 << 10))
+kib() { du -sk -- "$1" 2>/dev/null | awk '{ print $1; exit }'; }
+
+if (( ! print_need )); then
+  for stale in "$esp/vendorfw.new" "$esp/EFI/BOOT/BOOTAA64.EFI.new" "$esp"/EFI/Linux/*.efi.new; do
+    [[ -e $stale || -L $stale ]] || continue
+    if rm -rf -- "$stale"; then
+      say "removed $stale, left by an update that did not finish"
+      if [[ $stale == "$esp/vendorfw.new" ]]; then
+        mkdir -p -- "$(dirname -- "$firmware_pending")" && : >"$firmware_pending" ||
+          say "could not record that the firmware update is unfinished in $firmware_pending"
+      fi
+    else
+      say "could not remove $stale"
+    fi
+  done
+fi
+
+need=0 needed_for="" in_use=0
+# asahi-fwupdate skips a Mac without the firmware tarball on its ESP.
+if (( firmware )) && [[ -e $esp/asahi/all_firmware.tar.gz ]]; then
+  in_use=$(kib "$esp/vendorfw")
+  in_use=${in_use:-0}
+  need=$(( in_use + in_use / 10 + margin ))
+  needed_for="the new vendor firmware beside the $(( in_use >> 10 )) MiB in $esp/vendorfw"
+fi
+if (( boot_image )); then
+  largest=0
+  for file in "$esp"/EFI/Linux/*.efi "$esp/EFI/BOOT/BOOTAA64.EFI"; do
+    [[ -f $file ]] || continue
+    size=$(kib "$file")
+    (( ${size:-0} <= largest )) || largest=$size
+  done
+  # A new kernel or initramfs can be larger than the one it replaces.
+  if (( largest )) && (( largest + largest / 4 + margin > need )); then
+    need=$(( largest + largest / 4 + margin ))
+    needed_for="a new boot image beside the $(( largest >> 10 )) MiB one in $esp/EFI"
+  fi
+fi
+
+if (( print_need )); then
+  echo "$need"
+  exit 0
+fi
+(( need )) || exit 0
+
+available=$(df -Pk -- "$esp" 2>/dev/null | awk 'NR == 2 { print $4 }')
+[[ $available =~ ^[0-9]+$ ]] || { say "cannot read the free space on $esp"; exit 1; }
+if (( available < need )); then
+  say "the EFI system partition at $esp has $(( available >> 10 )) MiB free, and this update needs $(( need >> 10 )) MiB there to stage $needed_for."
+  say "Nothing was changed. Free space on $esp (sudo limine-snapper-remove removes older snapshot boot entries), then run omarchy update again."
+  exit 1
+fi
+exit 0

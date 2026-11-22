@@ -22,6 +22,7 @@ printf '#!/bin/bash\nexit 0\n' >"$stub_bin/omarchy-hw-apple-silicon"
 printf '#!/bin/bash\necho linux-aurora\n' >"$stub_bin/omarchy-mac-kernel"
 printf '#!/bin/bash\necho "systemctl $*" >>"$TEST_CALLS"\n' >"$stub_bin/systemctl"
 printf '#!/bin/bash\necho "limine-snapper-sync $*" >>"$TEST_CALLS"\n' >"$stub_bin/limine-snapper-sync"
+printf '#!/bin/bash\necho "$*" >>"$TEST_ESP_LIMIT_CALLS"\n' >"$stub_bin/limine-esp-limit"
 cat >"$stub_bin/findmnt" <<'SH'
 #!/bin/bash
 case "$*" in
@@ -80,6 +81,7 @@ run() {
   OMARCHY_LIMINE_GATE="$test_tmp/limine.enabled" OMARCHY_FSTAB="$etc/fstab" \
   OMARCHY_MACHINE_ID="$etc/machine-id" \
   OMARCHY_LIMINE_MENU_DEFAULTS="$ROOT/files/usr/lib/omarchy/mac-boot/limine-menu-defaults" \
+  OMARCHY_LIMINE_ESP_LIMIT="$stub_bin/limine-esp-limit" TEST_ESP_LIMIT_CALLS="$test_tmp/esp-limit-calls" \
   PATH="$stub_bin:$PATH" TEST_LEAF="$leaf" bash -c '
     trap "echo caller-trap >&2" ERR
     caller_trap=$(trap -p ERR)
@@ -163,7 +165,9 @@ pass "GRUB keeps the slot until the Limine menu boots the kernel"
 
 # The full activation.
 : >"$calls"
+rm -f "$test_tmp/esp-limit-calls"
 run || fail "the leaf activates Limine"
+[[ $(<"$test_tmp/esp-limit-calls") == "$etc/limine $esp" ]] || fail "snapshot kernels are limited to what leaves the ESP room for updates"
 grep -Fxq "TARGET=\"$test_tmp/boot/grub/grub-aa64.efi\"" "$etc/update-grub" || fail "update-grub is retargeted away from the U-Boot slot"
 [[ $(cat "$test_tmp/boot/grub/grub-aa64.efi") == "GRUB image" ]] || fail "update-grub wrote its image to the unused target"
 [[ ! -e $esp/EFI/BOOT/grub-aa64.efi ]] || fail "no GRUB image is left on the ESP"

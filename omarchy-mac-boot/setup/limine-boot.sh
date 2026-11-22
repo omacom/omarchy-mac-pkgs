@@ -145,6 +145,9 @@ CONF
   # The timeout and quiet mode are Omarchy's template's, as on x86.
   sudo "${OMARCHY_LIMINE_MENU_DEFAULTS:-/usr/lib/omarchy/mac-boot/limine-menu-defaults}" \
     "$esp/limine.conf" "$limine_conf_source" || limine_boot_fail "cannot give the menu Omarchy's timeout"
+  # Snapshot kernels leave the ESP room to stage the next firmware and boot image.
+  sudo "${OMARCHY_LIMINE_ESP_LIMIT:-/usr/lib/omarchy/mac-boot/limine-esp-limit}" "$limine_default" "$esp" ||
+    echo "limine-boot: could not limit snapshot kernels on $esp; limine-snapper-sync keeps its default" >&2
 
   limine_boots_uki() {
     sudo test -s "$esp/EFI/Linux/omarchy_$kernel.efi" && sudo grep -Fq "//$kernel" "$esp/limine.conf" &&

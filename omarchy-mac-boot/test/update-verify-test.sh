@@ -537,3 +537,88 @@ TEST_REBUILDS=$stubs verify
 [[ ! -s $REBUILD_LOG && ! -e $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "an owner-managed chain rebuilds nothing and drops the marker"
 pass "update-verify leaves an owner-managed boot chain to its owner"
 
+
+# An update that ran out of room on the ESP: a half-written vendorfw.new, or a menu naming a UKI
+# that was removed before its replacement was written. Once the room is there, update-verify
+# finishes the firmware update and rebuilds the boot files; without it, it changes nothing.
+cat >"$stubs/asahi-fwupdate" <<'SH'
+#!/bin/bash
+echo asahi-fwupdate >>"$REBUILD_LOG"
+[[ -z ${FWUPDATE_FAILS:-} ]] || exit 1
+SH
+cat >"$stubs/df" <<'SH'
+#!/bin/bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nesp 510976 0 %s 0%% %s\n' "${TEST_ESP_FREE:-409600}" "${@: -1}"
+SH
+cat >"$stubs/omarchy-mac-boot-update" <<'SH'
+#!/bin/bash
+echo omarchy-mac-boot-update >>"$REBUILD_LOG"
+[[ -z ${BOOT_UPDATE_FAILS:-} ]] || exit 1
+[[ -z ${GOOD_UKI:-} || -e $ESP_UKI ]] || cp "$GOOD_UKI" "$ESP_UKI"
+SH
+chmod +x "$stubs"/*
+export ESP_UKI=$mac_esp/EFI/Linux/omarchy_linux-aurora.efi GOOD_UKI=$tmp/good-uki
+pending=$mac_root/var/lib/omarchy/mac-boot/firmware-pending
+
+stuck_firmware() {
+  limine_mac
+  cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+  mkdir -p "$mac_esp/vendorfw" "$mac_esp/vendorfw.new" "$mac_esp/asahi"
+  : >"$mac_esp/asahi/all_firmware.tar.gz"
+  printf 'live firmware\n' >"$mac_esp/vendorfw/firmware.cpio"
+  printf 'half of the new firmware\n' >"$mac_esp/vendorfw.new/firmware.cpio"
+  cp "$ESP_UKI" "$GOOD_UKI"
+  rm "$ESP_UKI"
+  : >"$REBUILD_LOG"
+}
+
+stuck_firmware
+TEST_REBUILDS=$stubs verify
+expect_verified "a Mac whose firmware update ran out of room, once there is room"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "asahi-fwupdate mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " ]] ||
+  fail "the firmware update and the rebuild run in order" "$(cat "$REBUILD_LOG")"
+[[ ! -e $mac_esp/vendorfw.new && ! -e $pending && -s $mac_esp/vendorfw/firmware.cpio ]] || fail "the half-written vendorfw.new goes, the live one stays, nothing is left pending"
+grep -Fq "An earlier update ran out of room on the EFI system partition; finishing it" "$tmp/out" || fail "the repair is announced" "$(cat "$tmp/out")"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "the next update"
+[[ ! -s $REBUILD_LOG ]] || fail "a finished repair runs once" "$(cat "$REBUILD_LOG")"
+pass "update-verify finishes a firmware update that ran out of room on the ESP, and rebuilds the boot files"
+
+stuck_firmware
+TEST_ESP_FREE=10240 TEST_REBUILDS=$stubs verify
+(( status == 1 )) && grep -Fq "has 10 MiB free" "$tmp/err" && grep -Fq "do not reboot yet" "$tmp/err" ||
+  fail "a Mac still short of room is refused" "status $status: $(cat "$tmp/err")"
+grep -Fxq "  sudo rm -rf /boot/efi/vendorfw.new && sudo asahi-fwupdate && sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
+  fail "a Mac still short of room is told the whole repair" "$(cat "$tmp/err")"
+[[ ! -s $REBUILD_LOG && -e $pending && ! -e $mac_esp/vendorfw.new ]] || fail "a Mac short of room only drops the half-written copy and records the firmware update" "$(cat "$REBUILD_LOG")"
+# The copy is gone, but the record still has the next update finish the firmware.
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "the next update, with room"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "asahi-fwupdate mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " && ! -e $pending ]] ||
+  fail "the recorded firmware update is finished on the next update" "$(cat "$REBUILD_LOG")"
+pass "a Mac still short of room is refused with the repair to run, and finished on the next update"
+
+stuck_firmware
+FWUPDATE_FAILS=1 TEST_REBUILDS=$stubs verify
+(( status == 1 )) && grep -Fq "asahi-fwupdate did not finish" "$tmp/err" && [[ -e $pending ]] ||
+  fail "a failed firmware update is refused and stays pending" "status $status: $(cat "$tmp/err")"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "asahi-fwupdate " ]] || fail "a failed firmware update rebuilds nothing" "$(cat "$REBUILD_LOG")"
+pass "a failed firmware update is refused and retried on the next update"
+
+limine_mac
+cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"
+cp "$ESP_UKI" "$GOOD_UKI"
+rm "$ESP_UKI"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "a Mac whose menu named a UKI that was removed"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " ]] ||
+  fail "a missing UKI is rebuilt without a firmware update" "$(cat "$REBUILD_LOG")"
+limine_mac
+rm "$ESP_UKI"
+: >"$REBUILD_LOG"
+GOOD_UKI="" TEST_REBUILDS=$stubs verify
+expect_refused "a missing UKI the rebuild does not bring back" "(the Limine UKI) is missing"
+pass "update-verify rebuilds a UKI an update removed, and refuses when the rebuild does not bring it back"
