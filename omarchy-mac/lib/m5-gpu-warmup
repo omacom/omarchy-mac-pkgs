@@ -1,0 +1,25 @@
+#!/bin/bash
+# M5 (T8142) only: put four tiny GPU jobs through before the greeter. The GPU's
+# second application job after boot sends its firmware into recovery, and the
+# desktop stays black, when that job is Hyprland's (aurora-silicon/linux#2727).
+
+tree=${OMARCHY_MAC_GPU_WARMUP_TREE:-/proc/device-tree}
+node=${OMARCHY_MAC_GPU_WARMUP_NODE:-/dev/dri/renderD128}
+render=${OMARCHY_MAC_GPU_WARMUP_RENDER:-/usr/lib/omarchy-mac/m5-gpu-warmup-render}
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+if ! compatible apple,t8142; then
+  exit 0
+fi
+for _ in {1..100}; do
+  [[ -e $node ]] && break
+  sleep 0.1
+done
+if [[ -e $node ]]; then
+  exec "$render" "$node" 64 64 4
+else
+  echo "No GPU render node at $node; no warm-up"
+fi

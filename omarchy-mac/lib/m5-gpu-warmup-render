@@ -1,0 +1,162 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: MIT
+"""Renders a few tiny GLES frames on a DRM render node, offscreen, and waits
+for each to finish: a clear and one triangle into a WIDTHxHEIGHT texture,
+then one pixel read back.
+
+Usage: m5-gpu-warmup-render NODE WIDTH HEIGHT FRAMES
+
+It needs only Mesa's libgbm, libEGL and libGLESv2. It exits 0 once every
+frame finished without a GL error."""
+
+import ctypes
+import os
+import sys
+
+EGL_PLATFORM_GBM_KHR = 0x31D7
+EGL_OPENGL_ES_API = 0x30A0
+EGL_CONTEXT_CLIENT_VERSION = 0x3098
+EGL_NONE = 0x3038
+GL_TEXTURE_2D = 0x0DE1
+GL_RGBA = 0x1908
+GL_UNSIGNED_BYTE = 0x1401
+GL_FLOAT = 0x1406
+GL_FRAMEBUFFER = 0x8D40
+GL_COLOR_ATTACHMENT0 = 0x8CE0
+GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+GL_VERTEX_SHADER = 0x8B31
+GL_FRAGMENT_SHADER = 0x8B30
+GL_COMPILE_STATUS = 0x8B81
+GL_COLOR_BUFFER_BIT = 0x4000
+GL_TRIANGLES = 0x0004
+GL_RENDERER = 0x1F01
+GL_NO_ERROR = 0
+
+pointer = ctypes.c_void_p
+uint = ctypes.c_uint
+integer = ctypes.c_int
+real = ctypes.c_float
+
+
+def bind(library, name, result, *arguments):
+    function = getattr(library, name)
+    function.restype = result
+    function.argtypes = list(arguments)
+    return function
+
+
+class Renderer:
+    def __init__(self):
+        gbm = ctypes.CDLL("libgbm.so.1")
+        egl = ctypes.CDLL("libEGL.so.1")
+        gl = ctypes.CDLL("libGLESv2.so.2")
+        self.gbm_create_device = bind(gbm, "gbm_create_device", pointer, integer)
+        self.eglGetPlatformDisplay = bind(egl, "eglGetPlatformDisplay", pointer, uint, pointer, pointer)
+        self.eglInitialize = bind(egl, "eglInitialize", uint, pointer, pointer, pointer)
+        self.eglBindAPI = bind(egl, "eglBindAPI", uint, uint)
+        self.eglCreateContext = bind(egl, "eglCreateContext", pointer, pointer, pointer, pointer, ctypes.POINTER(integer))
+        self.eglMakeCurrent = bind(egl, "eglMakeCurrent", uint, pointer, pointer, pointer, pointer)
+        self.eglGetError = bind(egl, "eglGetError", integer)
+        self.glGetString = bind(gl, "glGetString", ctypes.c_char_p, uint)
+        self.glGenTextures = bind(gl, "glGenTextures", None, integer, ctypes.POINTER(uint))
+        self.glBindTexture = bind(gl, "glBindTexture", None, uint, uint)
+        self.glTexImage2D = bind(gl, "glTexImage2D", None, uint, integer, integer, integer, integer, integer, uint, uint, pointer)
+        self.glGenFramebuffers = bind(gl, "glGenFramebuffers", None, integer, ctypes.POINTER(uint))
+        self.glBindFramebuffer = bind(gl, "glBindFramebuffer", None, uint, uint)
+        self.glFramebufferTexture2D = bind(gl, "glFramebufferTexture2D", None, uint, uint, uint, uint, integer)
+        self.glCheckFramebufferStatus = bind(gl, "glCheckFramebufferStatus", uint, uint)
+        self.glCreateShader = bind(gl, "glCreateShader", uint, uint)
+        self.glShaderSource = bind(gl, "glShaderSource", None, uint, integer, ctypes.POINTER(ctypes.c_char_p), pointer)
+        self.glCompileShader = bind(gl, "glCompileShader", None, uint)
+        self.glGetShaderiv = bind(gl, "glGetShaderiv", None, uint, uint, ctypes.POINTER(integer))
+        self.glCreateProgram = bind(gl, "glCreateProgram", uint)
+        self.glAttachShader = bind(gl, "glAttachShader", None, uint, uint)
+        self.glBindAttribLocation = bind(gl, "glBindAttribLocation", None, uint, uint, ctypes.c_char_p)
+        self.glLinkProgram = bind(gl, "glLinkProgram", None, uint)
+        self.glUseProgram = bind(gl, "glUseProgram", None, uint)
+        self.glVertexAttribPointer = bind(gl, "glVertexAttribPointer", None, uint, integer, uint, ctypes.c_ubyte, integer, pointer)
+        self.glEnableVertexAttribArray = bind(gl, "glEnableVertexAttribArray", None, uint)
+        self.glViewport = bind(gl, "glViewport", None, integer, integer, integer, integer)
+        self.glClearColor = bind(gl, "glClearColor", None, real, real, real, real)
+        self.glClear = bind(gl, "glClear", None, uint)
+        self.glDrawArrays = bind(gl, "glDrawArrays", None, uint, integer, integer)
+        self.glFinish = bind(gl, "glFinish", None)
+        self.glGetError = bind(gl, "glGetError", uint)
+        self.glReadPixels = bind(gl, "glReadPixels", None, integer, integer, integer, integer, uint, uint, pointer)
+
+    def shader(self, kind, source):
+        shader = self.glCreateShader(kind)
+        text = ctypes.c_char_p(source.encode())
+        self.glShaderSource(shader, 1, ctypes.byref(text), None)
+        self.glCompileShader(shader)
+        compiled = integer(0)
+        self.glGetShaderiv(shader, GL_COMPILE_STATUS, ctypes.byref(compiled))
+        if not compiled.value:
+            raise SystemExit("shader compile failed")
+        return shader
+
+    def run(self, node, width, height, frames):
+        descriptor = os.open(node, os.O_RDWR | os.O_CLOEXEC)
+        device = self.gbm_create_device(descriptor)
+        if not device:
+            raise SystemExit(f"gbm_create_device failed on {node}")
+        display = self.eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, device, None)
+        if not display or not self.eglInitialize(display, None, None):
+            raise SystemExit("eglInitialize failed")
+        self.eglBindAPI(EGL_OPENGL_ES_API)
+        attributes = (integer * 3)(EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE)
+        context = self.eglCreateContext(display, None, None, attributes)
+        if not context or not self.eglMakeCurrent(display, None, None, context):
+            raise SystemExit(f"context failed 0x{self.eglGetError():x}")
+        print(f"GL renderer {self.glGetString(GL_RENDERER).decode()}")
+
+        texture = uint(0)
+        self.glGenTextures(1, ctypes.byref(texture))
+        self.glBindTexture(GL_TEXTURE_2D, texture)
+        self.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
+        framebuffer = uint(0)
+        self.glGenFramebuffers(1, ctypes.byref(framebuffer))
+        self.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer)
+        self.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0)
+        if self.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+            raise SystemExit("framebuffer incomplete")
+
+        program = self.glCreateProgram()
+        self.glAttachShader(program, self.shader(GL_VERTEX_SHADER, "attribute vec2 p; void main(){gl_Position=vec4(p,0.0,1.0);}"))
+        self.glAttachShader(program, self.shader(GL_FRAGMENT_SHADER, "precision mediump float; void main(){gl_FragColor=vec4(0.2,0.6,1.0,1.0);}"))
+        self.glBindAttribLocation(program, 0, b"p")
+        self.glLinkProgram(program)
+        self.glUseProgram(program)
+        # A client-side array: it must outlive every draw that reads it.
+        triangle = (real * 6)(-0.8, -0.8, 0.8, -0.8, 0.0, 0.8)
+        self.glVertexAttribPointer(0, 2, GL_FLOAT, 0, 0, ctypes.cast(triangle, pointer))
+        self.glEnableVertexAttribArray(0)
+        self.glViewport(0, 0, width, height)
+
+        for frame in range(1, frames + 1):
+            self.glClearColor(0.1 * (frame % 10), 0.1, 0.1, 1.0)
+            self.glClear(GL_COLOR_BUFFER_BIT)
+            self.glDrawArrays(GL_TRIANGLES, 0, 3)
+            self.glFinish()
+            error = self.glGetError()
+            print(f"frame {frame} {width}x{height} glError 0x{error:x}", flush=True)
+            if error != GL_NO_ERROR:
+                return 3
+        pixel = (ctypes.c_ubyte * 4)()
+        self.glReadPixels(width // 2, height // 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel)
+        print(f"center pixel {pixel[0]} {pixel[1]} {pixel[2]} {pixel[3]} (expect ~51 153 255 255)")
+        print(f"OK {frames} frames at {width}x{height}")
+        return 0
+
+
+def main(arguments):
+    if len(arguments) != 5:
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 1
+    node = arguments[1]
+    width, height, frames = (int(value) for value in arguments[2:5])
+    return Renderer().run(node, width, height, frames)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
