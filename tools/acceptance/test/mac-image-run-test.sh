@@ -79,7 +79,7 @@ run_owner_setup() {
   ) >"$test_tmp/out" 2>&1
 }
 console_log() {
-  printf 'Press Return to Start Setup\nSelect keyboard layout\nUsername> \nPassword> \nConfirm> \n'
+  printf 'Press Return to Start Setup\n%sSelect keyboard layout\nUsername> \nPassword> \nConfirm> \n' "${language_step-}"
   local prompt
   for prompt in "$@"; do printf '%s\n' "$prompt"; done
 }
@@ -98,6 +98,13 @@ for prompt in 'Full name> ' 'Email address> ' 'Hostname> '; do
   [[ $(grep -Fxc "\\r|$prompt" "$test_tmp/sent") == 1 ]] || fail "owner setup skips $prompt once" "$(cat "$test_tmp/sent")"
 done
 pass "owner setup with the git identity prompts skips name and email and keeps the default hostname"
+
+language_step=$'Language\n' console_log 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/language.log"
+: >"$test_tmp/sent"
+run_owner_setup "$test_tmp/language.log" || fail "owner setup that asks for the language first finishes" "$(cat "$test_tmp/out")"
+[[ $(grep -Fxc '\r|Language' "$test_tmp/sent") == 1 ]] || fail "owner setup keeps the default language once" "$(cat "$test_tmp/sent")"
+[[ $(grep -Fxc '\r|Select keyboard layout' "$test_tmp/sent") == 1 ]] || fail "owner setup then keeps the default keyboard" "$(cat "$test_tmp/sent")"
+pass "owner setup that asks for the language first keeps the default language and keyboard"
 
 console_log 'Full name> ' 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/broken.log"
 : >"$test_tmp/sent"
