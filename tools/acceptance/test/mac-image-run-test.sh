@@ -79,7 +79,7 @@ run_owner_setup() {
   ) >"$test_tmp/out" 2>&1
 }
 console_log() {
-  printf 'Press Return to Start Setup\n%sSelect keyboard layout\nUsername> \nPassword> \nConfirm> \n' "${language_step-}"
+  printf 'Press Return to Start Setup\n%sSelect keyboard layout\n%sUsername> \nPassword> \nConfirm> \n' "${language_step-}" "${timezone_step-}"
   local prompt
   for prompt in "$@"; do printf '%s\n' "$prompt"; done
 }
@@ -105,6 +105,15 @@ run_owner_setup "$test_tmp/language.log" || fail "owner setup that asks for the 
 [[ $(grep -Fxc '\r|Language' "$test_tmp/sent") == 1 ]] || fail "owner setup keeps the default language once" "$(cat "$test_tmp/sent")"
 [[ $(grep -Fxc '\r|Select keyboard layout' "$test_tmp/sent") == 1 ]] || fail "owner setup then keeps the default keyboard" "$(cat "$test_tmp/sent")"
 pass "owner setup that asks for the language first keeps the default language and keyboard"
+
+language_step=$'Language\n' timezone_step=$'Timezone\n' console_log 'Does this look right?' 'omarchy login: ' >"$test_tmp/account.log"
+: >"$test_tmp/sent"
+run_owner_setup "$test_tmp/account.log" || fail "owner setup that asks for the timezone first and no hostname finishes" "$(cat "$test_tmp/out")"
+for prompt in Language 'Select keyboard layout' Timezone 'Does this look right?'; do
+  [[ $(grep -Fxc "\\r|$prompt" "$test_tmp/sent") == 1 ]] || fail "owner setup keeps the default at $prompt once" "$(cat "$test_tmp/sent")"
+done
+grep -q 'Hostname\|Full name' "$test_tmp/sent" && fail "owner setup without a hostname prompt answers none" "$(cat "$test_tmp/sent")"
+pass "owner setup that asks for the timezone first and generates the hostname keeps every default"
 
 console_log 'Full name> ' 'Hostname> ' 'Timezone' 'Does this look right?' 'omarchy login: ' >"$test_tmp/broken.log"
 : >"$test_tmp/sent"
