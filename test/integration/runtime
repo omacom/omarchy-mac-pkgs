@@ -1,4 +1,5 @@
 # The Omarchy runtime CI tests the packages against: a repository and a full commit.
-# Move it deliberately, like a recipe pin. At 2fca7fe0, upstream quattro's
-# "Update translations (#16604)"; fixtures follow its repositories and reset.
-omacom/omarchy 2fca7fe073e5ef71cd066ddb0d2294ad067deaf5
+# Move it deliberately, like a recipe pin. Today the head of the omacom/omarchy pull
+# request that adds built-in panel settings (default/hypr/panel-defaults.lua), on
+# quattro 36b70f1b; its merge commit once it merges.
+omacom/omarchy 52d735da59e72d2a010870cfd37eab162f5c31c1
