@@ -545,6 +545,7 @@ cat >"$stubs/asahi-fwupdate" <<'SH'
 #!/bin/bash
 echo asahi-fwupdate >>"$REBUILD_LOG"
 [[ -z ${FWUPDATE_FAILS:-} ]] || exit 1
+[[ -z ${FWUPDATE_WRITES:-} ]] || { mkdir -p "$FWUPDATE_WRITES" && echo firmware >"$FWUPDATE_WRITES/firmware.cpio"; }
 SH
 cat >"$stubs/df" <<'SH'
 #!/bin/bash
@@ -559,6 +560,7 @@ SH
 chmod +x "$stubs"/*
 export ESP_UKI=$mac_esp/EFI/Linux/omarchy_linux-aurora.efi GOOD_UKI=$tmp/good-uki
 pending=$mac_root/var/lib/omarchy/mac-boot/firmware-pending
+esp_rebuild=$mac_root/var/lib/omarchy/mac-boot/esp-rebuild-pending
 
 stuck_firmware() {
   limine_mac
@@ -589,7 +591,7 @@ stuck_firmware
 TEST_ESP_FREE=10240 TEST_REBUILDS=$stubs verify
 (( status == 1 )) && grep -Fq "has 10 MiB free" "$tmp/err" && grep -Fq "do not reboot yet" "$tmp/err" ||
   fail "a Mac still short of room is refused" "status $status: $(cat "$tmp/err")"
-grep -Fxq "  sudo rm -rf /boot/efi/vendorfw.new && sudo asahi-fwupdate && sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
+grep -Fxq "  sudo omarchy-mac-esp-space --boot-image --firmware && sudo asahi-fwupdate && sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" "$tmp/err" ||
   fail "a Mac still short of room is told the whole repair" "$(cat "$tmp/err")"
 [[ ! -s $REBUILD_LOG && -e $pending && ! -e $mac_esp/vendorfw.new ]] || fail "a Mac short of room only drops the half-written copy and records the firmware update" "$(cat "$REBUILD_LOG")"
 # The copy is gone, but the record still has the next update finish the firmware.
@@ -606,6 +608,46 @@ FWUPDATE_FAILS=1 TEST_REBUILDS=$stubs verify
   fail "a failed firmware update is refused and stays pending" "status $status: $(cat "$tmp/err")"
 [[ $(tr '\n' ' ' <"$REBUILD_LOG") == "asahi-fwupdate " ]] || fail "a failed firmware update rebuilds nothing" "$(cat "$REBUILD_LOG")"
 pass "a failed firmware update is refused and retried on the next update"
+
+# asahi-fwupdate died between removing the live firmware and renaming the new copy.
+stuck_firmware
+rm -rf "$mac_esp/vendorfw"
+printf 'the only firmware\n' >"$mac_esp/vendorfw.new/firmware.cpio"
+TEST_REBUILDS=$stubs verify
+expect_verified "a Mac whose only firmware copy is vendorfw.new"
+[[ $(<"$mac_esp/vendorfw/firmware.cpio") == "the only firmware" && ! -e $mac_esp/vendorfw.new && ! -e $pending ]] &&
+  grep -Fxq asahi-fwupdate "$REBUILD_LOG" || fail "the only firmware copy is put in place and the firmware update finished"
+stuck_firmware
+rm -rf "$mac_esp/vendorfw" "$mac_esp/vendorfw.new"
+mkdir -p "${pending%/*}"
+: >"$pending"
+TEST_REBUILDS=$stubs verify
+(( status == 1 )) && grep -Fq "asahi-fwupdate left no firmware in /boot/efi/vendorfw" "$tmp/err" && [[ -e $pending ]] ||
+  fail "a firmware update that leaves no firmware stays pending" "status $status: $(cat "$tmp/err")"
+: >"$REBUILD_LOG"
+FWUPDATE_WRITES=$mac_esp/vendorfw TEST_REBUILDS=$stubs verify
+expect_verified "a Mac with the firmware update pending and no vendorfw"
+grep -Fxq asahi-fwupdate "$REBUILD_LOG" && [[ ! -e $pending ]] || fail "a pending firmware update runs without a live vendorfw"
+pass "update-verify keeps the only firmware copy and finishes a pending firmware update"
+
+# A boot-ctxr.bin rebuild that fails once the UKI is back is tried again on the next update.
+stuck_firmware
+CTXR_FAILS=1 TEST_REBUILDS=$stubs verify
+(( status == 1 )) && grep -Fq "Rebuilding boot-ctxr.bin did not finish" "$tmp/err" && [[ -e $esp_rebuild && ! -e $pending ]] ||
+  fail "a failed boot-ctxr.bin rebuild is refused and recorded" "status $status: $(cat "$tmp/err")"
+: >"$REBUILD_LOG"
+TEST_REBUILDS=$stubs verify
+expect_verified "the next update, once boot-ctxr.bin rebuilds"
+[[ $(tr '\n' ' ' <"$REBUILD_LOG") == "mkinitcpio update-m1n1 omarchy-mac-boot-update omarchy-mac-boot-ctxr " && ! -e $esp_rebuild ]] ||
+  fail "the rebuild runs again, without the firmware" "$(cat "$REBUILD_LOG")"
+stuck_firmware
+CTXR_NO_ESP=1 TEST_REBUILDS=$stubs verify
+expect_verified "a Mac whose boot-ctxr.bin could not be checked"
+[[ -e $esp_rebuild ]] && grep -Fq "was not checked" "$tmp/err" || fail "an unchecked boot-ctxr.bin stays recorded" "$(cat "$tmp/err")"
+TEST_REBUILDS=$stubs verify
+expect_verified "the next update, with boot-ctxr.bin checked"
+[[ ! -e $esp_rebuild ]] || fail "a checked rebuild is done"
+pass "an ESP repair is recorded until boot-ctxr.bin is rebuilt too"
 
 limine_mac
 cp "$ESP_BOOT_BIN" "$GOOD_BOOT_BIN"

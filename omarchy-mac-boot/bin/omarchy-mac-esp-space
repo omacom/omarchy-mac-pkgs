@@ -6,7 +6,8 @@
 
 # asahi-fwupdate writes a whole new vendorfw beside the live one before the swap,
 # and the UKI and Limine are staged beside theirs before a rename, so each needs
-# its new copy's room free. Leftovers of a failed run are removed first.
+# its new copy's room free. Leftovers of a failed run are removed first, and on a
+# Limine Mac still short of room the oldest snapshot boot entries go.
 
 set -uo pipefail
 
@@ -19,8 +20,9 @@ Usage: omarchy-mac-esp-space [--esp PATH] [--firmware] [--boot-image] [--pacman]
                 asks for --firmware, any other target for --boot-image
   --print-need  print the KiB needed and exit, without checking or cleaning
   --firmware-pending FILE
-                created when a half-written vendorfw.new is removed, so update-verify
-                finishes the firmware update (default /var/lib/omarchy/mac-boot/firmware-pending)
+                created when a half-written vendorfw.new is removed, or put in place of a
+                live copy that is gone, so update-verify finishes the firmware update
+                (default /var/lib/omarchy/mac-boot/firmware-pending)
 USAGE
 }
 
@@ -58,30 +60,57 @@ fi
 [[ -d $esp ]] || { say "$esp is not a directory"; exit 1; }
 
 margin=$((16 << 10))
+# Stand in for a missing UKI whose kernel or initramfs, or missing firmware whose size, cannot be measured.
+unknown_uki=$((64 << 10))
+unknown_firmware=$((100 << 10))
+boot=${OMARCHY_MAC_BOOT_DIR:-/boot}
+limine_default=${OMARCHY_LIMINE_DEFAULT:-/etc/default/limine}
 kib() { du -sk -- "$1" 2>/dev/null | awk '{ print $1; exit }'; }
+free_kib() { df -Pk -- "$esp" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+# Recorded before vendorfw.new is touched, so a run that dies in between is still finished later.
+record_pending_firmware() {
+  if ! { mkdir -p -- "$(dirname -- "$firmware_pending")" && : >"$firmware_pending"; }; then
+    say "could not record that the firmware update is unfinished in $firmware_pending"
+    exit 1
+  fi
+}
 
 if (( ! print_need )); then
+  # asahi-fwupdate removes the live copy only once the new one is whole, so a run that
+  # died between the two left its vendorfw.new as the only firmware.
+  if [[ ! -s $esp/vendorfw/firmware.cpio && -s $esp/vendorfw.new/firmware.cpio ]]; then
+    record_pending_firmware
+    if rm -rf -- "$esp/vendorfw" && mv -- "$esp/vendorfw.new" "$esp/vendorfw"; then
+      say "put $esp/vendorfw.new in place of the firmware an unfinished update removed"
+    else
+      say "could not put $esp/vendorfw.new in place of the firmware an unfinished update removed"
+      exit 1
+    fi
+  fi
   for stale in "$esp/vendorfw.new" "$esp/EFI/BOOT/BOOTAA64.EFI.new" "$esp"/EFI/Linux/*.efi.new; do
     [[ -e $stale || -L $stale ]] || continue
+    [[ $stale != "$esp/vendorfw.new" ]] || record_pending_firmware
     if rm -rf -- "$stale"; then
       say "removed $stale, left by an update that did not finish"
-      if [[ $stale == "$esp/vendorfw.new" ]]; then
-        mkdir -p -- "$(dirname -- "$firmware_pending")" && : >"$firmware_pending" ||
-          say "could not record that the firmware update is unfinished in $firmware_pending"
-      fi
     else
       say "could not remove $stale"
     fi
   done
 fi
 
-need=0 needed_for="" in_use=0
+need=0 needed_for="" in_use=0 added=0
 # asahi-fwupdate skips a Mac without the firmware tarball on its ESP.
 if (( firmware )) && [[ -e $esp/asahi/all_firmware.tar.gz ]]; then
-  in_use=$(kib "$esp/vendorfw")
-  in_use=${in_use:-0}
+  if [[ -s $esp/vendorfw/firmware.cpio ]]; then
+    in_use=$(kib "$esp/vendorfw")
+    in_use=${in_use:-0}
+    needed_for="the new vendor firmware beside the $(( in_use >> 10 )) MiB in $esp/vendorfw"
+  else
+    # No live copy is freed by the swap, so the new one stays allocated while the UKI is staged.
+    in_use=$unknown_firmware added=$unknown_firmware
+    needed_for="the missing vendor firmware"
+  fi
   need=$(( in_use + in_use / 10 + margin ))
-  needed_for="the new vendor firmware beside the $(( in_use >> 10 )) MiB in $esp/vendorfw"
 fi
 if (( boot_image )); then
   largest=0
@@ -90,10 +119,23 @@ if (( boot_image )); then
     size=$(kib "$file")
     (( ${size:-0} <= largest )) || largest=$size
   done
+  staged_beside="beside the $(( largest >> 10 )) MiB one in $esp/EFI"
+  # A UKI that is gone is as large as the kernel and initramfs it is built from.
+  if omarchy-mac-limine-active 2>/dev/null && kernel=$(omarchy-mac-kernel 2>/dev/null) &&
+    [[ ! -f $esp/EFI/Linux/omarchy_$kernel.efi ]]; then
+    kernel_size=$(kib "$boot/vmlinuz-$kernel") initramfs_size=$(kib "$boot/initramfs-$kernel.img")
+    size=$(( ${kernel_size:-0} + ${initramfs_size:-0} ))
+    if [[ -z $kernel_size || -z $initramfs_size ]] && (( size < unknown_uki )); then
+      size=$unknown_uki
+    fi
+    if (( size > largest )); then
+      largest=$size staged_beside="of about $(( size >> 10 )) MiB in place of the missing EFI/Linux/omarchy_$kernel.efi"
+    fi
+  fi
   # A new kernel or initramfs can be larger than the one it replaces.
-  if (( largest )) && (( largest + largest / 4 + margin > need )); then
-    need=$(( largest + largest / 4 + margin ))
-    needed_for="a new boot image beside the $(( largest >> 10 )) MiB one in $esp/EFI"
+  if (( largest )) && (( added + largest + largest / 4 + margin > need )); then
+    need=$(( added + largest + largest / 4 + margin ))
+    needed_for="a new boot image $staged_beside"
   fi
 fi
 
@@ -103,11 +145,44 @@ if (( print_need )); then
 fi
 (( need )) || exit 0
 
-available=$(df -Pk -- "$esp" 2>/dev/null | awk 'NR == 2 { print $4 }')
+available=$(free_kib)
 [[ $available =~ ^[0-9]+$ ]] || { say "cannot read the free space on $esp"; exit 1; }
+# Whether older snapshots' images free enough to get under limine-esp-limit's limit: limine-snapper-sync
+# trims until it is, the entry this update rolls back to too. An entry on a Limine Mac is one UKI.
+trim_keeps_newest() {
+  local history size reserve percent older
+  history=$esp/$(cat "${OMARCHY_MACHINE_ID:-/etc/machine-id}" 2>/dev/null)/limine_history
+  [[ -d $history ]] || return 1
+  older=$(find "$history" -type f -name '*.efi*' -exec du -k {} + 2>/dev/null | awk '{ sum += $1; if ($1 > largest) largest = $1 } END { print sum - largest }')
+  size=$(df -Pk -- "$esp" 2>/dev/null | awk 'NR == 2 { print $2 }')
+  reserve=$(bash "$0" --esp "$esp" --firmware --boot-image --print-need) || return 1
+  [[ $older =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] && (( size > 0 )) || return 1
+  percent=$(( (size - reserve) * 100 / size ))
+  (( percent <= 85 )) || percent=85
+  (( available + older >= size - size * percent / 100 ))
+}
+
+# The limit limine-esp-limit keeps; an owner's own is left alone, and nothing trimmed for it.
+set_snapshot_limit() {
+  "${OMARCHY_LIMINE_ESP_LIMIT:-/usr/lib/omarchy/mac-boot/limine-esp-limit}" "$limine_default" "$esp" &&
+    grep -q '^# omarchy-mac-boot: snapshot boot entries leave room' "$limine_default"
+}
+
+if (( available < need )) && omarchy-mac-limine-active 2>/dev/null && trim_keeps_newest; then
+  # limine-snapper-sync drops the oldest snapshot entries over its limit on any run, and
+  # a Mac from before limine-esp-limit still has the 85% one, which leaves too little.
+  say "the EFI system partition at $esp has $(( available >> 10 )) MiB free of the $(( need >> 10 )) MiB this update needs; removing the oldest snapshot boot entries over the limit"
+  if ! { set_snapshot_limit && limine-snapper-sync; } >&2; then
+    say "the snapshot boot entries could not be trimmed"
+  fi
+  available=$(free_kib)
+  [[ $available =~ ^[0-9]+$ ]] || { say "cannot read the free space on $esp"; exit 1; }
+fi
 if (( available < need )); then
   say "the EFI system partition at $esp has $(( available >> 10 )) MiB free, and this update needs $(( need >> 10 )) MiB there to stage $needed_for."
-  say "Nothing was changed. Free space on $esp (sudo limine-snapper-remove removes older snapshot boot entries), then run omarchy update again."
+  unchanged=""
+  (( ! pacman )) || unchanged="No package was changed. "
+  say "${unchanged}Free space on $esp (sudo limine-snapper-remove removes older snapshot boot entries), then run omarchy update again."
   exit 1
 fi
 exit 0
