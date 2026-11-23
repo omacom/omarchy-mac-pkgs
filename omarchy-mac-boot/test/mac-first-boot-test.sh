@@ -242,7 +242,7 @@ write_esp() {
 for line in 'ConditionPathExists=/var/lib/omarchy/mac-first-boot/pending' \
   'Conflicts=getty@tty1.service' 'Before=getty@tty1.service' \
   'Conflicts=omarchy-first-boot.service' 'After=omarchy-first-boot.service' \
-  'After=systemd-user-sessions.service omarchy-vendor-firmware.service' \
+  'After=systemd-user-sessions.service' \
   'Restart=no' 'StandardInput=null' \
   'StandardOutput=journal' 'StandardError=journal' \
   'WantedBy=multi-user.target' \
@@ -250,6 +250,10 @@ for line in 'ConditionPathExists=/var/lib/omarchy/mac-first-boot/pending' \
   'Environment=OMARCHY_PATH=/usr/share/omarchy'; do
   grep -Fxq "$line" "$unit" || fail "the unit has $line"
 done
+! grep -v '^#' "$unit" | grep -Fq omarchy-vendor-firmware.service ||
+  fail "the unit must not order After=omarchy-vendor-firmware.service (blocks plymouth-quit/sddm on non-first boots)"
+grep -Fq 'wait_vendor_firmware' "$script" ||
+  fail "first boot waits for omarchy-vendor-firmware.service inside the script when pending"
 grep -Eq '^Environment=PATH=.*(/usr/share/omarchy/bin)' "$unit" ||
   fail "the unit puts /usr/share/omarchy/bin on PATH"
 ! grep -Fq NetworkManager "$unit" || fail "the unit does not wait for the network"
