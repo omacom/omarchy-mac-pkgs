@@ -71,7 +71,13 @@ sockets_fit /home/runner/vm-mac-image/runs/20261123T174147Z-1028 || fail "a defa
 deep=/var/tmp/omarchy-mac-acceptance/j614c-20261123-214005/state/runs/20261123T174147Z-1028
 ((${#deep} + 12 < 100)) || fail "the deep fixture's serial socket alone fits"
 ! sockets_fit "$deep" || fail "a run directory too deep for gpg-agent's sockets is refused"
-pass "a run directory leaves room for gpg-agent's sockets as well as the serial socket"
+work_for() { printf '/tmp/%*s' "$(($1 - 37))" '' | tr ' ' x; } # gpg-agent's longest socket path, in bytes
+sockets_fit "$(work_for 106)" || fail "a 106-byte gpg-agent socket path fits"
+! sockets_fit "$(work_for 107)" || fail "a 107-byte gpg-agent socket path is refused"
+wide=/tmp/$(printf '%*s' 40 '' | sed 's/ /é/g')
+[[ $(LC_ALL=C.UTF-8 bash -c 'x=é; echo ${#x}') == 1 ]] || fail "the C.UTF-8 locale counts é as one character"
+! LC_ALL=C.UTF-8 sockets_fit "$wide" || fail "a path that fits in characters but not in bytes is refused"
+pass "a run directory leaves room for gpg-agent's sockets as well as the serial socket, counted in bytes"
 
 # Owner setup over a recorded console: the harness's own serial functions read
 # a log written in advance, and the guest has already exited, so a prompt that
