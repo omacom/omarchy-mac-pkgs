@@ -78,6 +78,7 @@ class Audio:
         return nodes
     def pause(self): pass
     def notify(self, *args): self.notices.append(args)
+    def lid_closed(self): return getattr(self, 'lid', False)
     def signal(self, source):
         self.probes.append(source)
         if self.probe_choice is not None: self.default = self.probe_choice
@@ -430,6 +431,22 @@ with tempfile.TemporaryDirectory() as temporary:
             deferred(audio, saved); deferred(audio, saved)
         assert audio.restarts == 1 and len(audio.notices) == 1 and audio.notices[0][-4:] == ('omarchy-audio-watchdog', '--repair', 'stack', '--manual'), 'one notice per lasting outage'
         assert m.outage_due() is None
+    # A closed lid cuts the microphones off: no repair or notice until it has
+    # been open for the grace too.
+    audio = lost(); audio.lid = True; saved = state(); deferred(audio, saved)
+    with mock.patch.object(m.time, 'monotonic', return_value=later):
+        deferred(audio, saved)
+    with mock.patch.object(m.time, 'monotonic', return_value=later + m.OUTAGE_GRACE + 1):
+        deferred(audio, saved)
+    assert audio.restarts == 0 and not audio.notices, 'a closed lid is not a lost array'
+    audio.lid = False
+    with mock.patch.object(m.time, 'monotonic', return_value=later + 2 * m.OUTAGE_GRACE + 1):
+        deferred(audio, saved)
+    assert audio.restarts == 0, 'the grace starts again when the lid opens, not at the last closed pass'
+    with mock.patch.object(m.time, 'monotonic', return_value=later + 3 * m.OUTAGE_GRACE + 1):
+        deferred(audio, saved)
+    assert audio.restarts == 1, 'a loss that outlasts the open lid is still repaired'
+    m.recheck['at'] = None
     # A built-in card the user switched off is announced, never "repaired".
     audio = lost(); audio.cards[0]['active_profile'] = 'off'; saved = state()
     deferred(audio, saved)
@@ -930,7 +947,7 @@ with tempfile.TemporaryDirectory() as temporary:
 # WirePlumber once, through the watchdog, whatever the repair interval.
 def reset():
     m.installed.update(pending=False, retry_at=None, record=None, signature=None); m.recheck['at'] = None
-    m.outage.update(since=None, notified=False, repaired=False)
+    m.outage.update(since=None, notified=False, repaired=False); m.lid['closed'] = False
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     lv2 = directory / 'lv2'; (lv2 / 'lsp-plugins.lv2').mkdir(parents=True)
@@ -976,6 +993,21 @@ with tempfile.TemporaryDirectory() as temporary:
     assert audio.restarts == 1 and not m.installed['pending'] and not audio.notices, 'the update restarts WirePlumber once, inside the interval'
     pass_(audio)
     assert audio.restarts == 1, 'and only once'
+    # A closed lid keeps the update's restart pending until the lid has been
+    # found open twice.
+    reset(); audio = Audio(); audio.no_dsp = True; audio.lid = True
+    m.installed['pending'] = True; pass_(audio)
+    assert audio.restarts == 0 and m.installed['pending'] and m.installed['retry_at'] is not None, 'no restart under a closed lid'
+    audio.lid = False; due = m.installed['retry_at']
+    with mock.patch.object(m.time, 'monotonic', return_value=due - 1):
+        pass_(audio)
+    assert m.installed['retry_at'] > due, 'the first pass after it opens, even an early one, waits again'
+    with mock.patch.object(m.time, 'monotonic', return_value=due):
+        pass_(audio)
+    assert audio.restarts == 0 and m.installed['pending'], 'so the old deadline restarts nothing'
+    with mock.patch.object(m.time, 'monotonic', return_value=m.installed['retry_at']):
+        pass_(audio)
+    assert audio.restarts == 1 and not m.installed['pending'], 'the restart follows once the lid stays open'
     for name, setup in (('a Mac without a microphone array', lambda audio: setattr(audio, 'has_array', False)),
                         ('a card the user switched off', lambda audio: audio.cards[0].update(active_profile='off'))):
         reset(); audio = Audio(); audio.no_dsp = True; setup(audio)
@@ -1063,6 +1095,15 @@ with tempfile.TemporaryDirectory() as temporary:
     assert sub.wait() is False and len(calls) == 2, 'a changed install wakes a full pass'
     sub.stop()
 print('ok - an update that changes the audio plugins restarts WirePlumber once when the DSP microphone is missing')
+# The lid state comes from logind's LidClosed; a failed query counts as open.
+with tempfile.TemporaryDirectory() as temporary:
+    busctl = Path(temporary) / 'busctl'
+    query = 'get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager LidClosed'
+    for answer, expected in (('echo "b true"', True), ('echo "b false"', False), ('exit 1', False)):
+        busctl.write_text('#!/bin/bash\n[[ "$*" == "%s" ]] || exit 2\n%s\n' % (query, answer)); busctl.chmod(0o755)
+        with mock.patch.dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH']):
+            assert m.Audio().lid_closed() is expected, answer
+print('ok - the lid state comes from logind, and a failed query counts as open')
 unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit

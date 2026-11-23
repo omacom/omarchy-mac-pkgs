@@ -6,7 +6,9 @@
 [Unit]
 Description=Omarchy first boot: finish this Mac's image, then owner setup
 ConditionPathExists=/var/lib/omarchy/mac-first-boot/pending
-After=systemd-user-sessions.service omarchy-vendor-firmware.service
+# Wait for vendor firmware inside the script when pending; ordering After= it
+# here would hold up plymouth-quit and SDDM before ConditionPathExists= runs.
+After=systemd-user-sessions.service
 After=omarchy-first-boot.service
 Before=getty@tty1.service
 Conflicts=getty@tty1.service

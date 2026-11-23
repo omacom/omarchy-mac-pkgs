@@ -82,11 +82,26 @@ mkdir -p "$extract"
 mount -t tmpfs -o mode=0755 omarchy-vendorfw-extract "$extract"
 (cd "$extract" && cpio -i <"$mnt/vendorfw/firmware.cpio")
 umount "$mnt"
+rmdir "$mnt" 2>/dev/null || true
 
-src=$extract/vendorfw
-if [ ! -d "$src" ]; then
-    src=$extract
+# Hoist vendorfw/ contents to the root of the tmpfs in place (O(1), preserving
+# hardlinks) so the late unit can bind-mount $extract directly onto sysroot.
+if [ -d "$extract/vendorfw" ]; then
+    for _entry in "$extract/vendorfw"/* "$extract/vendorfw"/.[!.]* "$extract/vendorfw"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        mv "$_entry" "$extract/"
+    done
+    rmdir "$extract/vendorfw" 2>/dev/null || true
 fi
+
+dir_is_empty() {
+    for _entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        if [ -e "$_entry" ] || [ -L "$_entry" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
 
 vendor=/lib/firmware/vendor
 if [ -L "$vendor" ]; then
@@ -100,12 +115,23 @@ else
     mkdir -p "$dest"
     ln -s /vendorfw "$vendor"
 fi
-# Copy into the destination; never mount tmpfs over an existing vendor tree.
-cp -r "$src"/. "$dest"/
+# Bind-mount the already-extracted tmpfs when $dest is empty (zero copy, keeps
+# hardlinks and avoids duplicating ~56 MB in initramfs rootfs); fall back to
+# cp -a when $dest already holds files so existing firmware is never hidden.
+if grep -Fq " $extract " /proc/mounts 2>/dev/null && dir_is_empty "$dest"; then
+    mount --bind "$extract" "$dest"
+else
+    cp -a "$extract"/. "$dest"/
+    if grep -Fq " $extract " /proc/mounts 2>/dev/null; then
+        umount "$extract"
+        rmdir "$extract" 2>/dev/null || true
+    fi
+fi
 
 {
     printf 'dev=%s\n' "$dev"
     printf 'dest=%s\n' "$dest"
+    printf 'extract=%s\n' "$extract"
 } >"$record"
 
 if command -v udevadm >/dev/null 2>&1; then

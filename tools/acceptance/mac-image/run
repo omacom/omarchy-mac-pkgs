@@ -609,9 +609,24 @@ owner_setup() {
   serial_expect 'Press Return to Start Setup' "$what: owner setup greeter"
   boot_writable "$what"
   serial_send $'\r'
-  serial_expect 'Select keyboard layout' "$what: keyboard step" 120
+  # Current owner setup asks for the language before the keyboard; older
+  # images open on the keyboard.
+  serial_expect 'Language|Select keyboard layout' "$what: language or keyboard step" 120
+  if [[ $serial_match == Language ]]; then
+    serial_send $'\r'
+    serial_expect 'Select keyboard layout' "$what: keyboard step" 120
+  fi
   serial_send $'\r'
-  serial_expect 'Username> ' "$what: username" 120
+  # Current owner setup asks for the timezone first on the account screen,
+  # generates the hostname and goes straight to the review; older images ask
+  # for the timezone after the hostname.
+  local timezone_done=0
+  serial_expect 'Timezone|Username> ' "$what: timezone or username" 120
+  if [[ $serial_match == Timezone ]]; then
+    serial_send $'\r'
+    timezone_done=1
+    serial_expect 'Username> ' "$what: username" 120
+  fi
   serial_type "$owner_user"
   serial_expect 'Password> ' "$what: password" 60
   serial_type "$owner_password"
@@ -619,19 +634,22 @@ owner_setup() {
   serial_type "$owner_password"
   # Omarchy since omacom/omarchy#16288 asks for the git identity after first
   # login instead; older images still ask for it here.
-  serial_expect 'Full name> |Hostname> ' "$what: owner setup prompt Full name> or Hostname> " 120
+  serial_expect 'Full name> |Hostname> |Does this look right\?' "$what: owner setup prompt Full name>, Hostname> or the review" 120
   if [[ $serial_match == 'Full name> ' ]]; then
     serial_send $'\r'
     serial_expect 'Email address> ' "$what: owner setup prompt Email address> " 120
     serial_send $'\r'
     serial_expect 'Hostname> ' "$what: owner setup prompt Hostname> " 120
   fi
-  serial_send $'\r'
-  local prompt
-  for prompt in 'Timezone' 'Does this look right\?'; do
-    serial_expect "$prompt" "$what: owner setup prompt $prompt" 120
+  if [[ $serial_match == 'Hostname> ' ]]; then
     serial_send $'\r'
-  done
+    if ((!timezone_done)); then
+      serial_expect 'Timezone' "$what: owner setup prompt Timezone" 120
+      serial_send $'\r'
+    fi
+    serial_expect 'Does this look right\?' "$what: owner setup prompt Does this look right?" 120
+  fi
+  serial_send $'\r'
   serial_expect 'login: |Setup hit an error' "$what: owner setup finished and the console login" "$setup_timeout"
   [[ $serial_match == 'login: ' ]] || fail "$what: owner setup hit an error (its log is in the guest's /var/log/omarchy-provision-owner.log)"
   ! grep -aq 'recovery key' "$serial_log" || fail "$what: owner setup showed a disk recovery key"
