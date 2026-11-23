@@ -192,6 +192,8 @@ fi
 speaker_state=$(systemctl is-active speakersafetyd.service 2>/dev/null)
 if [[ $speaker_state == "active" ]]; then
   report PASS speakersafetyd "speakersafetyd is active"
+elif [[ $speaker_state == "inactive" && $(unit_property speakersafetyd.service ConditionResult) == "no" ]]; then
+  report SKIP speakersafetyd "speakersafetyd has no profile for this Mac, so the speakers stay off"
 else
   report FAIL speakersafetyd "speakersafetyd is ${speaker_state:-unknown}"
 fi
