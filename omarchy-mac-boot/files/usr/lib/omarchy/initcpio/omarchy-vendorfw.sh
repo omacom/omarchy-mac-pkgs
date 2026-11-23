@@ -1,6 +1,31 @@
 #!/usr/bin/sh
 set -eu
-dt=/proc/device-tree/chosen/asahi,efi-system-partition
+extract=${OMARCHY_VENDORFW_EXTRACT:-/run/omarchy-vendorfw-extract}
+record=${OMARCHY_VENDORFW_STAGED:-/run/omarchy-vendorfw-initrd.staged}
+dst=${OMARCHY_VENDORFW_SYSROOT_DEST:-/sysroot/lib/firmware/vendor}
+proc_mounts=${OMARCHY_VENDORFW_PROC_MOUNTS:-/proc/mounts}
+vendorfw_dir=${OMARCHY_VENDORFW_DIR:-/vendorfw}
+
+# Reuse the tmpfs already extracted before cryptsetup instead of remounting
+# the ESP, re-extracting firmware.cpio, and leaking /run/omarchy-vendorfw-extract.
+if [ -e "$record" ] && [ -d "$extract" ]; then
+    mkdir -p "$dst"
+    if grep -Fq " $extract " "$proc_mounts" 2>/dev/null; then
+        mount --bind "$extract" "$dst"
+        if grep -Fq " $vendorfw_dir " "$proc_mounts" 2>/dev/null; then
+            umount "$vendorfw_dir"
+        fi
+        umount "$extract"
+        rmdir "$extract" 2>/dev/null || true
+    else
+        mount -t tmpfs -o mode=0755 vendorfw "$dst"
+        cp -a "$extract"/. "$dst"/
+        rm -rf "$extract"
+    fi
+    exit 0
+fi
+
+dt=${OMARCHY_VENDORFW_DEVICE_TREE_ESP:-/proc/device-tree/chosen/asahi,efi-system-partition}
 [ -e "$dt" ] || exit 0
 esp=$(tr -d '\0' <"$dt")
 [ -n "$esp" ] || exit 0
@@ -11,8 +36,8 @@ if [ -f "$mnt/vendorfw/firmware.cpio" ]; then
     (cd / && cpio -i <"$mnt/vendorfw/firmware.cpio")
 fi
 umount "$mnt"
-[ -d /vendorfw ] || exit 0
-dst=/sysroot/lib/firmware/vendor
+rmdir "$mnt" 2>/dev/null || true
+[ -d "$vendorfw_dir" ] || exit 0
 mkdir -p "$dst"
 mount -t tmpfs -o mode=0755 vendorfw "$dst"
-cp -r /vendorfw/. "$dst"/
+cp -a "$vendorfw_dir"/. "$dst"/
