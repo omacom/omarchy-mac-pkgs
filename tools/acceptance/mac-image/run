@@ -1038,8 +1038,9 @@ scenario_update() {
   guest_run "update: installed runtime" "pacman -Q --color never omarchy omarchy-settings omarchy-mac omarchy-mac-boot"
   before=$(runtime_versions <<<"$guest_output") || true
   [[ -n $before ]] || fail "update: pacman -Q lists no runtime package before the update (see ${log##*/})"
-  # The reboot the update offers is declined, and so is removing orphans (an
-  # owner's choice that -y does not make): the guest is stopped and booted again below.
+  # A runtime that still asks to reboot or to remove orphans is declined; a newer one only
+  # reminds of the reboot and, under -y, removes orphans itself (omacom/omarchy 402128b6a2).
+  # Either way the guest is stopped and booted again below.
   replies=("\[sudo\] password for [a-z]+:=$owner_password" "${update_declines[@]}")
   guest_wait=$update_timeout guest_run "update: omarchy update -y" "omarchy update -y" "${replies[@]}"
   ((guest_status == 0)) || fail "update: omarchy update -y exited $guest_status (see ${log##*/})"

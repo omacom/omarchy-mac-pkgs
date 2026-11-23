@@ -125,6 +125,8 @@ pass "owner setup that asks for a full name but no email fails on the missing pr
 # gets no reply, which a shell would take as a command, and each question gum
 # draws, in the older or the newer wording, is declined once.
 awk '/^(serial_find|serial_expect|guest_run)\(\) \{/,/^}/; /^update_declines=/' "$harness" >"$test_tmp/guest-run.sh"
+[[ $(awk '/^scenario_update\(\) \{/,/^}/' "$harness") == *'"${update_declines[@]}"'* ]] ||
+  fail "the update scenario answers from update_declines"
 run_update() {
   (
     fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
@@ -134,6 +136,7 @@ run_update() {
     serial_log=$1 serial_pos=0 serial_match=
     sleep 0 & qemu_pid=$!; wait "$qemu_pid"
     source "$test_tmp/guest-run.sh"
+    ((${#update_declines[@]})) || fail "update_declines is empty"
     guest_run update "omarchy update -y" "${update_declines[@]}"
     printf 'status %s\n' "$guest_status"
   ) >"$test_tmp/out" 2>&1
@@ -147,9 +150,9 @@ run_update "$test_tmp/reminders.log" || fail "an update that only reminds finish
   fail "an update that only reminds gets nothing typed after it" "$(cat "$test_tmp/sent")"
 pass "the reminders of an unattended update get no reply"
 
-printf 'Linux kernel has been updated. Reboot?\e[m\n\nUpdates require reboot. Ready?\e[m\nRemove 2 orphaned packages?\e[m\nRemove 2 orphaned package(s)?\r\n__exit_0__\n' \
+printf 'Linux kernel has been updated. Reboot?\e[m\n\nUpdates require reboot. Ready?\e[m\nRemove 1 orphaned package?\e[m\nRemove 2 orphaned packages?\e[m\nRemove 2 orphaned package(s)?\r\n__exit_0__\n' \
   >"$test_tmp/questions.log"
 : >"$test_tmp/sent"
 run_update "$test_tmp/questions.log" || fail "an update that asks finishes" "$(cat "$test_tmp/out")"
-[[ $(grep -Fxc 'n\r' "$test_tmp/sent") == 4 ]] || fail "each question gum draws is declined once" "$(cat "$test_tmp/sent")"
+[[ $(grep -Fxc 'n\r' "$test_tmp/sent") == 5 ]] || fail "each question gum draws is declined once" "$(cat "$test_tmp/sent")"
 pass "each question gum draws, in the older or the newer wording, is declined once"
