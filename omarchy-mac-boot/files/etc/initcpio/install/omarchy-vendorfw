@@ -10,6 +10,9 @@ build() {
     add_binary cpio
     add_binary blkid
     add_binary cp
+    add_binary grep
+    add_binary mv
+    add_binary rmdir
     add_binary sleep
     add_file /usr/lib/omarchy/initcpio/omarchy-vendorfw.sh
     add_file /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh

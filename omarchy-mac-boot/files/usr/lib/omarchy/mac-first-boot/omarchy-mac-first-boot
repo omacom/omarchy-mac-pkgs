@@ -263,6 +263,14 @@ commit() {
 
 encrypt_failed_marker=${OMARCHY_MAC_ENCRYPT_FAILED_FILE:-/run/omarchy-mac-encrypt.failed}
 
+# Wait for vendor firmware and peripheral admission only on an actual first
+# boot so normal boots skip this unit without blocking plymouth-quit and SDDM.
+wait_vendor_firmware() {
+  [[ -z $root ]] || return 0
+  systemctl is-enabled --quiet omarchy-vendor-firmware.service 2>/dev/null || return 0
+  systemctl start omarchy-vendor-firmware.service >>"$log_file" 2>&1 || true
+}
+
 attempt() {
   rm -f "$error_file"
   # The initrd encrypt unit has no console; it leaves its failure here. It
@@ -274,6 +282,7 @@ attempt() {
       rm -f "$encrypt_failed_marker"
     fail "encryption failed in the initramfs: $(<"$state_dir/last-encrypt-failure") (journalctl -b -u omarchy-mac-encrypt)"
   fi
+  wait_vendor_firmware
   consume_install_conf
   make_keyring
   run_deferred_steps

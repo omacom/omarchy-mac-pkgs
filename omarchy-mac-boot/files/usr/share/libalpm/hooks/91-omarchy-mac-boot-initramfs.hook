@@ -4,6 +4,7 @@ Operation = Install
 Operation = Upgrade
 Target = etc/mkinitcpio.conf.d/90-omarchy-mac.conf
 Target = etc/mkinitcpio.conf.d/91-omarchy-mac-encrypt.conf
+Target = etc/mkinitcpio.conf.d/92-omarchy-mac-cpufreq.conf
 Target = etc/mkinitcpio.conf.d/92-omarchy-mac-hid.conf
 Target = etc/mkinitcpio.conf.d/92-omarchy-mac-kbd-backlight.conf
 Target = etc/mkinitcpio.conf.d/92-omarchy-mac-pmp.conf
