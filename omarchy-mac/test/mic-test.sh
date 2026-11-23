@@ -1092,6 +1092,15 @@ with tempfile.TemporaryDirectory() as temporary:
     assert sub.wait() is False and len(calls) == 2, 'a changed install wakes a full pass'
     sub.stop()
 print('ok - an update that changes the audio plugins restarts WirePlumber once when the DSP microphone is missing')
+# The lid state comes from logind's LidClosed; a failed query counts as open.
+with tempfile.TemporaryDirectory() as temporary:
+    busctl = Path(temporary) / 'busctl'
+    query = 'get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager LidClosed'
+    for answer, expected in (('echo "b true"', True), ('echo "b false"', False), ('exit 1', False)):
+        busctl.write_text('#!/bin/bash\n[[ "$*" == "%s" ]] || exit 2\n%s\n' % (query, answer)); busctl.chmod(0o755)
+        with mock.patch.dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH']):
+            assert m.Audio().lid_closed() is expected, answer
+print('ok - the lid state comes from logind, and a failed query counts as open')
 unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit
