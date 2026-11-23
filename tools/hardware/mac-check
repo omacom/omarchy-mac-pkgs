@@ -198,6 +198,7 @@ fi
 
 # Displays and audio, read from the logged-in user's session
 
+monitors=()
 if [[ -z $hypr_signature ]]; then
   report SKIP displays "no Hyprland session; log in at the greeter first"
 else
@@ -257,6 +258,176 @@ elif grep -q 'Controller' <<<"$bluetooth"; then
 else
   report FAIL bluetooth "no Bluetooth controller"
 fi
+
+# Ports and peripherals, read from the device tree and sysfs, so a tester can plug
+# something in, run the check again and see where it landed
+
+tree="$root/proc/device-tree"
+node_text() {
+  if [[ -r $1 ]]; then
+    tr '\0' ' ' <"$1" | sed 's/ $//'
+  fi
+}
+# The enabled device-tree nodes whose compatible lists $1, one path per line.
+enabled_nodes() {
+  local file node
+  while IFS= read -r -d '' file; do
+    node=${file%/compatible}
+    if [[ ! -r $node/status || $(node_text "$node/status") == "okay" ]]; then
+      printf '%s\n' "$node"
+    fi
+  done < <(grep -rlxZ --null-data --include=compatible -- "$1" "$tree" 2>/dev/null)
+}
+
+gpu=""
+for node in "$root"/sys/class/drm/renderD*; do
+  if [[ $(node_text "$node/device/of_node/compatible") == apple,agx-* ]]; then
+    gpu=$node
+    break
+  fi
+done
+if [[ -n $gpu ]]; then
+  driver=$(readlink "$gpu/device/driver" 2>/dev/null)
+  report PASS gpu "${gpu##*/} is the Apple GPU ($(node_text "$gpu/device/of_node/compatible" | cut -d' ' -f1)), driven by ${driver##*/}"
+else
+  report FAIL gpu "no render node belongs to the Apple GPU, so the desktop renders in software"
+fi
+
+# Every external display connector the kernel registered. One that sees a display
+# Hyprland does not show fails; a Mac whose kernel drives only its panel says so.
+connectors=() unshown=()
+for status in "$root"/sys/class/drm/card*-*/status; do
+  [[ -r $status ]] || continue
+  connector=${status%/status}
+  connector=${connector##*/}
+  connector=${connector#card*-}
+  [[ $connector != eDP-* ]] || continue
+  state=$(<"$status")
+  connectors+=("$connector $state")
+  if [[ $state == "connected" && -n $hypr_signature ]] && ! printf '%s\n' "${monitors[@]}" | grep -q "^$connector "; then
+    unshown+=("$connector")
+  fi
+done
+if (( ${#unshown[@]} )); then
+  report FAIL display-ports "a display is connected to $(joined "${unshown[@]}"), but Hyprland shows nothing there"
+elif (( ${#connectors[@]} )); then
+  report INFO display-ports "$(joined "${connectors[@]}")"
+else
+  report INFO display-ports "no external display connector: this kernel drives only the built-in panel"
+fi
+
+# The USB-C ports by the label of their device-tree connector, and the USB
+# controller behind each, found through the connector's endpoints.
+declare -A port_label=()
+mapfile -t usbc < <(enabled_nodes usb-c-connector)
+for connector in "${usbc[@]}"; do
+  label=$(node_text "$connector/label")
+  for remote in "$connector"/ports/port@*/endpoint*/remote-endpoint; do
+    target=$(od -An -tx1 -N4 "$remote" 2>/dev/null | tr -d ' \n')
+    for phandle in "$tree"/usb@*/port*/endpoint*/phandle "$tree"/usb@*/ports/port@*/endpoint*/phandle; do
+      [[ -r $phandle && $(od -An -tx1 -N4 "$phandle" | tr -d ' \n') == "$target" ]] || continue
+      controller=${phandle#"$tree"/usb@}
+      port_label[${controller%%/*}]=${label:-USB-C}
+    done
+  done
+done
+ports=()
+for port in "$root"/sys/class/typec/port*; do
+  [[ ${port##*/} =~ ^port[0-9]+$ ]] || continue
+  label=$(node_text "$port/device/of_node/connector/label")
+  role=$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$port/data_role" 2>/dev/null)
+  if [[ -d $port-partner ]]; then
+    ports+=("${label:-${port##*/}} (attached, ${role:-no data role})")
+  else
+    ports+=("${label:-${port##*/}} (empty)")
+  fi
+done
+if (( ${#ports[@]} < ${#usbc[@]} )); then
+  report FAIL usb-c "the device tree has ${#usbc[@]} USB-C connectors, the kernel registered ${#ports[@]} ports${ports[*]:+: $(joined "${ports[@]}")}"
+elif (( ${#ports[@]} )); then
+  report PASS usb-c "$(joined "${ports[@]}")"
+else
+  report SKIP usb-c "this Mac has no USB-C connector in its device tree"
+fi
+
+devices=()
+for device in "$root"/sys/bus/usb/devices/*; do
+  [[ ${device##*/} =~ ^[0-9]+-[0-9.]+$ ]] || continue
+  product=$(cat "$device/product" 2>/dev/null) || product="$(cat "$device/idVendor" 2>/dev/null):$(cat "$device/idProduct" 2>/dev/null)"
+  path=$(readlink -f "$device")
+  where="a port the device tree does not name"
+  for controller in "${!port_label[@]}"; do
+    [[ $path != */"$controller".usb/* ]] || where=${port_label[$controller]}
+  done
+  devices+=("$product on $where at $(cat "$device/speed" 2>/dev/null) Mb/s")
+done
+if (( ${#devices[@]} )); then
+  report INFO usb-devices "$(joined "${devices[@]}")"
+else
+  report INFO usb-devices "nothing attached"
+fi
+
+camera=""
+for video in "$root"/sys/class/video4linux/video*; do
+  if [[ $(node_text "$video/device/of_node/compatible") == *-isp* ]]; then
+    camera=${video##*/}
+    break
+  fi
+done
+if [[ -n $camera ]]; then
+  report PASS camera "the camera is /dev/$camera"
+elif [[ -n $(enabled_nodes apple,isp) ]]; then
+  report FAIL camera "the device tree enables the camera's ISP, but no video device belongs to it"
+else
+  report SKIP camera "the device tree leaves the camera off on this Mac"
+fi
+
+readers=("$root"/sys/class/mmc_host/mmc*)
+if [[ -d ${readers[0]} ]]; then
+  cards=("${readers[0]}/${readers[0]##*/}":*)
+  report PASS sd-reader "${readers[0]##*/}, $([[ -d ${cards[0]} ]] && echo "a card inserted" || echo "no card inserted")"
+elif [[ -n $(find "$tree" -maxdepth 3 -path '*pcie@*' -name 'mmc@*' 2>/dev/null) ]]; then
+  report FAIL sd-reader "the device tree has an SD card reader, but the kernel registered no MMC host"
+else
+  report SKIP sd-reader "this Mac has no SD card reader"
+fi
+
+backlights=("$root"/sys/class/leds/*kbd_backlight)
+if [[ -d ${backlights[0]} ]]; then
+  report PASS kbd-backlight "${backlights[0]##*/} at $(cat "${backlights[0]}/brightness") of $(cat "${backlights[0]}/max_brightness")"
+elif grep -rqx --null-data --include=function kbd_backlight "$tree" 2>/dev/null; then
+  report FAIL kbd-backlight "the device tree has a keyboard backlight, but the kernel registered no LED for it"
+else
+  report SKIP kbd-backlight "this Mac has no keyboard backlight"
+fi
+
+battery=""
+for supply in "$root"/sys/class/power_supply/*; do
+  if [[ $(cat "$supply/type" 2>/dev/null) == "Battery" ]]; then
+    battery=$supply
+    break
+  fi
+done
+if [[ -n $battery ]]; then
+  detail="$(cat "$battery/capacity")%, $(cat "$battery/status")"
+  [[ ! -r $battery/charge_control_end_threshold ]] || detail+=", charging stops at $(cat "$battery/charge_control_end_threshold")%"
+  report PASS battery "${battery##*/}: $detail"
+elif [[ $model == *MacBook* ]]; then
+  report FAIL battery "a MacBook whose battery the kernel does not report"
+else
+  report SKIP battery "no battery on this Mac"
+fi
+
+# Touch ID's boot status (omarchy-mac's lib/touchid-status), or its activation's
+# once the owner turned it on.
+touchid=$(cat "$root/run/omarchy-mac/touchid" 2>/dev/null)
+case $touchid in
+  ready) report PASS touchid "Touch ID is on and can enrol and match" ;;
+  available) report INFO touchid "Touch ID can be turned on under Setup > Security > Fingerprint" ;;
+  unsupported:*) report INFO touchid "Touch ID is not offered on this Mac (${touchid#unsupported:})" ;;
+  "") report INFO touchid "no Touch ID status: no sensor, or Touch ID is on and its activation has not run" ;;
+  *) report FAIL touchid "Touch ID is on but $touchid; see journalctl -u omarchy-mac-touchid-activate" ;;
+esac
 
 # Snapshots and migrations
 
