@@ -676,6 +676,11 @@ console_login() {
   [[ $serial_match == __ready_28__ ]]
 }
 
+# The questions omarchy update -y declines where a runtime still asks them. A newer
+# one only reminds ("Reboot? Run omarchy-system reboot when ready."), so a reply goes
+# to a question gum ends with an escape or a return, never to that reminder's space.
+update_declines=($'Reboot\\?[\r\e]=n' $'Ready\\?[\r\e]=n' $'Remove [0-9]+ orphaned package(\\(s\\)|s)?\\?[\r\e]=n')
+
 # Runs a command in the console shell, answering prompts from a table of
 # "extended-regex=reply" pairs until it exits; sets guest_status, and
 # guest_output to what the console showed meanwhile. Each wait lasts up to
@@ -1035,8 +1040,7 @@ scenario_update() {
   [[ -n $before ]] || fail "update: pacman -Q lists no runtime package before the update (see ${log##*/})"
   # The reboot the update offers is declined, and so is removing orphans (an
   # owner's choice that -y does not make): the guest is stopped and booted again below.
-  replies=("\[sudo\] password for [a-z]+:=$owner_password" "Reboot\?=n" "Ready\?=n"
-    "Remove [0-9]+ orphaned package\(s\)\?=n")
+  replies=("\[sudo\] password for [a-z]+:=$owner_password" "${update_declines[@]}")
   guest_wait=$update_timeout guest_run "update: omarchy update -y" "omarchy update -y" "${replies[@]}"
   ((guest_status == 0)) || fail "update: omarchy update -y exited $guest_status (see ${log##*/})"
   [[ $guest_output == *"boot files match"* ]] ||
