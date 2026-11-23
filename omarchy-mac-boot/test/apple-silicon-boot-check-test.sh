@@ -7,13 +7,17 @@ source "$(dirname "$0")/base-test.sh"
 require_command gzip
 require_command realpath
 require_command locale
+require_command python3
 
 check="$ROOT/bin/omarchy-apple-silicon-boot-check"
 grep -Fq '# omarchy:hidden=true' "$check" || fail "the boot check is hidden from command listings"
-! grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?(update-m1n1|/usr/bin/update-m1n1|"?\$script"?)([[:space:];]|$)' "$check" ||
+! grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?(update-m1n1|/usr/bin/update-m1n1|"?\$script"?)([[:space:];]|$)' "$check" "$ROOT/lib/aurora-stage2.sh" ||
   fail "the boot check never runs update-m1n1"
 ! grep -Eq 'reboot-blocked' "$check" || fail "the boot check does not write the reboot-block marker"
-pass "the boot check is hidden, never runs update-m1n1 and does not write the reboot-block marker"
+# Aurora's Stage 2 is asked of bootchain.py's plan, never of apply, commit or guard.
+! grep -Eq '\.(apply|commit|guard|stage_trial|cleanup_remove)\(' "$ROOT/lib/aurora-stage2.py" ||
+  fail "the boot check only asks Aurora's bootchain.py for its plan"
+pass "the boot check is hidden, never runs update-m1n1 or applies Aurora's Stage 2, and does not write the reboot-block marker"
 
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
@@ -96,12 +100,18 @@ esac
 SH
 cat >"$stub_bin/lsinitcpio" <<'SH'
 #!/bin/bash
-if [[ "$1" == "-a" && -f "$2" ]]; then
-  cat "${TEST_INITRAMFS_ANALYZE:-$TEST_INITRAMFS_LIST.analyze}"
+list=$TEST_INITRAMFS_LIST
+analyze=${TEST_INITRAMFS_ANALYZE:-$TEST_INITRAMFS_LIST.analyze}
+if [[ -f ${2:-} ]] && grep -q '^initrd of ' "$2"; then
+  list=${TEST_UKI_INITRAMFS_LIST:-$list}
+  analyze=${TEST_UKI_INITRAMFS_ANALYZE:-$analyze}
+fi
+if [[ $1 == "-a" && -f $2 ]]; then
+  cat "$analyze"
   exit 0
 fi
-[[ "$1" == "-l" && -f "$2" ]] || exit 1
-cat "$TEST_INITRAMFS_LIST"
+[[ $1 == "-l" && -f $2 ]] || exit 1
+cat "$list"
 SH
 # mount copies what it would mount and remembers whether that mount is
 # read-only. A read-only mount of a device that is already mounted is refused,
@@ -109,6 +119,11 @@ SH
 cat >"$stub_bin/mount" <<'SH'
 #!/bin/bash
 printf 'mount %s\n' "$*" >>"$TEST_CALLS"
+# What util-linux prints on stdout after a mount when the boot clock is stale.
+fstab_hint() {
+  echo "mount: (hint) your fstab has been modified, but systemd still uses"
+  echo "       the old version; use 'systemctl daemon-reload' to reload."
+}
 options="" bind=0 positional=()
 while (($#)); do
   case "$1" in
@@ -122,6 +137,7 @@ if [[ ,$options, == *,remount,* ]]; then
   [[ ${TEST_REMOUNT_FAILS:-0} != 1 ]] || exit 32
   sed -i "\|^$target |d" "$TEST_MOUNTS"
   echo "$target ro" >>"$TEST_MOUNTS"
+  fstab_hint
   exit 0
 fi
 state=rw
@@ -139,6 +155,7 @@ else
 fi
 cp -a "$source/." "$target/"
 echo "$target $state" >>"$TEST_MOUNTS"
+fstab_hint
 SH
 cat >"$stub_bin/umount" <<'SH'
 #!/bin/bash
@@ -183,16 +200,20 @@ size=$(( 8 + ${#body} ))
   printf '%s' "$body"
 } >"$4"
 SH
+# Aurora's bootchain.py validates a device tree on stdin (-o /dev/null and no
+# file) and reads its board from the body's "compatible=" line.
 cat >"$stub_bin/dtc" <<'SH'
 #!/bin/bash
 [[ $1 != --version ]] || { echo "Version: DTC v1.8.1"; exit 0; }
 file=${!#}
+[[ $file != /dev/null || ${*: -2:1} != -o ]] || file=/dev/stdin
 [[ $(od -An -tx1 -N4 "$file" | tr -d ' \n') == d00dfeed ]] || exit 1
 [[ " $* " != *" -O dts "* ]] || tail -c +9 "$file"
 SH
 cat >"$stub_bin/fdtget" <<'SH'
 #!/bin/bash
-exit 1
+[[ $* == "-t s "*" / compatible" && -f $3 ]] || exit 1
+tail -c +9 "$3" | sed -n 's/^compatible=//p' | grep .
 SH
 chmod +x "$stub_bin"/*
 
@@ -345,7 +366,7 @@ run_check() {
     OMARCHY_BOOT_CHECK_UNAME="${TEST_UNAME:-$kver}" \
     OMARCHY_APPLE_SILICON_CHANNEL_ROOT="$root" \
     OMARCHY_APPLE_SILICON_CHANNEL_TESTING=1 \
-    PATH="$stub_bin:$ROOT/bin:$PATH" \
+    PATH="$stub_bin:$ROOT/bin:${TEST_PATH:-$PATH}" \
     bash "$check" "$@" >"$test_tmp/out" 2>"$test_tmp/err"
   status=$?
   set -e
@@ -359,9 +380,15 @@ mounts_were_read_only() {
   [[ ! -s $mounts && -z $(ls -A "$root/run") ]] || fail "$1 leaves nothing mounted" "$(cat "$mounts"; ls -A "$root/run")"
 }
 
+fstab_hint_hidden() {
+  ! grep -Fq 'daemon-reload' "$test_tmp/out" "$test_tmp/err" ||
+    fail "$1 keeps mount's fstab hint out of its output" "$(cat "$test_tmp/out" "$test_tmp/err")"
+}
+
 expect_pass() {
   (( status == 0 )) || fail "$1 passes" "status $status: $(cat "$test_tmp/err")"
   mounts_were_read_only "$1"
+  fstab_hint_hidden "$1"
 }
 
 expect_fail() {
@@ -369,6 +396,7 @@ expect_fail() {
   (( status == 1 )) || fail "$description fails the check" "status $status: $(cat "$test_tmp/err")"
   grep -Fq "$message" "$test_tmp/err" || fail "$description is explained" "$(cat "$test_tmp/err")"
   mounts_were_read_only "$description"
+  fstab_hint_hidden "$description"
 }
 
 # Both kernel and bootloader pairs, named or detected.
@@ -508,6 +536,7 @@ grep -Eq "^mount -o ro PARTUUID=$partuuid $root/run/omarchy-esp\.[A-Za-z0-9]{6}\
 TEST_RO_REFUSED=1 run_check
 expect_fail "an ESP the kernel will not mount read-only" "cannot mount the system ESP (PARTUUID=$partuuid) read-only"
 (( $(grep -c '^mount ' "$calls") == 1 )) || fail "a refused read-only mount is not retried writable" "$(cat "$calls")"
+grep -Fq "PARTUUID=$partuuid already mounted" "$test_tmp/err" || fail "mount's own error still reaches stderr" "$(cat "$test_tmp/err")"
 cp -a "$esp_device" "$existing"
 TEST_EXISTING_MOUNT="$existing" run_check
 expect_pass "an ESP that is already mounted"
@@ -527,7 +556,7 @@ cp "$esp_device/m1n1/boot.bin" "$esp/m1n1/"
 run_check
 expect_pass "a builder image"
 grep -Eq "^mount --bind -o ro $esp " "$calls" || fail "a builder image reads /boot/efi like mount_sys_esp" "$(cat "$calls")"
-pass "the ESP is mounted read-only, or its existing mount bound read-only, and never mounted writable"
+pass "the ESP is mounted read-only, or its existing mount bound read-only, never mounted writable, and mount's fstab hint is not shown"
 
 # What a failed hook after the transaction leaves behind.
 system linux-aurora
@@ -537,7 +566,7 @@ expect_fail "a /boot kernel mkinitcpio did not replace" "/boot/vmlinuz-linux-aur
 system linux-aurora
 printf 'usr/lib/modules/6.16.0-aurora9-ARCH/kernel/x.ko\n' >"$test_tmp/initramfs"
 run_check
-expect_fail "an initramfs built for the previous kernel" "does not hold the $kver modules"
+expect_fail "an initramfs built for the previous kernel" "/boot/initramfs-linux-aurora.img does not hold the $kver modules"
 system linux-aurora
 printf 'linux /vmlinuz-linux-aurora\n' >"$root/boot/grub/grub.cfg"
 run_check
@@ -799,9 +828,22 @@ pass "missing sync database warnings are not altered package files"
 # filesystem, and the hash-verified UKI carries the installed kernel.
 cat >"$stub_bin/objcopy" <<'SH'
 #!/bin/bash
-# Fixture UKIs are the kernel bytes followed by a marker: .linux is the file.
-[[ $* == "-O binary --only-section=.linux "* ]] || exit 1
-cp "$4" "$5"
+# Fixture UKIs are the kernel bytes followed by a marker: .linux is the file,
+# and .initrd stands for the embedded initramfs.
+[[ "$1 $2" == "-O binary" && -f $4 ]] || exit 1
+case $3 in
+  --only-section=.linux) cp "$4" "$5" ;;
+  --only-section=.initrd)
+    if [[ ${TEST_UKI_INITRD_FAIL:-0} == "1" ]]; then
+      exit 1
+    elif [[ ${TEST_EMPTY_UKI_INITRD:-0} == "1" ]]; then
+      : >"$5"
+    else
+      printf 'initrd of %s\n' "$4" >"$5"
+    fi
+    ;;
+  *) exit 1 ;;
+esac
 SH
 chmod +x "$stub_bin/objcopy"
 limine_system() {
@@ -850,17 +892,58 @@ printf 'an older kernel\n' >"$uki"
 sed -i "s/#[0-9a-f]*$/#$(b2sum "$uki" | cut -d' ' -f1)/" "$root/boot/efi/limine.conf"
 run_check
 expect_fail "a UKI from another kernel" "does not carry the installed $kver kernel"
-# Without binutils the kernel comparison is skipped and said so; only
-# observable where the host has no objcopy of its own.
-if ! command -v objcopy >/dev/null 2>&1; then
-  limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
-  mv "$stub_bin/objcopy" "$test_tmp/objcopy"
-  run_check
-  mv "$test_tmp/objcopy" "$stub_bin/objcopy"
-  expect_pass "a Limine Mac without binutils"
-  grep -Fq "not checking the kernel inside the UKI" "$test_tmp/err" || fail "a skipped kernel check is named" "$(cat "$test_tmp/err")"
-fi
-pass "the Limine entry's hash and the UKI's kernel are checked"
+# The initramfs checked on a Limine Mac is the UKI's .initrd, not /boot/initramfs-*.img.
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+printf 'usr/lib/modules/6.13.0-old-ARCH/kernel/x.ko\nusr/bin/init\n' >"$test_tmp/stale-initramfs"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/stale-initramfs" run_check
+expect_fail "a Limine Mac whose UKI initramfs lacks the installed kernel modules" \
+  "the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi does not hold the $kver modules"
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+cp "$test_tmp/initramfs" "$test_tmp/current-uki-initramfs"
+printf 'usr/lib/modules/6.13.0-old-ARCH/kernel/x.ko\nusr/bin/init\n' >"$test_tmp/initramfs"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/current-uki-initramfs" run_check
+expect_pass "a Limine Mac with a stale /boot/initramfs and current UKI initramfs"
+rm "$root/boot/initramfs-linux-asahi.img"
+TEST_UKI_INITRAMFS_LIST="$test_tmp/current-uki-initramfs" run_check
+expect_pass "a Limine Mac with no /boot/initramfs and current UKI initramfs"
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+TEST_EMPTY_UKI_INITRD=1 run_check
+expect_fail "a Limine Mac whose UKI initramfs is empty" \
+  "cannot read the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi"
+TEST_UKI_INITRD_FAIL=1 run_check
+expect_fail "a Limine Mac whose UKI has no .initrd section" \
+  "cannot read the initramfs inside /boot/efi/EFI/Linux/omarchy_linux-asahi.efi"
+# Without binutils both UKI section checks are skipped and reported on stderr.
+no_objcopy_path=$test_tmp/no-objcopy-path
+mkdir -p "$no_objcopy_path"
+IFS=: read -ra host_path <<<"$PATH"
+# Walk PATH backwards so ln -sf leaves the first match, as command lookup would.
+for (( i = ${#host_path[@]} - 1; i >= 0; i-- )); do
+  dir=${host_path[i]}
+  [[ $dir == /* && -d $dir ]] || continue
+  find "$dir" -maxdepth 1 -xtype f -perm /111 ! -name objcopy -exec ln -sf -t "$no_objcopy_path" {} +
+done
+limine_system /boot/efi 'UUID=r / btrfs rw,subvol=/@ 0 0' 'root=UUID=r rw rootflags=subvol=@ quiet'
+mv "$stub_bin/objcopy" "$test_tmp/objcopy"
+TEST_PATH="$no_objcopy_path" run_check
+expect_pass "a Limine Mac without binutils"
+grep -Fq "objcopy (binutils) is not installed; not checking the initramfs inside the UKI" "$test_tmp/err" ||
+  fail "a skipped initramfs check is named" "$(cat "$test_tmp/err")"
+grep -Fq "not checking the kernel inside the UKI" "$test_tmp/err" ||
+  fail "a skipped kernel check is named" "$(cat "$test_tmp/err")"
+# An encrypted Limine Mac without binutils skips UKI initramfs checks (including sd-encrypt) too.
+limine_system /boot/efi '/dev/mapper/root / btrfs rw,subvol=/@ 0 0' \
+  'root=UUID=r rw rootflags=subvol=@ rd.luks.name=0422663f-9969-4953-900f-b342703b7e84=root quiet'
+mkdir -p "$root/var/lib/omarchy/mac-first-boot"
+: >"$root/var/lib/omarchy/mac-first-boot/pending"
+printf 'root UUID=0422663f-9969-4953-900f-b342703b7e84 none luks\n' >"$root/etc/crypttab"
+rm "$root/boot/initramfs-linux-asahi.img"
+TEST_PATH="$no_objcopy_path" run_check --boot-chain
+mv "$test_tmp/objcopy" "$stub_bin/objcopy"
+expect_pass "an encrypted Limine Mac without binutils and without /boot/initramfs"
+grep -Fq "objcopy (binutils) is not installed; not checking the initramfs inside the UKI" "$test_tmp/err" ||
+  fail "a skipped encrypted initramfs check is named" "$(cat "$test_tmp/err")"
+pass "the Limine entry's hash and the UKI's kernel and initramfs are checked"
 
 limine_system /boot/efi 'UUID=r / ext4 rw,relatime 0 1' 'root=UUID=r rw quiet'
 run_check
@@ -912,3 +995,319 @@ printf 'GRUB\n' >"$existing/EFI/BOOT/BOOTAA64.EFI"
 TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
 expect_fail "an m1n1 left to its owner beside another loader on the system ESP" "/boot/efi/EFI/BOOT/BOOTAA64.EFI is not the one on the system ESP"
 pass "a Limine Mac boots the Limine, menu and UKI on the system ESP"
+
+# Aurora's update-m1n1 (asahi-scripts 20261023-9, test/fixtures/aurora) builds
+# Stage 2 with bootchain.py. On an M4 with aura's monitor-free marker that is
+# m1n1/boot-ctxr.bin with only this board's device tree, tried once (aura-try).
+aurora_fixtures=$ROOT/test/fixtures/aurora
+aurora_compatible=("apple,j616c" "apple,t6041" "apple,arm-platform")
+
+# A device tree whose body names its compatibles, as fdtget reads them.
+write_aurora_dtb() {
+  local body size
+  body="device tree ${1##*/}"$'\n'"compatible=$2"$'\n'
+  size=$(( 8 + ${#body} ))
+  {
+    printf '\xd0\x0d\xfe\xed'
+    printf "$(printf '\\x%02x' $(( size >> 24 & 255 )) $(( size >> 16 & 255 )) $(( size >> 8 & 255 )) $(( size & 255 )))"
+    printf '%s' "$body"
+  } >"$root$1"
+}
+
+# Stage 2 as bootchain.py lays it out: aura's m1n1 ($1), the device trees ($3
+# onwards) in file name order, U-Boot gzipped with no timestamp, and the
+# m1n1.conf lines that start with an option it passes on. Written to $2.
+write_aurora_stage2() {
+  local m1n1=$1 out=$2 dtb
+  shift 2
+  {
+    cat "$root$m1n1"
+    for dtb; do
+      cat "$root/usr/lib/modules/$kver/dtbs/$dtb"
+    done
+    python3 -I -c 'import gzip, sys; sys.stdout.buffer.write(gzip.compress(open(sys.argv[1], "rb").read(), mtime=0))' \
+      "$root/usr/lib/asahi-boot/u-boot-nodtb.bin"
+    grep -E '^(chosen\.[^=]+|display|mitigations)=' "$root/etc/m1n1.conf" || true
+  } >"$out"
+}
+
+# A J616c with aura, Aurora's update-m1n1 and the Stage 2 it builds on its ESP.
+aurora_system() {
+  local dtb
+  system linux-aurora t6000-j314s.dtb t6041-j616c.dtb t6041-j616s.dtb t8103-j274.dtb
+  write_aurora_dtb "/usr/lib/modules/$kver/dtbs/t6000-j314s.dtb" "apple,j314s apple,t6000 apple,arm-platform"
+  write_aurora_dtb "/usr/lib/modules/$kver/dtbs/t6041-j616c.dtb" "${aurora_compatible[*]}"
+  write_aurora_dtb "/usr/lib/modules/$kver/dtbs/t6041-j616s.dtb" "apple,j616s apple,t6041 apple,arm-platform"
+  write_aurora_dtb "/usr/lib/modules/$kver/dtbs/t8103-j274.dtb" "apple,j274 apple,t8103 apple,arm-platform"
+  printf 'linux-aurora\n' >"$modules/pkgbase"
+  sed -i 's/^m1n1-aurora$/aura/' "$test_tmp/files/installed"
+  mv "$test_tmp/files/m1n1-aurora" "$test_tmp/files/aura"
+  printf 'aura m1n1\n' >"$root/usr/lib/asahi-boot/m1n1.bin"
+  install -Dm755 "$aurora_fixtures/update-m1n1" "$root/usr/bin/update-m1n1"
+  install -Dm644 "$aurora_fixtures/bootchain.py" "$root/usr/libexec/aurora/bootchain.py"
+  install -Dm644 "$aurora_fixtures/bootchain_arch.py" "$root/usr/libexec/aurora/bootchain_arch.py"
+  mkdir -p "$root/usr/share/aura" "$root/proc/device-tree/chosen" "$root/usr/local/lib/aura"
+  : >"$root/usr/share/aura/monitor-free"
+  printf '%s\0' "${aurora_compatible[@]}" >"$root/proc/device-tree/compatible"
+  printf 'aura m1n1 94d8e6e4\n' >"$root/usr/local/lib/aura/m1n1-94d8e6e4.bin"
+  printf 'previous aura m1n1\n' >"$root/usr/local/lib/aura/m1n1-previous.bin"
+  rm -f "$esp/m1n1/boot.bin"
+  write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$test_tmp/aurora-expected.bin" t6041-j616c.dtb
+  write_aurora_stage2 /usr/local/lib/aura/m1n1-previous.bin "$test_tmp/aurora-previous.bin" t6041-j616c.dtb
+  cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin"
+}
+
+# A trial update-m1n1 staged of the expected Stage 2 over the previous one:
+# the candidate, its receipt and attempt record, and aura-try in state $1
+# (none when empty). The live image is the previous one.
+aurora_trial() {
+  local state=$1 sha receipt
+  cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin"
+  cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin.next"
+  sha=$(sha256sum <"$test_tmp/aurora-expected.bin")
+  sha=${sha%% *}
+  receipt=$(printf '{"dtb_offset": %d, "generation": 1, "kernel": "%s", "path": "m1n1/boot-ctxr.bin.next", "sha256": "%s"}' \
+    "$(stat -c %s "$root/usr/lib/asahi-boot/m1n1.bin")" "$kver" "$sha")
+  printf '%s\n' "$receipt" >"$esp/m1n1/boot-ctxr.bin.next.json"
+  mkdir -p "$root/var/lib/aurora-stage2/attempts"
+  printf '%s\n' "$receipt" >"$root/var/lib/aurora-stage2/attempts/$sha"
+  [[ -z $state ]] || printf '%s\nm1n1/boot-ctxr.bin.next\n' "$state" >"$esp/aura-try"
+}
+
+esp_snapshot() {
+  (cd "$root" && find boot var -type f -print0 | sort -z | xargs -0 sha256sum)
+}
+
+aurora_system
+before=$(esp_snapshot)
+run_check --boot-chain
+expect_pass "Aurora's Stage 2 as bootchain.py builds it"
+grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out" ||
+  fail "Aurora's Stage 2 reports the installed kernel identity" "$(cat "$test_tmp/out")"
+[[ $(esp_snapshot) == "$before" && ! -e $root/boot/dtb ]] ||
+  fail "checking Aurora's Stage 2 changes nothing on the ESP, in /boot or in /var" "$(diff <(echo "$before") <(esp_snapshot))"
+run_check
+expect_pass "Aurora's Stage 2 in the full check"
+grep -Fq 'Stage 2 is built from M1N1=' "$test_tmp/out" &&
+  fail "a packaged aura m1n1 is not reported as configured" "$(cat "$test_tmp/out")"
+aurora_system
+write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot-ctxr.bin" t6000-j314s.dtb t6041-j616c.dtb t6041-j616s.dtb t8103-j274.dtb
+run_check --boot-chain
+expect_fail "a Stage 2 with every board's device trees" "m1n1/boot-ctxr.bin on the system ESP (/boot/efi) is not aura, linux-aurora $kver's device trees, U-Boot and /etc/m1n1.conf as Aurora's update-m1n1 builds them"
+aurora_system
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_fail "a Stage 2 from another aura m1n1" "m1n1/boot-ctxr.bin on the system ESP (/boot/efi) is not aura"
+aurora_system
+rm "$esp/m1n1/boot-ctxr.bin"
+write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot.bin" t6041-j616c.dtb
+run_check --boot-chain
+expect_fail "a ctxr Mac's ESP without m1n1/boot-ctxr.bin" "the system ESP (/boot/efi) has no m1n1/boot-ctxr.bin"
+aurora_system
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin"
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 run_check --boot-chain
+expect_pass "a snapshot restore's Aurora Stage 2"
+grep -Fq "m1n1/boot-ctxr.bin and Limine on the system ESP are the ones that booted this snapshot" "$test_tmp/out" ||
+  fail "a snapshot restore's Aurora Stage 2 is reported as the one that booted" "$(cat "$test_tmp/out")"
+pass "Aurora's m1n1/boot-ctxr.bin is checked against the image bootchain.py builds, with only this board's device tree"
+
+# Without the monitor-free marker bootchain.py writes m1n1/boot.bin with every
+# Apple device tree, the way it does on a Mac whose Stage 1 is not a Mach-O.
+aurora_system
+rm "$root/usr/share/aura/monitor-free" "$esp/m1n1/boot-ctxr.bin"
+write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot.bin" t6000-j314s.dtb t6041-j616c.dtb t6041-j616s.dtb t8103-j274.dtb
+run_check --boot-chain
+expect_pass "Aurora's m1n1/boot.bin without the monitor-free marker"
+write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot.bin" t6041-j616c.dtb
+run_check --boot-chain
+expect_fail "Aurora's m1n1/boot.bin with only one board's device tree" "m1n1/boot.bin on the system ESP (/boot/efi) is not aura"
+pass "without the monitor-free marker Aurora's Stage 2 is m1n1/boot.bin with every Apple device tree"
+
+# The image pins M1N1 in /etc/default/update-m1n1 to a Stage 2 no package
+# installs; the check follows the pin and says so.
+aurora_system
+printf 'M1N1=/usr/local/lib/aura/m1n1-94d8e6e4.bin\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_fail "a Stage 2 from the packaged m1n1 where M1N1 is pinned" "m1n1/boot-ctxr.bin on the system ESP (/boot/efi) is not aura"
+write_aurora_stage2 /usr/local/lib/aura/m1n1-94d8e6e4.bin "$esp/m1n1/boot-ctxr.bin" t6041-j616c.dtb
+run_check --boot-chain
+expect_pass "a Stage 2 from the m1n1 /etc/default/update-m1n1 pins"
+grep -Fq "Stage 2 is built from M1N1=/usr/local/lib/aura/m1n1-94d8e6e4.bin, which /etc/default/update-m1n1 names and aura does not install" "$test_tmp/out" ||
+  fail "a pinned M1N1 no package installs is reported" "$(cat "$test_tmp/out")"
+printf 'M1N1=/usr/local/lib/aura/missing.bin\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_fail "a pinned M1N1 that is missing" "M1N1 /usr/local/lib/aura/missing.bin does not exist"
+aurora_system
+printf '/usr/lib/asahi-boot/\n' >"$test_tmp/files/aura"
+run_check --boot-chain
+expect_fail "a default M1N1 aura does not own" "M1N1 /usr/lib/asahi-boot/m1n1.bin is not owned by aura"
+pass "a pinned M1N1 is followed and reported, and a default M1N1 must be aura's"
+
+# Trials: one update-m1n1 armed, or that this boot is running, of exactly the
+# image it builds now passes; a stale, fallen-back or orphaned one does not.
+aurora_system
+aurora_trial armed
+before=$(esp_snapshot)
+run_check --boot-chain
+expect_pass "an armed Stage 2 trial of the current build"
+grep -Fq "a Stage 2 trial is armed: the next boot tries m1n1/boot-ctxr.bin.next, what Aurora's update-m1n1 builds now, once, and keeps m1n1/boot-ctxr.bin to fall back to" "$test_tmp/out" ||
+  fail "an armed trial is reported" "$(cat "$test_tmp/out")"
+[[ $(esp_snapshot) == "$before" ]] || fail "checking an armed trial changes nothing" "$(diff <(echo "$before") <(esp_snapshot))"
+TEST_UNAME=6.16.0-old-ARCH OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 run_check --boot-chain
+expect_pass "an armed Stage 2 trial with the reboot pending"
+grep -Fq "boot files match; running 6.16.0-old-ARCH, reboot pending" "$test_tmp/out" ||
+  fail "an armed trial with the reboot pending says so" "$(cat "$test_tmp/out")"
+aurora_trial spent
+printf 'm1n1/boot-ctxr.bin.next\0' >"$root/proc/device-tree/chosen/aurora,trial"
+run_check --boot-chain
+expect_pass "this boot running the Stage 2 trial of the current build"
+grep -Fq "this boot is the Stage 2 trial of m1n1/boot-ctxr.bin.next, what Aurora's update-m1n1 builds now" "$test_tmp/out" ||
+  fail "a running trial is reported" "$(cat "$test_tmp/out")"
+pass "an armed or running Stage 2 trial of the current build passes"
+
+aurora_system
+aurora_trial armed
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin.next"
+run_check --boot-chain
+expect_fail "an armed trial of an older build" "the armed Stage 2 trial m1n1/boot-ctxr.bin.next on the system ESP (/boot/efi) is not what Aurora's update-m1n1 builds now"
+aurora_system
+aurora_trial armed
+rm "$esp/m1n1/boot-ctxr.bin.next"
+run_check --boot-chain
+expect_fail "an armed trial without its candidate" "the armed Stage 2 trial names m1n1/boot-ctxr.bin.next, which is not on the system ESP"
+aurora_system
+aurora_trial armed
+rm "$esp/m1n1/boot-ctxr.bin.next.json"
+run_check --boot-chain
+expect_fail "an armed trial without its receipt" "has no receipt for it on the system ESP"
+aurora_system
+aurora_trial armed
+rm -r "$root/var/lib/aurora-stage2/attempts"
+run_check --boot-chain
+expect_fail "an armed trial without its attempt record" "has no matching attempt record in /var/lib/aurora-stage2/attempts"
+aurora_system
+aurora_trial armed
+printf 'armed\nm1n1/other.bin.next\n' >"$esp/aura-try"
+run_check --boot-chain
+expect_fail "aura-try arming another image" "aura-try on the system ESP (/boot/efi) arms m1n1/other.bin.next"
+aurora_system
+aurora_trial armed
+printf 'armed\nm1n1/boot-ctxr.bin.next' >"$esp/aura-try"
+run_check --boot-chain
+expect_fail "an aura-try marker bootchain.py does not recognise" "aura-try on the system ESP (/boot/efi) is not a marker"
+aurora_system
+aurora_trial spent
+run_check --boot-chain
+expect_fail "a Stage 2 trial that fell back" "the Stage 2 trial of m1n1/boot-ctxr.bin.next fell back, so this Mac boots the previous m1n1/boot-ctxr.bin"
+cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_pass "a fallen-back trial's leftovers beside the current Stage 2"
+grep -Fq "warning: an earlier Stage 2 trial of m1n1/boot-ctxr.bin.next fell back" "$test_tmp/err" ||
+  fail "a fallen-back trial's leftovers are reported" "$(cat "$test_tmp/err")"
+aurora_system
+aurora_trial spent
+printf 'm1n1/boot-ctxr.bin.next\0' >"$root/proc/device-tree/chosen/aurora,trial"
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin.next"
+run_check --boot-chain
+expect_fail "this boot running a trial of an older build" "the running Stage 2 trial m1n1/boot-ctxr.bin.next on the system ESP (/boot/efi) is not what Aurora's update-m1n1 builds now"
+# A trial disarmed by hand: the candidate stays, with no aura-try.
+aurora_system
+aurora_trial ""
+printf 'armed\nm1n1/boot-ctxr.bin.next\n' >"$esp/aura-try.disarmed"
+run_check --boot-chain
+expect_fail "an orphaned trial beside a stale Stage 2" "m1n1/boot-ctxr.bin.next is there with no aura-try marker arming it, an orphaned Stage 2 trial"
+cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_pass "an orphaned trial beside the current Stage 2"
+grep -Fq "warning: m1n1/boot-ctxr.bin.next is on the system ESP (/boot/efi) with no aura-try marker arming it" "$test_tmp/err" ||
+  fail "an orphaned trial is reported" "$(cat "$test_tmp/err")"
+pass "a stale, incomplete, foreign, fallen-back or orphaned Stage 2 trial is reported"
+
+# M1N1_UPDATE_DISABLED stops Aurora's update-m1n1 before anything, the trials'
+# commit and guard included, so it fails both checks.
+aurora_system
+printf 'M1N1_UPDATE_DISABLED=1\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_fail "Aurora's Stage 2 updates disabled, boot chain" "M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so Aurora's update-m1n1 neither rebuilds Stage 2 nor commits or guards its trials"
+run_check
+expect_fail "Aurora's Stage 2 updates disabled, full check" "M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so Aurora's update-m1n1"
+printf 'M1N1_UPDATE_DISABLED=\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_pass "an empty M1N1_UPDATE_DISABLED"
+pass "M1N1_UPDATE_DISABLED fails Aurora's Stage 2 in both checks"
+
+# What bootchain.py refuses, the check reports; a wrapper it cannot read, or
+# a Stage 2 built from another kernel's device trees, fails closed.
+aurora_system
+printf 'apple,j999\0apple,t6041\0' >"$root/proc/device-tree/compatible"
+run_check --boot-chain
+expect_fail "a board with no device tree" "Aurora's update-m1n1 would not build Stage 2: selected DTBs have no apple,j999"
+aurora_system
+sed -i '/python3 "$AURORA_BOOTCHAIN" --check/d' "$root/usr/bin/update-m1n1"
+run_check --boot-chain
+expect_fail "an Aurora update-m1n1 without its preflight" "/usr/bin/update-m1n1 is Aurora's, but does not build Stage 2 the way this check reproduces it"
+aurora_system
+sed -i '/^export M1N1=/d' "$root/usr/bin/update-m1n1"
+run_check --boot-chain
+expect_fail "an Aurora update-m1n1 without an M1N1 default" "Aurora's /usr/bin/update-m1n1 has no M1N1 default this check recognises"
+aurora_system
+sed -i 's|^: "${SOURCE:=.*|: "${SOURCE:=$(aura-dir)}"|' "$root/usr/bin/update-m1n1"
+run_check --boot-chain
+expect_fail "an Aurora update-m1n1 default this check cannot read" "Aurora's /usr/bin/update-m1n1 has a SOURCE default this check does not recognise"
+aurora_system
+rm "$root/usr/libexec/aurora/bootchain_arch.py"
+run_check --boot-chain
+expect_fail "an Aurora update-m1n1 without bootchain_arch.py" "builds Stage 2 with /usr/libexec/aurora/bootchain_arch.py, which is not installed"
+aurora_system
+mkdir -p "$root/usr/lib/modules/6.18.0-aurora1-ARCH/dtbs"
+printf 'newer kernel\n' >"$root/usr/lib/modules/6.18.0-aurora1-ARCH/vmlinuz"
+printf 'linux-aurora-wip\n' >"$root/usr/lib/modules/6.18.0-aurora1-ARCH/pkgbase"
+printf 'linux-aurora-wip\n' >"$root/boot/vmlinuz-linux-aurora-wip"
+cp "$modules/dtbs/"*.dtb "$root/usr/lib/modules/6.18.0-aurora1-ARCH/dtbs/"
+run_check --boot-chain
+expect_fail "a Stage 2 from a newer kernel's device trees" "Aurora's update-m1n1 builds Stage 2 with kernel 6.18.0-aurora1-ARCH's device trees, not linux-aurora $kver's"
+pass "what bootchain.py refuses is reported, and an unrecognised Aurora update-m1n1 or another kernel's device trees fail closed"
+
+# A DTBS the configuration sets reaches bootchain.py, empty or not, and a
+# record update-m1n1 has of an image it tried decides what the check advises.
+aurora_system
+printf 'DTBS=/usr/lib/modules/%s/dtbs/t6041-j616c.dtb\n' "$kver" >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_pass "a configured DTBS naming the kernel's own device tree"
+mkdir -p "$root/etc/dtbs"
+write_aurora_dtb /etc/dtbs/t6041-j616c.dtb "${aurora_compatible[*]} apple,edited"
+printf 'DTBS=/etc/dtbs/t6041-j616c.dtb\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_fail "a configured DTBS no installed kernel ships" "Aurora's update-m1n1 would not build Stage 2: custom DTBS have no installed DT ABI source"
+printf 'DTBS=\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_fail "a configured DTBS that is empty" "Aurora's update-m1n1 would not build Stage 2: DTBS config unset or empty"
+aurora_system
+aurora_trial armed
+sha=$(sha256sum <"$test_tmp/aurora-expected.bin")
+mv "$root/var/lib/aurora-stage2/attempts/${sha%% *}" "$root/var/lib/aurora-stage2/attempts/$kver"
+run_check --boot-chain
+expect_pass "an armed trial whose attempt record has the older, kernel-named form"
+aurora_system
+aurora_trial ""
+run_check --boot-chain
+expect_fail "an orphaned trial update-m1n1 has already tried" "update-m1n1 has already tried this image (/var/lib/aurora-stage2/attempts/${sha%% *}) and does not arm it again"
+aurora_system
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_fail "a stale Stage 2 with no trial of the current build" "as Aurora's update-m1n1 builds them; run sudo update-m1n1, then omarchy update"
+aurora_system
+printf 'spent\nm1n1/other.bin.next\n' >"$esp/aura-try"
+run_check --boot-chain
+expect_pass "a spent aura-try of another image beside the current Stage 2"
+grep -Fq "warning: aura-try on the system ESP (/boot/efi) names m1n1/other.bin.next, a trial Aurora's update-m1n1 does not manage" "$test_tmp/err" ||
+  fail "a spent aura-try of another image is reported" "$(cat "$test_tmp/err")"
+cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_fail "a spent aura-try of another image beside a stale Stage 2" "update-m1n1 stages no trial while aura-try on the system ESP names m1n1/other.bin.next"
+aurora_system
+aurora_trial ""
+mv "$root/var/lib/aurora-stage2/attempts/${sha%% *}" "$root/var/lib/aurora-stage2/attempts/$kver"
+run_check --boot-chain
+expect_fail "an orphaned trial with a kernel-named attempt record" "update-m1n1 has already tried this image (/var/lib/aurora-stage2/attempts/$kver)"
+pass "a configured DTBS reaches bootchain.py, kernel-named attempt records count, and an image update-m1n1 already tried is not advised a rebuild"

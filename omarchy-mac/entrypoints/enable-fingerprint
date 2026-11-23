@@ -30,14 +30,24 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
       echo "Touch ID was turned off while this ran, so setup goes on without it."
       exit 0
     elif [[ ! -e $options ]]; then
+      # The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
+      # 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
+      # Linux to its own xART records. Other Macs keep the kernel's level: the guard
+      # blocks matching on M1-family Macs.
+      driver_options="xart_writes=1 provision_keybag=1"
+      if tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null | grep -Fxq apple,j616c; then
+        driver_options+=" xart_guard=1"
+      fi
       { mkdir -p -m 0755 "${options%/*}" &&
         printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-          "options apple_sep xart_writes=1 provision_keybag=1" >"$options.new" &&
+          "options apple_sep $driver_options" >"$options.new" &&
         chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
         { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
     fi
     exec {lock_fd}>&-
   fi
+  # A Mac agreed before the re-arm existed gets its PAM lines here too.
+  /usr/lib/omarchy-mac/touchid-pam || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
   if [[ $status != "ready" ]]; then

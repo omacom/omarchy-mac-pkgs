@@ -87,9 +87,33 @@ omarchy-hw-apple-silicon || return 0
     printf '%s' "${kept[*]}"
   }
 
+  # The M4 Macs' native display and GPU: Aurora's kernel admits the internal
+  # display only with both switches on. Only a booted Mac whose running kernel
+  # has them gets them; an owner's value for either one, =0 too, keeps both.
+  grub_console_t8132_display() {
+    local compatible=${OMARCHY_DEVICE_TREE_COMPATIBLE:-/proc/device-tree/compatible}
+    local parameters=${OMARCHY_APPLE_DART_PARAMETERS:-/sys/module/apple_dart/parameters}
+    local word name
+    local -a line
+    [[ -d ${OMARCHY_SYSTEMD_RUN:-/run/systemd/system} ]] || return 0
+    ! systemd-detect-virt --quiet --chroot 2>/dev/null || return 0
+    [[ -r $compatible ]] && tr '\0' '\n' <"$compatible" | grep -Fxq 'apple,t8132' || return 0
+    [[ -e $parameters/j713_dcp && -e $parameters/j713_display ]] || return 0
+    read -ra line <<<"$1"
+    for word in "${line[@]}"; do
+      # The kernel reads - and _ alike in parameter names.
+      name=${word%%=*}
+      name=${name//-/_}
+      [[ $name != "apple_dart.j713_dcp" && $name != "apple_dart.j713_display" ]] || return 0
+    done
+    printf '%s' 'apple_dart.j713_dcp=1 apple_dart.j713_display=1'
+  }
+
   cmdline=$(grub_console_get GRUB_CMDLINE_LINUX)
   read -ra words <<<"$cmdline"
   wanted_cmdline=$(grub_console_device_wait "$(omarchy-mac-initramfs-hooks 2>/dev/null || true)" "$cmdline")
+  display=$(grub_console_t8132_display "$cmdline $(grub_console_get GRUB_CMDLINE_LINUX_DEFAULT)")
+  wanted_cmdline="$wanted_cmdline${wanted_cmdline:+${display:+ }}$display"
   # Words unchanged: the line stays as the Mac wrote it, spacing and all.
   [[ $wanted_cmdline == "${words[*]}" ]] && wanted_cmdline=$cmdline
   grub_console_set GRUB_CMDLINE_LINUX "$wanted_cmdline" || exit 1

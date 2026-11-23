@@ -64,6 +64,8 @@ outage = dict(since=None, notified=False, repaired=False)
 # After WirePlumber is restarted the rebuilt graph may appear before the event
 # subscription is listening, so the watcher looks again shortly anyway.
 recheck = dict(at=None)
+# Whether the last outage pass found the lid closed.
+lid = dict(closed=False)
 # Set once an update changed AUDIO_FILES and kept in the runtime record until
 # a pass has acted on it, so a watcher that reloads mid-update keeps it.
 installed = dict(pending=False, retry_at=None, record=None, signature=None)
@@ -140,6 +142,14 @@ class Audio:
 
     def updating(self):
         return PACMAN_LOCK.exists() and pacman_running()
+
+    def lid_closed(self):
+        # A closed lid cuts the built-in microphones off.
+        try:
+            return self.run('busctl', 'get-property', 'org.freedesktop.login1', '/org/freedesktop/login1',
+                            'org.freedesktop.login1.Manager', 'LidClosed') == 'b true'
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return False
 
     def notify(self, headline, body, *command):
         try:
@@ -548,11 +558,17 @@ def reconcile(audio, state, save_only=False, checked=None):
         mapped = any(obj['name'] == MAPPING for obj in sources)
         if mapped or claim(state):
             leave_mapping(audio, state, sources, original_input)
+        # A closed lid cuts the microphones off; they return a moment after it
+        # opens, so repairs wait for a pass that finds it open twice.
+        was_closed, lid['closed'] = lid['closed'], audio.lid_closed()
+        lid_shut = was_closed or lid['closed']
         # An update's changed files restart WirePlumber once, past the repair
         # interval; until that is done the outage repair and notice wait.
         updated = None
-        if installed['pending'] and (installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
-            if audio.updating():
+        if installed['pending'] and (lid_shut or installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
+            if lid_shut:
+                record_installed(True, retry_at=time.monotonic() + 30.0)
+            elif audio.updating():
                 record_installed(True, retry_at=time.monotonic() + 5.0)
             else:
                 updated = audio.array() and not card_disabled(audio) and repair_graph(audio, 'audio files changed while the Asahi DSP microphone was missing', force=True)
@@ -573,7 +589,7 @@ def reconcile(audio, state, save_only=False, checked=None):
             # lasting loss is worth telling the user about, once.
             # WirePlumber is restarted once first: a graph it left hidden
             # (#1028) is the usual lasting loss.
-            if outage['since'] is None:
+            if outage['since'] is None or lid_shut:
                 outage['since'] = time.monotonic()
             elif not outage['notified'] and time.monotonic() - outage['since'] >= OUTAGE_GRACE:
                 repaired = not outage['repaired'] and not card_disabled(audio) and repair_graph(audio, 'the Asahi DSP microphone is missing')

@@ -124,15 +124,10 @@ resolve_head() {
 download_archive_sha256() {
   local url=$ARCHIVE_PREFIX/$commit.tar.gz dest=$work/archive.tar.gz
   local attempt=0 delay=2 code token=${GH_TOKEN:-}
-  local -a headers=(-H 'Accept: application/vnd.github+json')
   [[ -n $token ]] || token=$(gh auth token 2>/dev/null || true)
-  [[ -z $token ]] || headers+=(-H "Authorization: Bearer $token")
   while ((attempt < 7)); do
     attempt=$((attempt + 1))
-    # github.com/.../archive redirects to codeload.github.com; curl -L drops
-    # Authorization across hosts, --location-trusted keeps it so authenticated
-    # retries survive that redirect.
-    code=$(curl -sS --location-trusted -o "$dest" -w '%{http_code}' --retry 0 "${headers[@]}" "$url" || true)
+    code=$(fetch_archive_attempt "$url" "$dest" "$token") || return 1
     if [[ $code == 200 && -s $dest ]]; then
       tar -tzf "$dest" >/dev/null 2>&1 || fail "downloaded $url is not a gzip tarball"
       sha256sum "$dest" | cut -d' ' -f1

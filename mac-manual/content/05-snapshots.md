@@ -23,7 +23,7 @@ A snapshot from before a kernel, m1n1, U-Boot or Limine update can still be rest
 
 The check runs from the snapshot you booted, so a snapshot taken before your Mac had this version follows the rules of the version it holds. It may refuse the restore, or restore unchecked, so compare its packages with the current ones first.
 
-A Mac that still boots GRUB, from before the move to Limine, has no snapshot menu, and Omarchy has no other way to restore a snapshot there. The move to Limine makes later snapshots restorable.
+A Mac that still boots GRUB, from before the move to Limine, has no snapshot menu, and Omarchy has no other way to restore a snapshot there. The move to Limine makes later snapshots restorable. Scheduled Snapper cleanup still prunes old snapshots on that Mac; it skips the Limine menu update until Limine is activated. A successful cleanup does not mean those snapshots can be booted or restored through GRUB.
 
 ## The boot menu stays
 
