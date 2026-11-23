@@ -565,11 +565,11 @@ def reconcile(audio, state, save_only=False, checked=None):
         # An update's changed files restart WirePlumber once, past the repair
         # interval; until that is done the outage repair and notice wait.
         updated = None
-        if installed['pending'] and (installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
-            if audio.updating():
-                record_installed(True, retry_at=time.monotonic() + 5.0)
-            elif lid_shut:
+        if installed['pending'] and (lid_shut or installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
+            if lid_shut:
                 record_installed(True, retry_at=time.monotonic() + 30.0)
+            elif audio.updating():
+                record_installed(True, retry_at=time.monotonic() + 5.0)
             else:
                 updated = audio.array() and not card_disabled(audio) and repair_graph(audio, 'audio files changed while the Asahi DSP microphone was missing', force=True)
                 if updated == DEFERRED:

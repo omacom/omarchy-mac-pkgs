@@ -998,10 +998,13 @@ with tempfile.TemporaryDirectory() as temporary:
     reset(); audio = Audio(); audio.no_dsp = True; audio.lid = True
     m.installed['pending'] = True; pass_(audio)
     assert audio.restarts == 0 and m.installed['pending'] and m.installed['retry_at'] is not None, 'no restart under a closed lid'
-    audio.lid = False
-    with mock.patch.object(m.time, 'monotonic', return_value=m.installed['retry_at']):
+    audio.lid = False; due = m.installed['retry_at']
+    with mock.patch.object(m.time, 'monotonic', return_value=due - 1):
         pass_(audio)
-    assert audio.restarts == 0 and m.installed['pending'], 'nor on the first pass after it opens'
+    assert m.installed['retry_at'] > due, 'the first pass after it opens, even an early one, waits again'
+    with mock.patch.object(m.time, 'monotonic', return_value=due):
+        pass_(audio)
+    assert audio.restarts == 0 and m.installed['pending'], 'so the old deadline restarts nothing'
     with mock.patch.object(m.time, 'monotonic', return_value=m.installed['retry_at']):
         pass_(audio)
     assert audio.restarts == 1 and not m.installed['pending'], 'the restart follows once the lid stays open'
