@@ -141,7 +141,13 @@ mkdir -p "$work" "$evidence_root/mac-image-$run_id"
 evidence_dir=$evidence_root/mac-image-$run_id
 : >"$evidence_dir/run.txt"
 serial_sock=$work/serial.sock
-((${#serial_sock} < 100)) || fail "the run directory $work is too long for a socket path"
+# A socket address holds 107 bytes. Past the serial socket, gpg-agent opens its
+# own in the keyring homes, S.gpg-agent.browser the longest of them.
+sockets_fit() { # work
+  local serial=$1/serial.sock agent=$1/gnupg-image/S.gpg-agent.browser
+  ((${#serial} < 100 && ${#agent} < 108))
+}
+sockets_fit "$work" || fail "the run directory $work is too long for a socket path"
 loops=()
 mounts=()
 mappers=()
