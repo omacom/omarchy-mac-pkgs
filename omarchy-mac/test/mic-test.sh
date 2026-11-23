@@ -78,6 +78,7 @@ class Audio:
         return nodes
     def pause(self): pass
     def notify(self, *args): self.notices.append(args)
+    def lid_closed(self): return getattr(self, 'lid', False)
     def signal(self, source):
         self.probes.append(source)
         if self.probe_choice is not None: self.default = self.probe_choice
@@ -430,6 +431,22 @@ with tempfile.TemporaryDirectory() as temporary:
             deferred(audio, saved); deferred(audio, saved)
         assert audio.restarts == 1 and len(audio.notices) == 1 and audio.notices[0][-4:] == ('omarchy-audio-watchdog', '--repair', 'stack', '--manual'), 'one notice per lasting outage'
         assert m.outage_due() is None
+    # A closed lid cuts the microphones off: no repair or notice until it has
+    # been open for the grace too.
+    audio = lost(); audio.lid = True; saved = state(); deferred(audio, saved)
+    with mock.patch.object(m.time, 'monotonic', return_value=later):
+        deferred(audio, saved)
+    with mock.patch.object(m.time, 'monotonic', return_value=later + m.OUTAGE_GRACE + 1):
+        deferred(audio, saved)
+    assert audio.restarts == 0 and not audio.notices, 'a closed lid is not a lost array'
+    audio.lid = False
+    with mock.patch.object(m.time, 'monotonic', return_value=later + m.OUTAGE_GRACE + 2):
+        deferred(audio, saved)
+    assert audio.restarts == 0, 'the grace starts again when the lid opens'
+    with mock.patch.object(m.time, 'monotonic', return_value=later + 3 * m.OUTAGE_GRACE):
+        deferred(audio, saved)
+    assert audio.restarts == 1, 'a loss that outlasts the open lid is still repaired'
+    m.recheck['at'] = None
     # A built-in card the user switched off is announced, never "repaired".
     audio = lost(); audio.cards[0]['active_profile'] = 'off'; saved = state()
     deferred(audio, saved)

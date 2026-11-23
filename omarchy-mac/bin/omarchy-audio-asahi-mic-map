@@ -141,6 +141,14 @@ class Audio:
     def updating(self):
         return PACMAN_LOCK.exists() and pacman_running()
 
+    def lid_closed(self):
+        # A closed lid cuts the built-in microphones off.
+        try:
+            return self.run('busctl', 'get-property', 'org.freedesktop.login1', '/org/freedesktop/login1',
+                            'org.freedesktop.login1.Manager', 'LidClosed') == 'b true'
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return False
+
     def notify(self, headline, body, *command):
         try:
             subprocess.Popen(['omarchy-notification-send', '-g', '\U000f036d', '-u', 'normal', headline, body, '--exec', *command],
@@ -573,7 +581,8 @@ def reconcile(audio, state, save_only=False, checked=None):
             # lasting loss is worth telling the user about, once.
             # WirePlumber is restarted once first: a graph it left hidden
             # (#1028) is the usual lasting loss.
-            if outage['since'] is None:
+            # Under a closed lid the grace starts again each pass, until it opens.
+            if outage['since'] is None or audio.lid_closed():
                 outage['since'] = time.monotonic()
             elif not outage['notified'] and time.monotonic() - outage['since'] >= OUTAGE_GRACE:
                 repaired = not outage['repaired'] and not card_disabled(audio) and repair_graph(audio, 'the Asahi DSP microphone is missing')
