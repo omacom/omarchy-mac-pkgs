@@ -154,6 +154,8 @@ owner_refused() {
 
 record_owner_manifest "$owner_uki"
 run_update aarch64-apple "$tmp/mac-boot"
+grep -Fxq "sudo omarchy-lifecycle-dispatch update-verify" "$SUDO_TEST_LOG" ||
+  fail "apple: owner boot verification uses the privileged lifecycle dispatcher"
 (( status == 0 )) && reboot_offered &&
   grep -Fq "Owner-managed boot files verified against the approved manifest." "$tmp/out" &&
   ! grep -Fq "The packaged check would fail" "$tmp/out" ||
@@ -163,7 +165,7 @@ record_owner_manifest boot/efi/EFI/Linux/omarchy_linux-aurora.efi
 owner_refused "a manifest covering only a nondefault UKI" "must cover the named Omarchy default entry"
 record_owner_manifest "$owner_uki"
 chmod g+w "$manifest"
-owner_refused "a group-writable manifest" "writable only by its owner"
+owner_refused "a group-writable manifest" "writable only by that user"
 chmod g-w "$manifest"
 
 cp "$mac_root/$owner_stage2" "$tmp/stage2"

@@ -26,17 +26,26 @@ owner_manifest=$owner_boot_chain.sha256
 # data and checks the named default entry, even when another kernel is listed first.
 verify_owner_chain() {
   local root=${OMARCHY_BOOT_CHECK_ROOT:-/} manifest mode owner line file esp="" kernel
-  local manifest_directory=${owner_manifest%/*}
+  local manifest_directory=${owner_manifest%/*} expected_owner=0
   local record='^[a-f0-9]{64}  ([A-Za-z0-9_+.-]+(/[A-Za-z0-9_+.-]+)+)$'
   local tree="" uki_file uki_hash menu_hash
   local -A files=()
 
+  # The updater dispatches this entrypoint through sudo. The fixture root
+  # lets the package tests run as their own unprivileged user.
+  if [[ -n ${OMARCHY_BOOT_CHECK_ROOT:-} ]]; then
+    expected_owner=$EUID
+  elif (( EUID != 0 )); then
+    echo "Owner boot verification requires the privileged Omarchy update dispatcher." >&2
+    return 1
+  fi
+
   [[ -f $owner_manifest && ! -L $owner_manifest && ! -L $manifest_directory ]] &&
     read -r owner mode < <(stat -c '%u %a' -- "$manifest_directory") &&
-    [[ $owner == "$EUID" ]] && (( (8#$mode & 8#022) == 0 )) &&
+    [[ $owner == "$expected_owner" ]] && (( (8#$mode & 8#022) == 0 )) &&
     read -r owner mode < <(stat -c '%u %a' -- "$owner_manifest") &&
-    [[ $owner == "$EUID" ]] && (( (8#$mode & 8#022) == 0 )) || {
-    echo "The owner boot manifest must be a regular file owned by the updater and writable only by its owner." >&2
+    [[ $owner == "$expected_owner" ]] && (( (8#$mode & 8#022) == 0 )) || {
+    echo "The owner boot manifest and its directory must be owned by UID $expected_owner and writable only by that user." >&2
     return 1
   }
   manifest=$(cat -- "$owner_manifest") || return 1
