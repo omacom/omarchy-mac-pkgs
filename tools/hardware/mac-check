@@ -269,6 +269,7 @@ node_text() {
   fi
 }
 # The enabled device-tree nodes whose compatible lists $1, one path per line.
+# /proc/device-tree is a symlink: the trailing slash takes any grep through it.
 enabled_nodes() {
   local file node
   while IFS= read -r -d '' file; do
@@ -276,7 +277,7 @@ enabled_nodes() {
     if [[ ! -r $node/status || $(node_text "$node/status") == "okay" ]]; then
       printf '%s\n' "$node"
     fi
-  done < <(grep -rlxZ --null-data --include=compatible -- "$1" "$tree" 2>/dev/null)
+  done < <(grep -rlx --null --null-data --include=compatible -- "$1" "$tree/" 2>/dev/null)
 }
 
 gpu=""
@@ -294,39 +295,60 @@ else
 fi
 
 # Every external display connector the kernel registered. One that sees a display
-# Hyprland does not show fails; a Mac whose kernel drives only its panel says so.
-connectors=() unshown=()
+# Hyprland does not know fails, and one Hyprland keeps disabled or mirrored is
+# noted. The built-in panel and the 13-inch MacBook Pro's Touch Bar, a DSI panel
+# Hyprland never shows, are not ports. A laptop whose kernel drives only its panel
+# says so; a desktop Mac without a connector has lost its display driver.
+declare -A shown=() known=()
+for monitor in "${monitors[@]}"; do
+  shown[${monitor%% *}]=1
+done
+if [[ -n $hypr_signature ]]; then
+  while IFS= read -r name; do
+    [[ -z $name ]] || known[$name]=1
+  done < <(XDG_RUNTIME_DIR=$runtime HYPRLAND_INSTANCE_SIGNATURE=$hypr_signature hyprctl monitors all -j 2>/dev/null | jq -r '.[].name' 2>/dev/null)
+fi
+connectors=() unshown=() hidden=()
 for status in "$root"/sys/class/drm/card*-*/status; do
   [[ -r $status ]] || continue
   connector=${status%/status}
   connector=${connector##*/}
   connector=${connector#card*-}
-  [[ $connector != eDP-* ]] || continue
+  [[ $connector != eDP-* && $connector != DSI-* ]] || continue
   state=$(<"$status")
   connectors+=("$connector $state")
-  if [[ $state == "connected" && -n $hypr_signature ]] && ! printf '%s\n' "${monitors[@]}" | grep -q "^$connector "; then
+  if [[ $state != "connected" || -z $hypr_signature || -n ${shown[$connector]:-} ]]; then
+    continue
+  elif [[ -n ${known[$connector]:-} ]]; then
+    hidden+=("$connector")
+  else
     unshown+=("$connector")
   fi
 done
 if (( ${#unshown[@]} )); then
   report FAIL display-ports "a display is connected to $(joined "${unshown[@]}"), but Hyprland shows nothing there"
 elif (( ${#connectors[@]} )); then
-  report INFO display-ports "$(joined "${connectors[@]}")"
+  report INFO display-ports "$(joined "${connectors[@]}")${hidden[*]:+; Hyprland keeps $(joined "${hidden[@]}") disabled or mirrored}"
+elif [[ $(node_text "$tree/chassis-type") == "desktop" ]]; then
+  report FAIL display-ports "the display driver registered no connector"
 else
   report INFO display-ports "no external display connector: this kernel drives only the built-in panel"
 fi
 
 # The USB-C ports by the label of their device-tree connector, and the USB
-# controller behind each, found through the connector's endpoints.
+# controller behind each, found through the connector's endpoints. The controllers
+# sit under /soc, or at the root on the M4 Pro and M4 Max.
 declare -A port_label=()
 mapfile -t usbc < <(enabled_nodes usb-c-connector)
 for connector in "${usbc[@]}"; do
   label=$(node_text "$connector/label")
   for remote in "$connector"/ports/port@*/endpoint*/remote-endpoint; do
     target=$(od -An -tx1 -N4 "$remote" 2>/dev/null | tr -d ' \n')
-    for phandle in "$tree"/usb@*/port*/endpoint*/phandle "$tree"/usb@*/ports/port@*/endpoint*/phandle; do
+    for phandle in "$tree"/{,soc/}usb@*/port*/endpoint*/phandle "$tree"/{,soc/}usb@*/ports/port@*/endpoint*/phandle; do
       [[ -r $phandle && $(od -An -tx1 -N4 "$phandle" | tr -d ' \n') == "$target" ]] || continue
-      controller=${phandle#"$tree"/usb@}
+      controller=${phandle#"$tree"/}
+      controller=${controller#soc/}
+      controller=${controller#usb@}
       port_label[${controller%%/*}]=${label:-USB-C}
     done
   done
@@ -386,24 +408,30 @@ readers=("$root"/sys/class/mmc_host/mmc*)
 if [[ -d ${readers[0]} ]]; then
   cards=("${readers[0]}/${readers[0]##*/}":*)
   report PASS sd-reader "${readers[0]##*/}, $([[ -d ${cards[0]} ]] && echo "a card inserted" || echo "no card inserted")"
-elif [[ -n $(find "$tree" -maxdepth 3 -path '*pcie@*' -name 'mmc@*' 2>/dev/null) ]]; then
+elif [[ -n $(find -H "$tree" -path '*/pcie@*' -name 'mmc@*' 2>/dev/null) ]]; then
   report FAIL sd-reader "the device tree has an SD card reader, but the kernel registered no MMC host"
 else
   report SKIP sd-reader "this Mac has no SD card reader"
 fi
 
-backlights=("$root"/sys/class/leds/*kbd_backlight)
-if [[ -d ${backlights[0]} ]]; then
+# The Mac's own keyboard backlight is a PWM LED; a keyboard plugged in may bring its own.
+backlights=()
+for led in "$root"/sys/class/leds/*kbd_backlight; do
+  [[ $(readlink "$led/device/driver" 2>/dev/null) != */leds_pwm ]] || backlights+=("$led")
+done
+if (( ${#backlights[@]} )); then
   report PASS kbd-backlight "${backlights[0]##*/} at $(cat "${backlights[0]}/brightness") of $(cat "${backlights[0]}/max_brightness")"
-elif grep -rqx --null-data --include=function kbd_backlight "$tree" 2>/dev/null; then
+elif grep -rqx --null-data --include=function kbd_backlight "$tree/" 2>/dev/null; then
   report FAIL kbd-backlight "the device tree has a keyboard backlight, but the kernel registered no LED for it"
 else
   report SKIP kbd-backlight "this Mac has no keyboard backlight"
 fi
 
+# The Mac's battery, not a phone's, a mouse's or a keyboard's, which the kernel
+# scopes to their device.
 battery=""
 for supply in "$root"/sys/class/power_supply/*; do
-  if [[ $(cat "$supply/type" 2>/dev/null) == "Battery" ]]; then
+  if [[ $(cat "$supply/type" 2>/dev/null) == "Battery" && $(cat "$supply/scope" 2>/dev/null) != "Device" ]]; then
     battery=$supply
     break
   fi
@@ -419,14 +447,21 @@ else
 fi
 
 # Touch ID's boot status (omarchy-mac's lib/touchid-status), or its activation's
-# once the owner turned it on.
+# once the owner turned it on. With Touch ID on, no status means the activation
+# never ran: the driver did not bring up the sensor or the keybag.
 touchid=$(cat "$root/run/omarchy-mac/touchid" 2>/dev/null)
 case $touchid in
   ready) report PASS touchid "Touch ID is on and can enrol and match" ;;
   available) report INFO touchid "Touch ID can be turned on under Setup > Security > Fingerprint" ;;
   unsupported:*) report INFO touchid "Touch ID is not offered on this Mac (${touchid#unsupported:})" ;;
-  "") report INFO touchid "no Touch ID status: no sensor, or Touch ID is on and its activation has not run" ;;
-  *) report FAIL touchid "Touch ID is on but $touchid; see journalctl -u omarchy-mac-touchid-activate" ;;
+  "")
+    if [[ -e $root/etc/omarchy-mac/touchid-on ]]; then
+      report FAIL touchid "Touch ID is on, but nothing recorded its status this boot; see journalctl -k for apple_sep"
+    else
+      report INFO touchid "no Touch ID status: this Mac has no sensor"
+    fi
+    ;;
+  *) report FAIL touchid "Touch ID did not come up this boot ($touchid); see journalctl -u omarchy-mac-touchid-activate and journalctl -k" ;;
 esac
 
 # Snapshots and migrations
