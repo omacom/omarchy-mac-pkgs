@@ -20,7 +20,106 @@ set -uo pipefail
 owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-chain
 rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
 
+owner_manifest=$owner_boot_chain.sha256
+
+# The owner approves known-good files. This verifier reads the manifest as
+# data and checks the named default entry, even when another kernel is listed first.
+verify_owner_chain() {
+  local root=${OMARCHY_BOOT_CHECK_ROOT:-/} manifest mode owner line file esp="" kernel
+  local manifest_directory=${owner_manifest%/*}
+  local record='^[a-f0-9]{64}  ([A-Za-z0-9_+.-]+(/[A-Za-z0-9_+.-]+)+)$'
+  local tree="" uki_file uki_hash menu_hash
+  local -A files=()
+
+  [[ -f $owner_manifest && ! -L $owner_manifest && ! -L $manifest_directory ]] &&
+    read -r owner mode < <(stat -c '%u %a' -- "$manifest_directory") &&
+    [[ $owner == "$EUID" ]] && (( (8#$mode & 8#022) == 0 )) &&
+    read -r owner mode < <(stat -c '%u %a' -- "$owner_manifest") &&
+    [[ $owner == "$EUID" ]] && (( (8#$mode & 8#022) == 0 )) || {
+    echo "The owner boot manifest must be a regular file owned by the updater and writable only by its owner." >&2
+    return 1
+  }
+  manifest=$(cat -- "$owner_manifest") || return 1
+  while IFS= read -r line; do
+    [[ $line =~ $record ]] || { echo "Invalid owner boot manifest record." >&2; return 1; }
+    file=${BASH_REMATCH[1]}
+    [[ /$file/ != */../* && /$file/ != */./* && -z ${files[$file]+yes} && -f $root/$file ]] ||
+      { echo "Missing, duplicate or invalid owner boot file: $file" >&2; return 1; }
+    files[$file]=1
+  done <<< "$manifest"
+
+  for file in boot/efi boot; do
+    if [[ -n ${files[$file/limine.conf]+yes} ]]; then
+      [[ -z $esp ]] || { echo "The owner boot manifest names two Limine menus." >&2; return 1; }
+      esp=$file
+    fi
+  done
+  [[ -n $esp && -n ${files[$esp/EFI/BOOT/BOOTAA64.EFI]+yes} && -n ${files[$esp/m1n1/boot-ctxr.bin]+yes} ]] ||
+    { echo "The owner boot manifest must cover the Limine menu and loader and Aura Stage 2." >&2; return 1; }
+
+  for file in "${!files[@]}"; do
+    [[ $file == *.dtb ]] && tree=$file
+  done
+  [[ -n $tree ]] || { echo "The owner boot manifest must cover the pinned device tree." >&2; return 1; }
+
+  kernel=$(awk '
+    /^[[:space:]]*default_entry[[:space:]]*:/ {
+      count++
+      sub(/^[[:space:]]*default_entry[[:space:]]*:[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      if (/^Omarchy\/[A-Za-z0-9_.+-]+$/) print substr($0, 9)
+    }
+    END { if (count != 1) exit 1 }
+  ' "$root/$esp/limine.conf") &&
+    [[ -n $kernel && -n ${files[$esp/EFI/Linux/omarchy_$kernel.efi]+yes} ]] ||
+    { echo "The owner boot manifest must cover the named Omarchy default entry's UKI." >&2; return 1; }
+
+  uki_file="EFI/Linux/omarchy_$kernel.efi"
+  menu_hash=$(awk -v child="//$kernel" -v path="boot():/$uki_file#" '
+    {
+      sub(/^[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      if ($0 ~ /^\/[^/]/) parent = ($0 == "/+Omarchy" || $0 == "/Omarchy")
+      if ($0 ~ /^\/\//) {
+        entry = (parent && $0 == child)
+        if (entry) entries++
+      }
+      if ($0 ~ /^\/[^/]/) entry = 0
+      if (entry && $0 ~ /^path[[:space:]]*:/) {
+        paths++
+        sub(/^path[[:space:]]*:[[:space:]]*/, "")
+        if (index($0, path) == 1) print substr($0, length(path) + 1)
+      }
+    }
+    END { if (entries != 1 || paths != 1) exit 1 }
+  ' "$root/$esp/limine.conf") &&
+    [[ $menu_hash =~ ^[0-9a-f]{128}$ ]] &&
+    uki_hash=$(b2sum -- "$root/$esp/$uki_file") && [[ ${uki_hash%% *} == "$menu_hash" ]] ||
+    { echo "The named Limine default entry does not point to the recorded UKI with its correct hash." >&2; return 1; }
+
+  if [[ -z ${OMARCHY_BOOT_CHECK_ROOT:-} ]] && ! findmnt -rn -M "/$esp" >/dev/null; then
+    echo "The ESP named by the owner boot manifest is not mounted." >&2
+    return 1
+  fi
+
+  if [[ -s $root/$esp/aura-try ]]; then
+    echo "An Aura one-boot trial is pending on the owner-managed chain." >&2
+    return 1
+  fi
+  (cd -- "$root" && sha256sum --check --strict --quiet <<< "$manifest") >&2 || return 1
+  echo "Owner-managed boot files verified against the approved manifest."
+}
+
 if [[ -f $owner_boot_chain ]]; then
+  if [[ -e $owner_manifest || -L $owner_manifest ]]; then
+    if verify_owner_chain; then
+      sudo rm -f "$rollback_marker"
+      exit $?
+    else
+      echo "Owner-managed boot verification failed. Resolve the mismatch before continuing and do not reboot yet." >&2
+      exit 1
+    fi
+  fi
   sudo rm -f "$rollback_marker"
   echo "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain."
   if ! check_errors=$(OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then

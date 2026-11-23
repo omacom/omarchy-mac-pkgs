@@ -126,3 +126,54 @@ pass "apple: a passing check with the owner marker prints only the skip line and
 rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 owner_update "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing"
 pass "apple: a failing check with the owner marker prints one advisory and offers the reboot"
+
+limine_mac
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+: >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+manifest=$mac_root/etc/omarchy-mac-boot/owner-boot-chain.sha256
+owner_uki=boot/efi/EFI/Linux/omarchy_linux-owner.efi
+owner_stage2=boot/efi/m1n1/boot-ctxr.bin
+owner_tree=boot/efi/pinned.dtb
+cp "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi" "$mac_root/$owner_uki"
+cp "$mac_esp/m1n1/boot.bin" "$mac_root/$owner_stage2"
+cp "$mac_root${mac_dtbs[0]}" "$mac_root/$owner_tree"
+sed -i '1i default_entry: Omarchy/linux-owner' "$mac_esp/limine.conf"
+printf '  //linux-owner\n    protocol: efi\n    path: boot():/EFI/Linux/omarchy_linux-owner.efi#%s\n' \
+  "$(b2sum "$mac_root/$owner_uki" | cut -d' ' -f1)" >>"$mac_esp/limine.conf"
+
+record_owner_manifest() {
+  (cd "$mac_root" && sha256sum boot/efi/limine.conf boot/efi/EFI/BOOT/BOOTAA64.EFI "$owner_stage2" "$owner_tree" "$@") >"$manifest"
+}
+owner_refused() {
+  run_update aarch64-apple "$tmp/mac-boot"
+  (( status == 1 )) && ! reboot_offered ||
+    fail "apple: owner verification refuses $1 and offers no reboot" "status $status: $(cat "$tmp/out" "$tmp/err")"
+  grep -Fq "$2" "$tmp/err" && grep -Fq "do not reboot yet" "$tmp/err" ||
+    fail "apple: explains why owner verification refused $1" "$(cat "$tmp/err")"
+}
+
+record_owner_manifest "$owner_uki"
+run_update aarch64-apple "$tmp/mac-boot"
+(( status == 0 )) && reboot_offered &&
+  grep -Fq "Owner-managed boot files verified against the approved manifest." "$tmp/out" &&
+  ! grep -Fq "The packaged check would fail" "$tmp/out" ||
+  fail "apple: the approved custom default verifies with the stock entry listed first" "$(cat "$tmp/out" "$tmp/err")"
+
+record_owner_manifest boot/efi/EFI/Linux/omarchy_linux-aurora.efi
+owner_refused "a manifest covering only a nondefault UKI" "must cover the named Omarchy default entry"
+record_owner_manifest "$owner_uki"
+chmod g+w "$manifest"
+owner_refused "a group-writable manifest" "writable only by its owner"
+chmod g-w "$manifest"
+
+cp "$mac_root/$owner_stage2" "$tmp/stage2"
+printf 'changed Stage 2\n' >>"$mac_root/$owner_stage2"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+owner_refused "a changed Aura Stage 2" "boot-ctxr.bin: FAILED"
+[[ -f $mac_root/boot/.omarchy-mac-rolled-back ]] || fail "apple: failure retains the rollback marker"
+cp "$tmp/stage2" "$mac_root/$owner_stage2"
+
+sed -i '/path: .*omarchy_linux-owner.efi/s/linux-owner/linux-aurora/' "$mac_esp/limine.conf"
+record_owner_manifest "$owner_uki"
+owner_refused "a default entry targeting another UKI" "does not point to the recorded UKI"
+pass "apple: a verified owner chain completes the update and any mismatch prevents a reboot"

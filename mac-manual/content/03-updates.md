@@ -43,6 +43,10 @@ If that check fails, the update refuses to finish, says what failed and does not
 
 If you build your own kernel or m1n1, you can create an empty file at `/etc/omarchy-mac-boot/owner-boot-chain` to take responsibility for verifying the boot files. While the file exists, `omarchy update` reports that you manage the boot chain and shows the first reason if the packaged check fails. The update can still finish and offer a reboot. Remove the file to restore enforced verification, for example after going back to the packaged kernel and m1n1. The check before a snapshot restore runs regardless of whether the file exists.
 
+For an owner-managed Limine setup with Aura Stage 2, you can also install a root-owned `/etc/omarchy-mac-boot/owner-boot-chain.sha256` beside the marker to enforce verification. Generate it with `sha256sum` from `/` using relative paths to the approved boot files. Include the Limine menu and `EFI/BOOT/BOOTAA64.EFI`, the UKI for its named `Omarchy/<kernel>` default entry, `m1n1/boot-ctxr.bin` and the pinned device tree. Include any recovery files you want verified. Keep the manifest writable only by root.
+
+Record the hashes only after confirming that the selected chain and its recovery path work. An update fails verification if a recorded file changes or is missing, the default does not resolve to the recorded UKI, or an Aura one-boot trial is pending. Review and approve changed boot files before refreshing the manifest after an intentional boot-chain change. The update checks the files without rebuilding this chain.
+
 ## What is signed, and by what
 
 Nothing is trusted because of where it came from. Each artefact carries its own signature or digest, and each is checked on your Mac by something that was not downloaded alongside it.
