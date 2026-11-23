@@ -447,6 +447,20 @@ with tempfile.TemporaryDirectory() as temporary:
         deferred(audio, saved)
     assert audio.restarts == 1, 'a loss that outlasts the open lid is still repaired'
     m.recheck['at'] = None
+    audio = lost(); audio.lid = True; saved = state(); m.lid['wakes'] = True
+    with mock.patch.object(m.time, 'monotonic', return_value=1000.0):
+        deferred(audio, saved)
+        assert m.outage_due() is None, 'a watched closed lid sets no timer'
+        m.lid['wakes'] = False
+        assert m.outage_due() == m.OUTAGE_GRACE, 'an unwatched closed lid is looked at after the grace'
+    m.lid['wakes'] = True; audio.lid = False
+    with mock.patch.object(m.time, 'monotonic', return_value=1600.0):
+        deferred(audio, saved)
+        assert audio.restarts == 0 and m.outage_due() == m.OUTAGE_GRACE, 'the lid opening starts the grace'
+    with mock.patch.object(m.time, 'monotonic', return_value=1600.0 + m.OUTAGE_GRACE):
+        deferred(audio, saved)
+    assert audio.restarts == 1 and not audio.notices, 'a loss that outlasts the grace after the lid opens is repaired'
+    m.lid['wakes'] = False; m.recheck['at'] = None
     # A built-in card the user switched off is announced, never "repaired".
     audio = lost(); audio.cards[0]['active_profile'] = 'off'; saved = state()
     deferred(audio, saved)
@@ -677,14 +691,14 @@ with tempfile.TemporaryDirectory() as temporary:
     sub.stop()
     order = []
     class Recorded:
-        def __init__(self, **options): order.append(('subscription', options.get('stale')))
+        def __init__(self, **options): order.append(('subscription', options.get('stale'), options.get('lid_watch')))
         def start(self): order.append('subscribe'); return True
         def wait(self, limit=None): raise KeyboardInterrupt()
         def stop(self): order.append('stop')
     with mock.patch.object(m, 'Subscription', Recorded):
         try: m.supervise(lambda save=False: order.append('pass'))
         except KeyboardInterrupt: pass
-    assert order == [('subscription', None), 'subscribe', 'pass', 'stop'], order
+    assert order == [('subscription', None, m.LidWatch), 'subscribe', 'pass', 'stop'], order
     # A replaced program is noticed while events keep arriving, and only then.
     looks = []
     def stale():
@@ -947,7 +961,7 @@ with tempfile.TemporaryDirectory() as temporary:
 # WirePlumber once, through the watchdog, whatever the repair interval.
 def reset():
     m.installed.update(pending=False, retry_at=None, record=None, signature=None); m.recheck['at'] = None
-    m.outage.update(since=None, notified=False, repaired=False); m.lid['closed'] = False
+    m.outage.update(since=None, notified=False, repaired=False); m.lid.update(closed=False, wakes=False)
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     lv2 = directory / 'lv2'; (lv2 / 'lsp-plugins.lv2').mkdir(parents=True)
@@ -998,6 +1012,9 @@ with tempfile.TemporaryDirectory() as temporary:
     reset(); audio = Audio(); audio.no_dsp = True; audio.lid = True
     m.installed['pending'] = True; pass_(audio)
     assert audio.restarts == 0 and m.installed['pending'] and m.installed['retry_at'] is not None, 'no restart under a closed lid'
+    m.lid['wakes'] = True
+    assert m.outage_due() is None, 'nor a timer while the lid watch runs'
+    m.lid['wakes'] = False
     audio.lid = False; due = m.installed['retry_at']
     with mock.patch.object(m.time, 'monotonic', return_value=due - 1):
         pass_(audio)
@@ -1104,6 +1121,63 @@ with tempfile.TemporaryDirectory() as temporary:
         with mock.patch.dict(os.environ, PATH=temporary + os.pathsep + os.environ['PATH']):
             assert m.Audio().lid_closed() is expected, answer
 print('ok - the lid state comes from logind, and a failed query counts as open')
+import ctypes, select
+sd = ctypes.CDLL('libsystemd.so.0')
+class Logind:
+    def __init__(self):
+        self.bus = ctypes.c_void_p()
+        assert sd.sd_bus_open_system(ctypes.byref(self.bus)) >= 0 and sd.sd_bus_request_name(self.bus, b'org.freedesktop.login1', 0) >= 0
+    def change(self, name, value):
+        assert sd.sd_bus_emit_signal(self.bus, b'/org/freedesktop/login1', b'org.freedesktop.DBus.Properties', b'PropertiesChanged',
+                                     b'sa{sv}as', b'org.freedesktop.login1.Manager', 1, name, b'b', int(value), 0) >= 0
+        assert sd.sd_bus_flush(self.bus) >= 0
+with tempfile.TemporaryDirectory() as temporary:
+    config = Path(temporary) / 'bus.conf'
+    config.write_text('<busconfig><type>session</type><listen>unix:path=%s/bus</listen>'
+                      '<policy context="default"><allow own="*"/><allow send_destination="*"/><allow receive_sender="*"/></policy></busconfig>' % temporary)
+    bus = subprocess.Popen(['dbus-daemon', '--nofork', '--print-address', '--config-file', str(config)], stdout=subprocess.PIPE, text=True)
+    address = bus.stdout.readline().strip()
+    def watching(pactl='sleep 30', **options):
+        sub = m.Subscription(command=['bash', '-c', pactl], **dict(dict(quiet=0.1, backstop=60.0, retry=0.05, lid_watch=m.LidWatch), **options))
+        sub.start(); sub.confirm = None; return sub
+    try:
+        with mock.patch.dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=address):
+            logind = Logind()
+            def opening():
+                assert not m.lid['wakes'], 'the timed looks hold until the watch is listening'
+                return m.LidWatch()
+            sub = watching(lid_watch=opening)
+            assert m.lid['wakes'], 'a listening lid watch is noted'
+            logind.change(b'LidClosed', False)
+            start = time.monotonic(); result = sub.wait(); elapsed = time.monotonic() - start
+            assert result is False and 0.1 <= elapsed < 0.5, ('a change right after the watch started wakes a full pass', result, elapsed)
+            logind.change(b'LidClosed', False)
+            assert sd.sd_bus_call_method(sub.lid.bus, b'org.freedesktop.DBus', b'/org/freedesktop/DBus',
+                                         b'org.freedesktop.DBus.Peer', b'Ping', None, None, None) >= 0
+            assert not select.select([sub.lid], [], [], 0)[0], 'synchronous round trip drained the socket into sd-bus'
+            start = time.monotonic(); result = sub.wait(); elapsed = time.monotonic() - start
+            assert result is False and 0.1 <= elapsed < 0.5, ('a queued sd-bus signal wakes without sleeping to backstop', result, elapsed)
+            threading.Timer(0.1, logind.change, (b'IdleHint', True)).start()
+            sub.last_full = time.monotonic() - 59.0; start = time.monotonic(); sub.wait(); elapsed = time.monotonic() - start
+            assert elapsed >= 0.9, ('another logind property wakes nothing', elapsed)
+            sub.stop(); assert not m.lid['wakes'] and sub.lid is None, 'stopping closes the lid watch'
+            sub = watching(pactl='exit 0'); watch = sub.lid; sub.wait()
+            assert sub.process is None and sub.lid is watch and m.lid['wakes'], 'losing pactl keeps the lid watch'
+            sub.wait(); assert sub.lid is watch, 'resubscribing opens no second lid watch'
+            sub.stop(); sub = watching()
+            m.outage.update(since=time.monotonic(), notified=False); m.lid['closed'] = True
+            assert m.outage_due() is None, 'a watched closed lid sets no timer'
+            threading.Timer(0.2, bus.terminate).start()
+            start = time.monotonic(); result = sub.wait(); elapsed = time.monotonic() - start
+            assert result is False and elapsed < 0.6 and not m.lid['wakes'] and sub.process.poll() is None, ('a lost bus falls back at once', result, elapsed)
+            assert m.outage_due() is not None, 'a closed lid is looked at on a timer again'
+            sub.stop(); m.outage.update(since=None); m.lid['closed'] = False
+            sub = watching()
+            assert not m.lid['wakes'] and sub.lid is None and sub.process is not None, 'no bus leaves the timed looks'
+            sub.stop()
+    finally:
+        bus.kill(); bus.wait()
+print('ok - a closed lid sleeps until logind says it opened, and falls back to timed looks without the lid watch')
 unit = (root / 'vendor/systemd/user/omarchy-asahi-mic.service').read_text()
 assert '--watch' in unit and 'PartOf=graphical-session.target' in unit
 assert 'PartOf=pipewire.service' not in unit and 'After=graphical-session.target' not in unit
