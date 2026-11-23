@@ -20,6 +20,8 @@ On an M4 Mac (`apple,t8132`), `setup/grub-console.sh` adds `apple_dart.j713_dcp=
 
 `92-omarchy-mac-pmp.conf` adds `apple_pmp`, the power management coprocessor's driver, to the initramfs when the target kernel has it as a module. Without it an encrypted root waits out "PMP driver did not bind within 20000 ms" before unlock, since the module is still on that root.
 
+`92-omarchy-mac-cpufreq.conf` adds `apple_soc_cpufreq` on the same terms so the CPU clusters scale up from their firmware boot clock before `sd-encrypt` runs Argon2id key derivation.
+
 `92-omarchy-mac-kbd-backlight.conf` adds `pwm-apple`, which the keyboard backlight's `leds_pwm` LED needs, on the same terms, and bundles `90-omarchy-mac-kbd-backlight.rules`. leds_pwm registers the backlight off, so without both the passphrase prompt is typed in the dark. The rule sets an LED that comes up at 0 to 128; systemd-backlight restores the saved level after unlock.
 
 ## Device tree overlays
