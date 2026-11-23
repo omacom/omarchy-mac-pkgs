@@ -1,7 +1,7 @@
 #!/bin/bash
-# Turns Touch ID on once the owner has agreed: installs this Mac's calibration
-# and, on the Neo and the 16-inch M4 Pro, its sensor root key if missing, records
-# the agreement so the driver loads at every boot, and loads it now.
+# Turns Touch ID on once the owner has agreed: installs this Mac's calibration and, on the
+# Neo, the 16-inch M4 Pro and the 14- and 16-inch M4 Max, its sensor root key if missing,
+# records the agreement so the driver loads at every boot, and loads it now.
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
@@ -28,8 +28,8 @@ omarchy-hw-apple-silicon || exit 0
 recorded=0
 rebuilt=0
 rebuilt_calibration=0
-# The sensor root key's name; the 16-inch M4 Pro's and M4 Max's sensor nodes
-# name their own.
+# The sensor root key's name; the 16-inch M4 Pro's and the 14- and 16-inch M4 Max's
+# sensor nodes name their own.
 root_key=apple/msrk-j700.bin
 fail() {
   if (( recorded )); then
@@ -165,9 +165,9 @@ preloaded=0
 if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
   preloaded=1
 fi
-# The M4 Max's kernel profile leaves the xART guard off (aurora 7.3.0.aurora1-40),
-# and Touch ID was tried there only with it on, so keep Linux to its own xART
-# records. Other Macs keep the kernel's level: the guard blocks matching on M1-family Macs.
+# aurora 7.3.0.aurora1-40 runs the 16-inch M4 Max with the xART guard off, and Touch ID was
+# tried there only with it on, so both M4 Max boards keep Linux to its own xART records.
+# Other Macs keep the kernel's level: the guard blocks matching on M1-family Macs.
 driver_options="xart_writes=1 provision_keybag=1"
 if tr '\0' '\n' <"$tree/compatible" | grep -Exq 'apple,j61[46]c'; then
   driver_options+=" xart_guard=1"
