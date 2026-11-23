@@ -440,10 +440,10 @@ with tempfile.TemporaryDirectory() as temporary:
         deferred(audio, saved)
     assert audio.restarts == 0 and not audio.notices, 'a closed lid is not a lost array'
     audio.lid = False
-    with mock.patch.object(m.time, 'monotonic', return_value=later + m.OUTAGE_GRACE + 2):
+    with mock.patch.object(m.time, 'monotonic', return_value=later + 2 * m.OUTAGE_GRACE + 1):
         deferred(audio, saved)
-    assert audio.restarts == 0, 'the grace starts again when the lid opens'
-    with mock.patch.object(m.time, 'monotonic', return_value=later + 3 * m.OUTAGE_GRACE):
+    assert audio.restarts == 0, 'the grace starts again when the lid opens, not at the last closed pass'
+    with mock.patch.object(m.time, 'monotonic', return_value=later + 3 * m.OUTAGE_GRACE + 1):
         deferred(audio, saved)
     assert audio.restarts == 1, 'a loss that outlasts the open lid is still repaired'
     m.recheck['at'] = None

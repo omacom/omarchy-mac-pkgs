@@ -64,6 +64,8 @@ outage = dict(since=None, notified=False, repaired=False)
 # After WirePlumber is restarted the rebuilt graph may appear before the event
 # subscription is listening, so the watcher looks again shortly anyway.
 recheck = dict(at=None)
+# Whether the last outage pass found the lid closed.
+lid = dict(closed=False)
 # Set once an update changed AUDIO_FILES and kept in the runtime record until
 # a pass has acted on it, so a watcher that reloads mid-update keeps it.
 installed = dict(pending=False, retry_at=None, record=None, signature=None)
@@ -581,8 +583,10 @@ def reconcile(audio, state, save_only=False, checked=None):
             # lasting loss is worth telling the user about, once.
             # WirePlumber is restarted once first: a graph it left hidden
             # (#1028) is the usual lasting loss.
-            # Under a closed lid the grace starts again each pass, until it opens.
-            if outage['since'] is None or audio.lid_closed():
+            # Under a closed lid, and on the first pass after it opens, the grace
+            # starts again: the microphones return a moment after the lid opens.
+            was_closed, lid['closed'] = lid['closed'], audio.lid_closed()
+            if outage['since'] is None or was_closed or lid['closed']:
                 outage['since'] = time.monotonic()
             elif not outage['notified'] and time.monotonic() - outage['since'] >= OUTAGE_GRACE:
                 repaired = not outage['repaired'] and not card_disabled(audio) and repair_graph(audio, 'the Asahi DSP microphone is missing')
