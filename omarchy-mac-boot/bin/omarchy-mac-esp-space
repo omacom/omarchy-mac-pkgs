@@ -165,7 +165,8 @@ trim_keeps_newest() {
 # The limit limine-esp-limit keeps; an owner's own is left alone, and nothing trimmed for it.
 set_snapshot_limit() {
   "${OMARCHY_LIMINE_ESP_LIMIT:-/usr/lib/omarchy/mac-boot/limine-esp-limit}" "$limine_default" "$esp" &&
-    grep -q '^# omarchy-mac-boot: snapshot boot entries leave room' "$limine_default"
+    grep -q '^# omarchy-mac-boot: snapshot boot entries leave room' "$limine_default" &&
+    (( $(grep -Ec '^[[:space:]]*(MAX_SNAPSHOT_ENTRIES|LIMIT_USAGE_PERCENT)[[:space:]]*=' "$limine_default") == 2 ))
 }
 
 if (( available < need )) && omarchy-mac-limine-active 2>/dev/null && trim_keeps_newest; then

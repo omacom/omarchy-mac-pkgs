@@ -206,6 +206,11 @@ echo 'LIMIT_USAGE_PERCENT=85' >>"$tmp/limine"
 kernel_update
 (( status == 1 )) && [[ $(snapshots) == "uki_1 uki_2 uki_3 " && ! -s $tmp/syncs ]] && ! grep -Fq MAX_SNAPSHOT_ENTRIES "$tmp/limine" ||
   fail "an owner's own limit is kept, and the update refused" "$(<"$tmp/err")"
+near_limit
+PATH="$tmp/bin:$ROOT/bin:$PATH" bash "$limit" "$tmp/limine" "$esp"
+echo 'LIMIT_USAGE_PERCENT=40' >>"$tmp/limine"
+kernel_update
+(( status == 1 )) && [[ ! -s $tmp/syncs ]] || fail "an owner's limit added after the block trims nothing" "$(<"$tmp/err")"
 # Other files fill the ESP: trimming to the limit would take the newest entry, this update's way back.
 near_limit 1
 kernel_update
