@@ -30,12 +30,11 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
       echo "Touch ID was turned off while this ran, so setup goes on without it."
       exit 0
     elif [[ ! -e $options ]]; then
-      # The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
-      # 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
-      # Linux to its own xART records. Other Macs keep the kernel's level: the guard
-      # blocks matching on M1-family Macs.
+      # The M4 Max's kernel profile leaves the xART guard off (aurora 7.3.0.aurora1-40),
+      # and Touch ID was tried there only with it on, so keep Linux to its own xART
+      # records. Other Macs keep the kernel's level: the guard blocks matching on M1-family Macs.
       driver_options="xart_writes=1 provision_keybag=1"
-      if tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null | grep -Fxq apple,j616c; then
+      if tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null | grep -Exq 'apple,j61[46]c'; then
         driver_options+=" xart_guard=1"
       fi
       { mkdir -p -m 0755 "${options%/*}" &&

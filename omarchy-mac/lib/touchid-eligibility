@@ -47,11 +47,12 @@ elif [[ -z $sensor ]]; then
   exit 0
 fi
 
-# The 16-inch M4 Pro and M4 Max: on each, Touch ID has enrolled, matched, and
-# matched again after a restart. Their sensor loads a calibration and a root key that are both
-# rebuilt from sealed factory records.
+# The 16-inch M4 Pro and M4 Max, where Touch ID has enrolled and matched across a restart,
+# and the 14-inch M4 Max with the 16-inch's sensor wiring and enclave profile. Their sensor
+# loads a calibration and a root key that are both rebuilt from sealed factory records.
 sealed_board() {
-  { compatible apple,t6040 && compatible apple,j616s; } || { compatible apple,t6041 && compatible apple,j616c; }
+  { compatible apple,t6040 && compatible apple,j616s; } ||
+    { compatible apple,t6041 && { compatible apple,j616c || compatible apple,j614c; }; }
 }
 
 # The boards the aurora driver has a profile for. M1-family Macs cold-boot

@@ -20,7 +20,8 @@ fi
 # What Touch ID setup rebuilt from the factory records; the next setup rebuilds it.
 rebuilt=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin
   /usr/lib/firmware/updates/apple/mesacal-j616s.bin /usr/lib/firmware/updates/apple/msrk-j616c.bin
-  /usr/lib/firmware/updates/apple/mesacal-j616c.bin)
+  /usr/lib/firmware/updates/apple/mesacal-j616c.bin /usr/lib/firmware/updates/apple/msrk-j614c.bin
+  /usr/lib/firmware/updates/apple/mesacal-j614c.bin)
 records=(/etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf)
 present=()
 for file in "${records[@]}" "${rebuilt[@]}" "${rebuilt[@]/%/.new}"; do
