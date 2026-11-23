@@ -23,6 +23,9 @@ fail() {
 cat >"$stubs/systemctl" <<'STUB'
 #!/bin/bash
 echo "systemctl $*" >>"$CASE/systemctl.log"
+if [[ $1 == is-enabled && -e $CASE/is-enabled-fails ]]; then
+  exit 1
+fi
 if [[ $1 == daemon-reload && -e $CASE/daemon-reload-fails ]]; then
   exit 1
 fi
@@ -605,3 +608,48 @@ echo 'ok - first boot shows its steps on the splash, carrying on from the initra
 # The installed unit supplies the runtime path before a user session exists.
 [[ $(grep -c '^Environment=OMARCHY_PATH=/usr/share/omarchy$' "$unit") == 1 ]] || fail "the unit supplies one runtime path"
 echo 'ok - the unit supplies the runtime environment without a login session'
+
+# ── wait_vendor_firmware behavior on live root ─────────────────────────────
+run_live_wait() {
+  timeout --kill-after=5 30 env PATH="$stubs:$PATH" CASE="$case_dir" \
+    "$BASH" -c '
+      source "$1"
+      root=""
+      log_file=$CASE/first-boot.log
+      eval "$2"
+    ' _ "$script" "$1" </dev/null >"$case_dir/out" 2>&1
+}
+
+new_case vendor-fw-enabled
+run_live_wait 'wait_vendor_firmware' || fail "enabled vendor firmware wait succeeds"
+[[ $(<"$case_dir/systemctl.log") == $'systemctl is-enabled --quiet omarchy-vendor-firmware.service\nsystemctl start omarchy-vendor-firmware.service' ]] ||
+  fail "enabled vendor firmware unit is started before first boot continues"
+
+new_case vendor-fw-disabled
+touch "$case_dir/is-enabled-fails"
+run_live_wait 'wait_vendor_firmware' || fail "disabled vendor firmware wait still returns 0"
+[[ $(<"$case_dir/systemctl.log") == 'systemctl is-enabled --quiet omarchy-vendor-firmware.service' ]] ||
+  fail "disabled vendor firmware unit is not started"
+
+new_case vendor-fw-start-fails
+printf '%s\n' omarchy-vendor-firmware.service >"$case_dir/start-fails"
+run_live_wait 'wait_vendor_firmware' || fail "failed vendor firmware start does not abort first boot"
+grep -Fxq 'systemctl start omarchy-vendor-firmware.service' "$case_dir/systemctl.log" ||
+  fail "failed vendor firmware start was still attempted"
+
+new_case vendor-fw-before-work
+run_live_wait '
+  state_dir=$CASE/state
+  error_file=$state_dir/last-error
+  encrypt_failed_marker=$CASE/no-encrypt-failed
+  consume_install_conf() { echo "consume" >>"$CASE/systemctl.log"; }
+  make_keyring() { :; }
+  run_deferred_steps() { :; }
+  splash_progress() { :; }
+  stage_provisioning() { :; }
+  commit() { :; }
+  attempt
+' || fail "attempt runs wait_vendor_firmware before first-boot work"
+[[ $(<"$case_dir/systemctl.log") == $'systemctl is-enabled --quiet omarchy-vendor-firmware.service\nsystemctl start omarchy-vendor-firmware.service\nconsume' ]] ||
+  fail "vendor firmware wait finishes before consume_install_conf starts"
+echo 'ok - live first boot waits for enabled vendor firmware before work, skips when disabled, and tolerates start failure'

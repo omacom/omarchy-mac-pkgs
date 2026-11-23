@@ -122,6 +122,10 @@ if grep -Fq " $extract " /proc/mounts 2>/dev/null && dir_is_empty "$dest"; then
     mount --bind "$extract" "$dest"
 else
     cp -a "$extract"/. "$dest"/
+    if grep -Fq " $extract " /proc/mounts 2>/dev/null; then
+        umount "$extract"
+        rmdir "$extract" 2>/dev/null || true
+    fi
 fi
 
 {

@@ -6,23 +6,30 @@ dst=${OMARCHY_VENDORFW_SYSROOT_DEST:-/sysroot/lib/firmware/vendor}
 proc_mounts=${OMARCHY_VENDORFW_PROC_MOUNTS:-/proc/mounts}
 vendorfw_dir=${OMARCHY_VENDORFW_DIR:-/vendorfw}
 
-# Reuse the tmpfs already extracted before cryptsetup instead of remounting
+# Reuse the firmware already staged before cryptsetup instead of remounting
 # the ESP, re-extracting firmware.cpio, and leaking /run/omarchy-vendorfw-extract.
-if [ -e "$record" ] && [ -d "$extract" ]; then
-    mkdir -p "$dst"
-    if grep -Fq " $extract " "$proc_mounts" 2>/dev/null; then
+if [ -e "$record" ]; then
+    if [ -d "$extract" ] && grep -Fq " $extract " "$proc_mounts" 2>/dev/null &&
+        grep -Fq " $vendorfw_dir " "$proc_mounts" 2>/dev/null; then
+        mkdir -p "$dst"
         mount --bind "$extract" "$dst"
-        if grep -Fq " $vendorfw_dir " "$proc_mounts" 2>/dev/null; then
-            umount "$vendorfw_dir"
-        fi
+        umount "$vendorfw_dir"
         umount "$extract"
         rmdir "$extract" 2>/dev/null || true
-    else
-        mount -t tmpfs -o mode=0755 vendorfw "$dst"
-        cp -a "$extract"/. "$dst"/
-        rm -rf "$extract"
+        exit 0
     fi
-    exit 0
+    if [ -d "$vendorfw_dir" ]; then
+        mkdir -p "$dst"
+        mount -t tmpfs -o mode=0755 vendorfw "$dst"
+        cp -a "$vendorfw_dir"/. "$dst"/
+        if [ -d "$extract" ]; then
+            if grep -Fq " $extract " "$proc_mounts" 2>/dev/null; then
+                umount "$extract"
+            fi
+            rm -rf "$extract"
+        fi
+        exit 0
+    fi
 fi
 
 dt=${OMARCHY_VENDORFW_DEVICE_TREE_ESP:-/proc/device-tree/chosen/asahi,efi-system-partition}
