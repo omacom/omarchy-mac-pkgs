@@ -558,12 +558,18 @@ def reconcile(audio, state, save_only=False, checked=None):
         mapped = any(obj['name'] == MAPPING for obj in sources)
         if mapped or claim(state):
             leave_mapping(audio, state, sources, original_input)
+        # A closed lid cuts the microphones off; they return a moment after it
+        # opens, so repairs wait for a pass that finds it open twice.
+        was_closed, lid['closed'] = lid['closed'], audio.lid_closed()
+        lid_shut = was_closed or lid['closed']
         # An update's changed files restart WirePlumber once, past the repair
         # interval; until that is done the outage repair and notice wait.
         updated = None
         if installed['pending'] and (installed['retry_at'] is None or time.monotonic() >= installed['retry_at']):
             if audio.updating():
                 record_installed(True, retry_at=time.monotonic() + 5.0)
+            elif lid_shut:
+                record_installed(True, retry_at=time.monotonic() + 30.0)
             else:
                 updated = audio.array() and not card_disabled(audio) and repair_graph(audio, 'audio files changed while the Asahi DSP microphone was missing', force=True)
                 if updated == DEFERRED:
@@ -583,10 +589,7 @@ def reconcile(audio, state, save_only=False, checked=None):
             # lasting loss is worth telling the user about, once.
             # WirePlumber is restarted once first: a graph it left hidden
             # (#1028) is the usual lasting loss.
-            # Under a closed lid, and on the first pass after it opens, the grace
-            # starts again: the microphones return a moment after the lid opens.
-            was_closed, lid['closed'] = lid['closed'], audio.lid_closed()
-            if outage['since'] is None or was_closed or lid['closed']:
+            if outage['since'] is None or lid_shut:
                 outage['since'] = time.monotonic()
             elif not outage['notified'] and time.monotonic() - outage['since'] >= OUTAGE_GRACE:
                 repaired = not outage['repaired'] and not card_disabled(audio) and repair_graph(audio, 'the Asahi DSP microphone is missing')

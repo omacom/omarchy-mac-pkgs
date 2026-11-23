@@ -947,7 +947,7 @@ with tempfile.TemporaryDirectory() as temporary:
 # WirePlumber once, through the watchdog, whatever the repair interval.
 def reset():
     m.installed.update(pending=False, retry_at=None, record=None, signature=None); m.recheck['at'] = None
-    m.outage.update(since=None, notified=False, repaired=False)
+    m.outage.update(since=None, notified=False, repaired=False); m.lid['closed'] = False
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
     lv2 = directory / 'lv2'; (lv2 / 'lsp-plugins.lv2').mkdir(parents=True)
@@ -993,6 +993,18 @@ with tempfile.TemporaryDirectory() as temporary:
     assert audio.restarts == 1 and not m.installed['pending'] and not audio.notices, 'the update restarts WirePlumber once, inside the interval'
     pass_(audio)
     assert audio.restarts == 1, 'and only once'
+    # A closed lid keeps the update's restart pending until the lid has been
+    # found open twice.
+    reset(); audio = Audio(); audio.no_dsp = True; audio.lid = True
+    m.installed['pending'] = True; pass_(audio)
+    assert audio.restarts == 0 and m.installed['pending'] and m.installed['retry_at'] is not None, 'no restart under a closed lid'
+    audio.lid = False
+    with mock.patch.object(m.time, 'monotonic', return_value=m.installed['retry_at']):
+        pass_(audio)
+    assert audio.restarts == 0 and m.installed['pending'], 'nor on the first pass after it opens'
+    with mock.patch.object(m.time, 'monotonic', return_value=m.installed['retry_at']):
+        pass_(audio)
+    assert audio.restarts == 1 and not m.installed['pending'], 'the restart follows once the lid stays open'
     for name, setup in (('a Mac without a microphone array', lambda audio: setattr(audio, 'has_array', False)),
                         ('a card the user switched off', lambda audio: audio.cards[0].update(active_profile='off'))):
         reset(); audio = Audio(); audio.no_dsp = True; setup(audio)
