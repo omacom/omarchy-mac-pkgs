@@ -25,10 +25,11 @@ owner_manifest=$owner_boot_chain.sha256
 # The owner approves known-good files. This verifier reads the manifest as
 # data and checks the named default entry, even when another kernel is listed first.
 verify_owner_chain() {
-  local root=${OMARCHY_BOOT_CHECK_ROOT:-/} manifest mode owner line file esp="" kernel
+  local root=${OMARCHY_BOOT_CHECK_ROOT:-/} manifest mode owner line file esp="" kernel menu_digest selection
   local manifest_directory=${owner_manifest%/*} expected_owner=0
-  local record='^[a-f0-9]{64}  ([A-Za-z0-9_+.-]+(/[A-Za-z0-9_+.-]+)+)$'
-  local tree="" uki_file uki_hash menu_hash
+  local record='^([a-f0-9]{64})  ([A-Za-z0-9_+.-]+(/[A-Za-z0-9_+.-]+)+)$'
+  local tree="" digest
+  local -a boot_checks=()
   local -A files=()
 
   # The updater dispatches this entrypoint through sudo. The fixture root
@@ -51,10 +52,14 @@ verify_owner_chain() {
   manifest=$(cat -- "$owner_manifest") || return 1
   while IFS= read -r line; do
     [[ $line =~ $record ]] || { echo "Invalid owner boot manifest record." >&2; return 1; }
-    file=${BASH_REMATCH[1]}
+    file=${BASH_REMATCH[2]}
+    digest=${BASH_REMATCH[1]}
     [[ /$file/ != */../* && /$file/ != */./* && -z ${files[$file]+yes} && -f $root/$file ]] ||
       { echo "Missing, duplicate or invalid owner boot file: $file" >&2; return 1; }
-    files[$file]=1
+    files[$file]=$digest
+    if [[ $file != "boot/efi/limine.conf" && $file != "boot/limine.conf" ]]; then
+      boot_checks+=("$line")
+    fi
   done <<< "$manifest"
 
   for file in boot/efi boot; do
@@ -71,64 +76,37 @@ verify_owner_chain() {
   done
   [[ -n $tree ]] || { echo "The owner boot manifest must cover the pinned device tree." >&2; return 1; }
 
-  kernel=$(awk '
-    /^[[:space:]]*default_entry[[:space:]]*:/ {
-      count++
-      sub(/^[[:space:]]*default_entry[[:space:]]*:[[:space:]]*/, "")
-      sub(/[[:space:]]+$/, "")
-      if (/^Omarchy\/[A-Za-z0-9_.+-]+$/) print substr($0, 9)
-    }
-    END { if (count != 1) exit 1 }
-  ' "$root/$esp/limine.conf") &&
-    [[ -n $kernel && -n ${files[$esp/EFI/Linux/omarchy_$kernel.efi]+yes} ]] ||
-    { echo "The owner boot manifest must cover the named Omarchy default entry's UKI." >&2; return 1; }
-
-  uki_file="EFI/Linux/omarchy_$kernel.efi"
-  menu_hash=$(awk -v child="//$kernel" -v path="boot():/$uki_file#" '
-    {
-      sub(/^[[:space:]]+/, "")
-      sub(/[[:space:]]+$/, "")
-      if ($0 ~ /^\/[^/]/) parent = ($0 == "/+Omarchy" || $0 == "/Omarchy")
-      if ($0 ~ /^\/\//) {
-        entry = (parent && $0 == child)
-        if (entry) entries++
-      }
-      if ($0 ~ /^\/[^/]/) entry = 0
-      if (entry && $0 ~ /^path[[:space:]]*:/) {
-        paths++
-        sub(/^path[[:space:]]*:[[:space:]]*/, "")
-        if (index($0, path) == 1) print substr($0, length(path) + 1)
-      }
-    }
-    END { if (entries != 1 || paths != 1) exit 1 }
-  ' "$root/$esp/limine.conf") &&
-    [[ $menu_hash =~ ^[0-9a-f]{128}$ ]] &&
-    uki_hash=$(b2sum -- "$root/$esp/$uki_file") && [[ ${uki_hash%% *} == "$menu_hash" ]] ||
-    { echo "The named Limine default entry does not point to the recorded UKI with its correct hash." >&2; return 1; }
-
   if [[ -z ${OMARCHY_BOOT_CHECK_ROOT:-} ]] && ! findmnt -rn -M "/$esp" >/dev/null; then
     echo "The ESP named by the owner boot manifest is not mounted." >&2
     return 1
   fi
 
+  selection=$(cd -- "$root" && omarchy-mac-owner-limine-hash --details "$esp/limine.conf") || return 1
+  read -r kernel menu_digest <<< "$selection"
+  [[ -n ${files[$esp/EFI/Linux/omarchy_$kernel.efi]+yes} ]] ||
+    { echo "The owner boot manifest must cover the named Omarchy default entry's UKI." >&2; return 1; }
+  [[ $menu_digest == "${files[$esp/limine.conf]}" ]] ||
+    { echo "The approved Limine default entry or header has changed." >&2; return 1; }
+
   if [[ -s $root/$esp/aura-try ]]; then
-    echo "An Aura one-boot trial is pending on the owner-managed chain." >&2
+    echo "An Aura one-boot trial marker is still present on the owner-managed chain." >&2
     return 1
   fi
-  (cd -- "$root" && sha256sum --check --strict --quiet <<< "$manifest") >&2 || return 1
+  (cd -- "$root" && sha256sum --check --strict --quiet < <(printf '%s\n' "${boot_checks[@]}")) >&2 || return 1
   echo "Owner-managed boot files verified against the approved manifest."
 }
 
-if [[ -f $owner_boot_chain ]]; then
-  if [[ -e $owner_manifest || -L $owner_manifest ]]; then
-    if verify_owner_chain; then
-      sudo rm -f "$rollback_marker"
-      exit $?
-    else
-      echo "Owner-managed boot verification failed. Resolve the mismatch before continuing and do not reboot yet." >&2
-      exit 1
-    fi
+if [[ -f $owner_boot_chain && ( -e $owner_manifest || -L $owner_manifest ) ]]; then
+  if verify_owner_chain; then
+    sudo rm -f "$rollback_marker" "${OMARCHY_BOOT_CHECK_ROOT:-}/var/lib/omarchy/mac-boot/esp-rebuild-pending"
+    exit $?
+  else
+    echo "Owner-managed boot verification failed. Please do not reboot yet. Inspect the boot files and refresh the manifest only after approving the change." >&2
+    exit 1
   fi
+fi
+
+if [[ -f $owner_boot_chain ]]; then
   sudo rm -f "$rollback_marker"
   echo "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain."
   if ! check_errors=$(OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then
