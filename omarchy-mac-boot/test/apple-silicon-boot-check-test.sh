@@ -1311,3 +1311,70 @@ mv "$root/var/lib/aurora-stage2/attempts/${sha%% *}" "$root/var/lib/aurora-stage
 run_check --boot-chain
 expect_fail "an orphaned trial with a kernel-named attempt record" "update-m1n1 has already tried this image (/var/lib/aurora-stage2/attempts/$kver)"
 pass "a configured DTBS reaches bootchain.py, kernel-named attempt records count, and an image update-m1n1 already tried is not advised a rebuild"
+
+# On an Aurora Limine Mac, the Aurora Stage 2 path exits before the stock
+# check, so it must compare Limine, its menu and UKI against the system ESP.
+aurora_system
+mkdir -p "$root/usr/share/limine" "$esp/EFI/Linux" "$esp/EFI/BOOT" "$existing"
+: >"$root/var/lib/omarchy/limine.enabled"
+printf 'ESP_PATH="/boot/efi"\nENABLE_UKI=yes\n' >"$root/etc/default/limine"
+printf 'UUID=r / btrfs rw,subvol=/@ 0 0\n' >"$root/etc/fstab"
+printf 'LIMINE\n' >"$root/usr/share/limine/BOOTAA64.EFI"
+cp "$root/usr/share/limine/BOOTAA64.EFI" "$esp/EFI/BOOT/BOOTAA64.EFI"
+uki="$esp/EFI/Linux/omarchy_linux-aurora.efi"
+{ cat "$modules/vmlinuz"; printf 'initrd\n'; } >"$uki"
+printf '/+Omarchy\n  //linux-aurora\n    protocol: efi\n    path: boot():/EFI/Linux/omarchy_linux-aurora.efi#%s\n    cmdline: root=UUID=r rw rootflags=subvol=@ quiet\n' \
+  "$(b2sum "$uki" | cut -d' ' -f1)" >"$esp/limine.conf"
+rm -f "$root/boot/grub/grub.cfg"
+printf '%s\0' "$partuuid" >"$root/proc/device-tree/chosen/asahi,efi-system-partition"
+cp -a "$esp/." "$existing/"
+esp_mismatch="is not the one on the system ESP (PARTUUID=$partuuid), which U-Boot boots"
+for mode in --boot-chain ""; do
+  TEST_EXISTING_MOUNT="$existing" run_check ${mode:+"$mode"}
+  expect_pass "an Aurora Limine Mac whose system ESP holds the Limine files (${mode:-full check})"
+  grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out" ||
+    fail "an Aurora Limine Mac reports the installed kernel identity (${mode:-full check})" "$(cat "$test_tmp/out")"
+  grep -Fq "aurora-stage2.py plan" "$calls" ||
+    fail "an Aurora Limine Mac takes the Aurora Stage 2 path (${mode:-full check})" "$(cat "$calls")"
+done
+rm -rf "$existing/EFI" "$existing/limine.conf"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "an Aurora Limine Mac whose ESP_PATH is another ESP than the system one" "/boot/efi/EFI/BOOT/BOOTAA64.EFI $esp_mismatch"
+cp -a "$esp/EFI" "$esp/limine.conf" "$existing/"
+printf 'GRUB\n' >"$existing/EFI/BOOT/BOOTAA64.EFI"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "an Aurora Limine Mac whose system ESP loader slot is not the checked Limine" "/boot/efi/EFI/BOOT/BOOTAA64.EFI $esp_mismatch"
+TEST_EXISTING_MOUNT="$existing" run_check
+expect_fail "an Aurora Limine Mac whose system ESP loader slot diverges in the full check" "/boot/efi/EFI/BOOT/BOOTAA64.EFI $esp_mismatch"
+cp "$esp/EFI/BOOT/BOOTAA64.EFI" "$existing/EFI/BOOT/BOOTAA64.EFI"
+printf 'older\n' >>"$existing/EFI/Linux/omarchy_linux-aurora.efi"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "an Aurora Limine Mac whose system ESP holds another UKI" "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi $esp_mismatch"
+cp "$esp/EFI/Linux/omarchy_linux-aurora.efi" "$existing/EFI/Linux/omarchy_linux-aurora.efi"
+sed -i 's/quiet$/quiet splash/' "$existing/limine.conf"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "an Aurora Limine Mac whose system ESP holds another menu" "/boot/efi/limine.conf $esp_mismatch"
+cp "$esp/limine.conf" "$existing/limine.conf"
+cp "$test_tmp/aurora-previous.bin" "$existing/m1n1/boot-ctxr.bin"
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_pass "a snapshot restore on an Aurora Limine Mac whose system ESP holds the checked Limine files"
+grep -Fq "m1n1/boot-ctxr.bin and Limine on the system ESP are the ones that booted this snapshot" "$test_tmp/out" ||
+  fail "a snapshot restore on an Aurora Limine Mac reports the Stage 2 and Limine that booted" "$(cat "$test_tmp/out")"
+printf 'GRUB\n' >"$existing/EFI/BOOT/BOOTAA64.EFI"
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "a snapshot restore on an Aurora Limine Mac whose system ESP loader diverges" "/boot/efi/EFI/BOOT/BOOTAA64.EFI $esp_mismatch"
+aurora_system
+mkdir -p "$existing"
+printf '%s\0' "$partuuid" >"$root/proc/device-tree/chosen/asahi,efi-system-partition"
+cp -a "$esp/." "$existing/"
+mkdir -p "$esp/EFI/BOOT"
+printf 'ESP_PATH="/boot/efi"\nENABLE_UKI=yes\n' >"$root/etc/default/limine"
+printf 'LIMINE\n' >"$esp/EFI/BOOT/BOOTAA64.EFI"
+printf 'menu\n' >"$esp/limine.conf"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_pass "an Aurora GRUB Mac without limine.enabled ignores absent Limine files on the system ESP"
+mkdir -p "$existing/EFI/BOOT"
+printf 'GRUB\n' >"$existing/EFI/BOOT/BOOTAA64.EFI"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_pass "an Aurora GRUB Mac without limine.enabled ignores differing Limine files on the system ESP"
+pass "an Aurora Limine Mac compares Limine, its menu and UKI against the system ESP"
