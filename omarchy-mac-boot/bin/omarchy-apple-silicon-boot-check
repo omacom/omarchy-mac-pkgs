@@ -21,8 +21,9 @@
 # the boot menu starts first when both kernels are installed, and leaves out
 # LUKS keyslots and provisioning leftovers and an m1n1 image its owner took
 # over with M1N1_UPDATE_DISABLED. OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1, from a
-# snapshot restore across a boot update, leaves out the ESP's Limine and
-# m1n1/boot.bin: they booted that snapshot, and may be newer than its packages.
+# snapshot restore across a boot update, leaves out the ESP's Limine,
+# m1n1/boot.bin and m1n1/boot-ctxr.bin: they booted that snapshot, and may be
+# newer than its packages.
 #
 # Where /usr/bin/update-m1n1 is Aurora's, Stage 2 and its trials are checked
 # against what its bootchain.py plans instead (aurora-stage2.sh).
@@ -889,34 +890,67 @@ dtb_order() {
   done
 }
 
+# An image update-m1n1 wrote before the C locale was pinned holds the same
+# device trees in its caller's collation: rebuild it in the order it holds
+# them and compare again.
+esp_image_matches() {
+  local relative=$1 name=${1##*/} esp_order
+  local -a esp_dtbs=()
+  image_matches=0
+  if sudo cmp -s "$workdir/boot.bin" "$mountpoint/$relative"; then
+    image_matches=1
+  else
+    # shellcheck disable=SC2024 # the copy is the check's own
+    sudo cat "$mountpoint/$relative" >"$workdir/esp-$name" ||
+      fail "cannot read $relative on the system ESP ($esp)"
+    if esp_order=$(dtb_order "$workdir/esp-$name" "$(stat -L -c %s "$root$M1N1")") && [[ -n $esp_order ]]; then
+      mapfile -t esp_dtbs <<<"$esp_order"
+      build_image "$workdir/esp-order-$name" "${esp_dtbs[@]}"
+      if cmp -s "$workdir/esp-order-$name" "$workdir/esp-$name"; then
+        image_matches=1
+      fi
+    fi
+  fi
+}
+
 mount_system_esp
 sudo test -f "$mountpoint/m1n1/boot.bin" || fail "the system ESP ($esp) has no m1n1/boot.bin"
 limine_on_system_esp
+has_ctxr=0
+if sudo test -f "$mountpoint/m1n1/boot-ctxr.bin" && sudo test ! -L "$mountpoint/m1n1/boot-ctxr.bin"; then
+  has_ctxr=1
+fi
 if [[ -n $disabled ]]; then
-  echo "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin is its owner's and is not checked"
+  if (( has_ctxr )); then
+    echo "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin and m1n1/boot-ctxr.bin are their owner's and are not checked"
+  else
+    echo "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin is its owner's and is not checked"
+  fi
   report_running_release
   exit 0
 fi
 if [[ ${OMARCHY_BOOT_CHECK_ROLLBACK_ESP:-0} == 1 ]]; then
-  echo "Apple Silicon boot check: m1n1/boot.bin and Limine on the system ESP are the ones that booted this snapshot"
+  if (( has_ctxr )); then
+    echo "Apple Silicon boot check: m1n1/boot.bin, m1n1/boot-ctxr.bin and Limine on the system ESP are the ones that booted this snapshot"
+  else
+    echo "Apple Silicon boot check: m1n1/boot.bin and Limine on the system ESP are the ones that booted this snapshot"
+  fi
   report_running_release
   exit 0
 fi
-if sudo cmp -s "$workdir/boot.bin" "$mountpoint/m1n1/boot.bin"; then
-  report_running_release
-  exit 0
+esp_image_matches m1n1/boot.bin
+if (( ! image_matches )); then
+  if (( has_ctxr )); then
+    advice="run sudo update-m1n1 and sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr, then omarchy update"
+  else
+    advice="run sudo update-m1n1, then omarchy update"
+  fi
+  fail "m1n1/boot.bin on the system ESP ($esp) is not m1n1, $kernel $kver's device trees, U-Boot and $CONFIG as installed; $advice"
 fi
-# An image update-m1n1 wrote before the C locale was pinned holds the same
-# device trees in its caller's collation: rebuild it in the order it holds
-# them and compare again.
-sudo cat "$mountpoint/m1n1/boot.bin" >"$workdir/esp-boot.bin" ||
-  fail "cannot read m1n1/boot.bin on the system ESP ($esp)"
-if esp_order=$(dtb_order "$workdir/esp-boot.bin" "$(stat -L -c %s "$root$M1N1")") && [[ -n $esp_order ]]; then
-  mapfile -t esp_dtbs <<<"$esp_order"
-  build_image "$workdir/boot-esp-order.bin" "${esp_dtbs[@]}"
-  if cmp -s "$workdir/boot-esp-order.bin" "$workdir/esp-boot.bin"; then
-    report_running_release
-    exit 0
+if (( has_ctxr )); then
+  esp_image_matches m1n1/boot-ctxr.bin
+  if (( ! image_matches )); then
+    fail "m1n1/boot-ctxr.bin on the system ESP ($esp) is not m1n1, $kernel $kver's device trees, U-Boot and $CONFIG as installed; run sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr, then omarchy update"
   fi
 fi
-fail "m1n1/boot.bin on the system ESP ($esp) is not m1n1, $kernel $kver's device trees, U-Boot and $CONFIG as installed; run sudo update-m1n1, then omarchy update"
+report_running_release

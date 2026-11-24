@@ -35,8 +35,9 @@ if [[ -f $owner_boot_chain ]]; then
 fi
 
 echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
-# The marker stays until the check passes and every rebuild finished. The check
-# can't see boot-ctxr.bin, so that rebuild runs while the marker is there.
+# The marker stays until the check passes and every rebuild finishes. Even when
+# the check passes, --verify still runs under the marker so an unmounted ESP or
+# a boot-ctxr.bin rebuild failure (such as a configured TARGET) keeps the marker.
 # OMARCHY_MAC_BOOT_CTXR is a test seam; it expands in this shell and runs under sudo.
 boot_ctxr=${OMARCHY_MAC_BOOT_CTXR:-/usr/share/libalpm/scripts/omarchy-mac-boot-ctxr}
 repair_failed="" ctxr_failed="" ctxr_unchecked=""
@@ -74,7 +75,7 @@ Then run omarchy update again: it checks the boot files before it offers the reb
 MESSAGE
   exit 1
 elif [[ -n $repair_failed ]]; then
-  # The check cannot see boot-ctxr.bin, so a failed rebuild keeps the marker.
+  # A failed rebuild keeps the marker even when the boot check itself passes.
   cat >&2 <<MESSAGE
 
 The boot files were not all rebuilt, so do not reboot yet.

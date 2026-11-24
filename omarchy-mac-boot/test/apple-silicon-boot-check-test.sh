@@ -996,6 +996,103 @@ TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
 expect_fail "an m1n1 left to its owner beside another loader on the system ESP" "/boot/efi/EFI/BOOT/BOOTAA64.EFI is not the one on the system ESP"
 pass "a Limine Mac boots the Limine, menu and UKI on the system ESP"
 
+# On an M4 or later with stock update-m1n1, a regular m1n1/boot-ctxr.bin on the
+# system ESP is checked beside m1n1/boot.bin against the same built image.
+system linux-aurora
+ctxr_match="Apple Silicon boot check: running linux-aurora $kver; installed boot files match"
+ctxr_mismatch="is not m1n1, linux-aurora $kver's device trees, U-Boot and /etc/m1n1.conf as installed"
+cp "$esp/m1n1/boot.bin" "$esp/m1n1/boot-ctxr.bin"
+for mode in --boot-chain ""; do
+  run_check ${mode:+"$mode"}
+  expect_pass "matching boot.bin and boot-ctxr.bin (${mode:-full})"
+  [[ $(<"$test_tmp/out") == "$ctxr_match" ]] ||
+    fail "matching boot-ctxr.bin prints the standard match summary (${mode:-full})" "$(<"$test_tmp/out")"
+done
+# Device trees in another order pass via dtb_order; a missing device tree fails.
+write_boot_bin "${dtbs[1]}" "${dtbs[2]}" "${dtbs[0]}"
+mv "$esp/m1n1/boot.bin" "$esp/m1n1/boot-ctxr.bin"
+write_boot_bin "${dtbs[2]}" "${dtbs[0]}" "${dtbs[1]}"
+run_check --boot-chain
+expect_pass "boot.bin and boot-ctxr.bin holding the expected device trees in different orders"
+write_boot_bin "${dtbs[@]:0:2}"
+mv "$esp/m1n1/boot.bin" "$esp/m1n1/boot-ctxr.bin"
+write_boot_bin "${dtbs[@]}"
+for mode in --boot-chain ""; do
+  run_check ${mode:+"$mode"}
+  expect_fail "a stale boot-ctxr.bin missing a device tree (${mode:-full})" \
+    "m1n1/boot-ctxr.bin on the system ESP (/boot/efi) $ctxr_mismatch; run sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr, then omarchy update"
+done
+# Stand-downs leave the stale boot-ctxr.bin above alone and name it in their note.
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 run_check --boot-chain
+expect_pass "OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 with a stale boot-ctxr.bin"
+grep -Fxq "Apple Silicon boot check: m1n1/boot.bin, m1n1/boot-ctxr.bin and Limine on the system ESP are the ones that booted this snapshot" "$test_tmp/out" ||
+  fail "rollback-ESP mode names boot-ctxr.bin when present" "$(<"$test_tmp/out")"
+printf 'M1N1_UPDATE_DISABLED=1\n' >"$root/etc/default/update-m1n1"
+run_check --boot-chain
+expect_pass "M1N1_UPDATE_DISABLED with a stale boot-ctxr.bin"
+grep -Fxq "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin and m1n1/boot-ctxr.bin are their owner's and are not checked" "$test_tmp/out" ||
+  fail "M1N1_UPDATE_DISABLED names both images when boot-ctxr.bin is present" "$(<"$test_tmp/out")"
+rm "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_pass "M1N1_UPDATE_DISABLED without boot-ctxr.bin"
+grep -Fxq "Apple Silicon boot check: M1N1_UPDATE_DISABLED is set in /etc/default/update-m1n1, so m1n1/boot.bin is its owner's and is not checked" "$test_tmp/out" ||
+  fail "M1N1_UPDATE_DISABLED without boot-ctxr.bin keeps today's note" "$(<"$test_tmp/out")"
+rm "$root/etc/default/update-m1n1"
+# Inverses: no boot-ctxr.bin or a symlinked boot-ctxr.bin keeps today's behaviour.
+run_check --boot-chain
+expect_pass "no boot-ctxr.bin (pre-M4) with matching boot.bin"
+[[ $(<"$test_tmp/out") == "$ctxr_match" ]] ||
+  fail "without boot-ctxr.bin stdout stays identical" "$(<"$test_tmp/out")"
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 run_check --boot-chain
+expect_pass "rollback-ESP mode without boot-ctxr.bin"
+grep -Fxq "Apple Silicon boot check: m1n1/boot.bin and Limine on the system ESP are the ones that booted this snapshot" "$test_tmp/out" ||
+  fail "rollback-ESP mode without boot-ctxr.bin keeps today's note" "$(<"$test_tmp/out")"
+printf 'stale target\n' >"$test_tmp/stale-ctxr.bin"
+ln -s "$test_tmp/stale-ctxr.bin" "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_pass "a symlinked boot-ctxr.bin is left alone"
+[[ $(<"$test_tmp/out") == "$ctxr_match" ]] ||
+  fail "a symlinked boot-ctxr.bin keeps today's stdout" "$(<"$test_tmp/out")"
+# System ESP named by the device tree and mounted elsewhere: read that ESP, not /boot/efi.
+rm "$esp/m1n1/boot-ctxr.bin"
+cp "$esp/m1n1/boot.bin" "$esp/m1n1/boot-ctxr.bin"
+mkdir -p "$root/proc/device-tree/chosen" "$existing"
+printf '%s\0' "$partuuid" >"$root/proc/device-tree/chosen/asahi,efi-system-partition"
+cp -a "$esp/." "$existing/"
+printf 'stale on system esp\n' >"$existing/m1n1/boot-ctxr.bin"
+TEST_EXISTING_MOUNT="$existing" run_check --boot-chain
+expect_fail "stale boot-ctxr.bin on the system ESP beside a matching one in /boot/efi" \
+  "m1n1/boot-ctxr.bin on the system ESP (PARTUUID=$partuuid) $ctxr_mismatch; run sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr, then omarchy update"
+# Stale boot.bin beside boot-ctxr.bin advises both commands; without it, today's message.
+rm -rf "$root/proc/device-tree"
+write_boot_bin "${dtbs[@]:0:2}"
+run_check --boot-chain
+expect_fail "stale boot.bin beside boot-ctxr.bin" \
+  "m1n1/boot.bin on the system ESP (/boot/efi) $ctxr_mismatch; run sudo update-m1n1 and sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr, then omarchy update"
+rm "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_fail "stale boot.bin without boot-ctxr.bin" \
+  "m1n1/boot.bin on the system ESP (/boot/efi) $ctxr_mismatch; run sudo update-m1n1, then omarchy update"
+# A build_image failure during the reordered fallback aborts via set -e rather
+# than reporting a stale image.
+write_boot_bin "${dtbs[1]}" "${dtbs[2]}" "${dtbs[0]}"
+mv "$esp/m1n1/boot.bin" "$esp/m1n1/boot-ctxr.bin"
+write_boot_bin "${dtbs[@]}"
+cat >"$stub_bin/gzip" <<SH
+#!/bin/bash
+[[ ! -f "$test_tmp/gzip-once" ]] || exit 2
+: >"$test_tmp/gzip-once"
+exec "$(command -v gzip)" "\$@"
+SH
+chmod +x "$stub_bin/gzip"
+run_check --boot-chain
+rm -f "$stub_bin/gzip" "$test_tmp/gzip-once"
+(( status == 2 )) || fail "a failed reordered rebuild stops the check" "status $status: $(<"$test_tmp/err")"
+! grep -Fq 'is not m1n1' "$test_tmp/err" ||
+  fail "a failed reordered rebuild does not report a stale image" "$(<"$test_tmp/err")"
+mounts_were_read_only "a failed reordered rebuild"
+pass "stock update-m1n1 checks a regular m1n1/boot-ctxr.bin on the system ESP beside m1n1/boot.bin"
+
 # Aurora's update-m1n1 (asahi-scripts 20261023-9, test/fixtures/aurora) builds
 # Stage 2 with bootchain.py. On an M4 with aura's monitor-free marker that is
 # m1n1/boot-ctxr.bin with only this board's device tree, tried once (aura-try).
