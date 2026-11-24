@@ -38,6 +38,8 @@ On a Mac whose `/usr/bin/update-m1n1` is Aurora's (its asahi-scripts, which hand
 
 Where aura supports it, Aurora's update-m1n1 tries a changed Stage 2 once before it replaces the live one: the candidate `.next`, its `.next.json` receipt, a record in `/var/lib/aurora-stage2/attempts` and the `aura-try` marker at the ESP root, which aura marks spent when it boots the candidate and `aurora-stage2-commit.service` removes when it commits it. The check passes a trial of exactly the image it gets from the plan, armed or running this boot (`/proc/device-tree/chosen/aurora,trial`), with a receipt and an attempt record bootchain matches to it, since the commit service requires them. It fails a stale or incomplete trial, an `aura-try` that arms another image, a trial that fell back while the live image is not the current build, and a candidate with no marker beside a stale live image; beside a current live image, leftovers of a fallen-back or orphaned trial are a warning. Where update-m1n1 has already tried the current build, which it never arms again, the check says so instead of advising `sudo update-m1n1`. `M1N1_UPDATE_DISABLED` fails both checks here, not only the full one: Aurora's wrapper then exits before anything, the boot-time commit and guard included. Aurora's files under `test/fixtures/aurora` are asahi-scripts 20261023-9's, unchanged, so the tests run the real plan.
 
+When the plan selects `m1n1/boot.bin` while an `m1n1/boot-ctxr.bin` is also on the system ESP, the check warns on stderr that it did not compare `m1n1/boot-ctxr.bin`; its exit status does not change.
+
 ## Temporary adaptations
 
 - Deploy ARM64 Limine to U-Boot's `EFI/BOOT/BOOTAA64.EFI` slot until the shared Limine installer supports that target.
