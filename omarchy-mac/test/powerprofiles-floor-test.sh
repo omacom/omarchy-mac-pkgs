@@ -13,7 +13,7 @@ root="$work/root"
 "$ROOT"/install "$root"
 setup="$root/usr/bin/omarchy-mac-setup-system"
 unit=omarchy-mac-powerprofiles-floor.service
-wants="$root/etc/systemd/system/multi-user.target.wants/$unit"
+wants="$root/etc/systemd/system/graphical.target.wants/$unit"
 marker="$root/var/lib/omarchy-mac/powerprofiles-floor-configured"
 # Arch disables every unit no preset names.
 mkdir -p "$root/usr/lib/systemd/system-preset"
@@ -27,6 +27,8 @@ grep -qx 'ConditionPathExists=/usr/bin/omarchy-powerprofiles-floor' "$root/usr/l
   fail 'the unit is skipped, not failed, without the runtime command'
 grep -qx 'ExecCondition=/usr/bin/omarchy-hw-apple-silicon' "$root/usr/lib/systemd/system/$unit" ||
   fail 'the unit runs only on Apple Silicon'
+grep -qx 'WantedBy=graphical.target' "$root/usr/lib/systemd/system/$unit" ||
+  fail 'the unit is wanted by graphical.target, after power-profiles-daemon, without a cycle'
 grep -qx 'Environment=OMARCHY_POWERPROFILES_FLOOR_BALANCED=smallest-core' "$root/usr/lib/systemd/system/$unit" ||
   fail 'balanced floors at the efficiency cores'
 pass 'the package ships a floor unit that runs the runtime command'
@@ -74,7 +76,7 @@ other="$work/other"
 "$ROOT"/install "$other"
 install -Dm755 /dev/null "$other/usr/bin/omarchy-powerprofiles-floor"
 PLATFORM=aarch64-qualcomm PATH="$work/bin:$PATH" "$other/usr/bin/omarchy-mac-setup-system" "$other" >/dev/null 2>&1
-[[ ! -e $other/etc/systemd/system/multi-user.target.wants/$unit && ! -e $other/var/lib/omarchy-mac/powerprofiles-floor-configured ]] ||
+[[ ! -e $other/etc/systemd/system/graphical.target.wants/$unit && ! -e $other/var/lib/omarchy-mac/powerprofiles-floor-configured ]] ||
   fail 'another platform gets no Apple floor'
 pass 'another platform gets no Apple floor'
 
