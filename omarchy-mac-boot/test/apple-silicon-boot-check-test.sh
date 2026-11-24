@@ -215,6 +215,27 @@ cat >"$stub_bin/fdtget" <<'SH'
 [[ $* == "-t s "*" / compatible" && -f $3 ]] || exit 1
 tail -c +9 "$3" | sed -n 's/^compatible=//p' | grep .
 SH
+cat >"$stub_bin/systemctl" <<'SH'
+#!/bin/bash
+printf 'systemctl %s\n' "$*" >>"$TEST_CALLS"
+case "$*" in
+  "show -p LoadState,ActiveState,SubState,UnitFileState aurora-stage2-commit.service")
+    [[ ! -e $TEST_FILES/systemctl-fail ]] || exit 1
+    [[ ! -e $TEST_FILES/systemctl-show-hook ]] || source "$TEST_FILES/systemctl-show-hook"
+    [[ -f $TEST_FILES/systemctl-show ]] || { echo "unexpected systemctl show without fixture" >&2; exit 99; }
+    cat "$TEST_FILES/systemctl-show"
+    ;;
+  "list-jobs --no-legend aurora-stage2-commit.service")
+    [[ ! -e $TEST_FILES/systemctl-jobs-fail ]] || exit 1
+    [[ ! -e $TEST_FILES/systemctl-jobs-hook ]] || source "$TEST_FILES/systemctl-jobs-hook"
+    [[ ! -f $TEST_FILES/systemctl-jobs ]] || cat "$TEST_FILES/systemctl-jobs"
+    ;;
+  *)
+    echo "unexpected systemctl call: $*" >&2
+    exit 99
+    ;;
+esac
+SH
 chmod +x "$stub_bin"/*
 
 # update-m1n1 as asahi-scripts 20260127.1 ships it, with the DTBS default ALARM adds.
@@ -1074,6 +1095,19 @@ aurora_trial() {
   [[ -z $state ]] || printf '%s\nm1n1/boot-ctxr.bin.next\n' "$state" >"$esp/aura-try"
 }
 
+# Systemd fixture state for aurora-stage2-commit.service: LoadState,
+# ActiveState, SubState, UnitFileState and optional list-jobs line.
+aurora_commit_unit() {
+  rm -f "$test_tmp/files"/systemctl-*
+  printf 'LoadState=%s\nActiveState=%s\nSubState=%s\nUnitFileState=%s\n' \
+    "$1" "$2" "$3" "$4" >"$test_tmp/files/systemctl-show"
+  [[ -z ${5:-} ]] || printf '%s\n' "$5" >"$test_tmp/files/systemctl-jobs"
+}
+
+no_systemctl_called() {
+  ! grep -q '^systemctl ' "$calls" || fail "$1 never consults systemctl" "$(cat "$calls")"
+}
+
 esp_snapshot() {
   (cd "$root" && find boot var -type f -print0 | sort -z | xargs -0 sha256sum)
 }
@@ -1082,6 +1116,7 @@ aurora_system
 before=$(esp_snapshot)
 run_check --boot-chain
 expect_pass "Aurora's Stage 2 as bootchain.py builds it"
+no_systemctl_called "a live Aurora Stage 2"
 grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out" ||
   fail "Aurora's Stage 2 reports the installed kernel identity" "$(cat "$test_tmp/out")"
 [[ $(esp_snapshot) == "$before" && ! -e $root/boot/dtb ]] ||
@@ -1143,27 +1178,114 @@ run_check --boot-chain
 expect_fail "a default M1N1 aura does not own" "M1N1 /usr/lib/asahi-boot/m1n1.bin is not owned by aura"
 pass "a pinned M1N1 is followed and reported, and a default M1N1 must be aura's"
 
-# Trials: one update-m1n1 armed, or that this boot is running, of exactly the
-# image it builds now passes; a stale, fallen-back or orphaned one does not.
+# Trials: one update-m1n1 armed, or that this boot is running while
+# aurora-stage2-commit.service is still to commit it, of exactly the image it
+# builds now passes; a stale, failed, finished, disabled, fallen-back or orphaned one does not.
 aurora_system
 aurora_trial armed
 before=$(esp_snapshot)
 run_check --boot-chain
 expect_pass "an armed Stage 2 trial of the current build"
+no_systemctl_called "an armed Stage 2 trial"
 grep -Fq "a Stage 2 trial is armed: the next boot tries m1n1/boot-ctxr.bin.next, what Aurora's update-m1n1 builds now, once, and keeps m1n1/boot-ctxr.bin to fall back to" "$test_tmp/out" ||
   fail "an armed trial is reported" "$(cat "$test_tmp/out")"
 [[ $(esp_snapshot) == "$before" ]] || fail "checking an armed trial changes nothing" "$(diff <(echo "$before") <(esp_snapshot))"
 TEST_UNAME=6.16.0-old-ARCH OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 run_check --boot-chain
 expect_pass "an armed Stage 2 trial with the reboot pending"
+no_systemctl_called "an armed Stage 2 trial with the reboot pending"
 grep -Fq "boot files match; running 6.16.0-old-ARCH, reboot pending" "$test_tmp/out" ||
   fail "an armed trial with the reboot pending says so" "$(cat "$test_tmp/out")"
 aurora_trial spent
 printf 'm1n1/boot-ctxr.bin.next\0' >"$root/proc/device-tree/chosen/aurora,trial"
+aurora_commit_unit loaded activating start enabled
 run_check --boot-chain
-expect_pass "this boot running the Stage 2 trial of the current build"
+expect_pass "this boot running the Stage 2 trial while aurora-stage2-commit.service is activating"
 grep -Fq "this boot is the Stage 2 trial of m1n1/boot-ctxr.bin.next, what Aurora's update-m1n1 builds now" "$test_tmp/out" ||
   fail "a running trial is reported" "$(cat "$test_tmp/out")"
-pass "an armed or running Stage 2 trial of the current build passes"
+! grep -q '^sudo:.*systemctl' "$calls" || fail "systemctl is queried without sudo" "$(cat "$calls")"
+aurora_commit_unit loaded inactive dead enabled "42 aurora-stage2-commit.service start waiting"
+run_check --boot-chain
+expect_pass "this boot running the Stage 2 trial while aurora-stage2-commit.service has a queued start job"
+grep -Fq "this boot is the Stage 2 trial of m1n1/boot-ctxr.bin.next, what Aurora's update-m1n1 builds now" "$test_tmp/out" ||
+  fail "a running trial with a queued start job is reported" "$(cat "$test_tmp/out")"
+aurora_commit_unit loaded failed failed enabled
+run_check --boot-chain
+expect_fail "a running trial whose commit service failed" \
+  "aurora-stage2-commit.service failed, so the next boot will fall back to the previous m1n1/boot-ctxr.bin; see 'journalctl -b -u aurora-stage2-commit.service'"
+aurora_commit_unit loaded inactive dead enabled
+run_check --boot-chain
+expect_fail "a running trial whose commit service is inactive/dead with no job" \
+  "aurora-stage2-commit.service finished without committing (inactive/dead)"
+aurora_commit_unit loaded active exited enabled
+run_check --boot-chain
+expect_fail "a running trial whose commit service is active/exited with no job" \
+  "aurora-stage2-commit.service finished without committing (active/exited)"
+aurora_commit_unit loaded inactive dead disabled
+run_check --boot-chain
+expect_fail "a running trial whose commit service is disabled and inactive" \
+  "aurora-stage2-commit.service is disabled"
+aurora_commit_unit masked inactive dead masked
+run_check --boot-chain
+expect_fail "a running trial whose commit service is masked" \
+  "aurora-stage2-commit.service is not loaded (masked)"
+aurora_commit_unit loaded inactive dead enabled "42 aurora-stage2-commit.service stop waiting"
+run_check --boot-chain
+expect_fail "a running trial whose commit service has only a stop job" \
+  "aurora-stage2-commit.service has only a stop job (inactive/dead), not a start job"
+aurora_commit_unit not-found inactive dead ""
+run_check --boot-chain
+expect_fail "a running trial whose commit service is not found" \
+  "aurora-stage2-commit.service is not loaded (not-found)"
+: >"$test_tmp/files/systemctl-fail"
+run_check --boot-chain
+expect_fail "a running trial when systemctl show fails" \
+  "aurora-stage2-commit.service has an unreadable state"
+aurora_commit_unit loaded inactive dead enabled
+: >"$test_tmp/files/systemctl-jobs-fail"
+run_check --boot-chain
+expect_fail "a running trial when systemctl list-jobs fails" \
+  "aurora-stage2-commit.service has an unreadable state"
+rm -f "$no_objcopy_path/systemctl"
+mv "$stub_bin/systemctl" "$test_tmp/systemctl"
+TEST_PATH="$no_objcopy_path" run_check --boot-chain
+mv "$test_tmp/systemctl" "$stub_bin/systemctl"
+expect_fail "a running trial when systemctl is missing" \
+  "aurora-stage2-commit.service has an unreadable state"
+# Races around the systemd reads (list-jobs, then show, then aura-try):
+# a commit landing during show or list-jobs shows up as no aura-try and passes
+# on the live path; a start job that fails between list-jobs and show fails.
+aurora_commit_unit loaded active exited enabled
+cat >"$test_tmp/files/systemctl-show-hook" <<'SH'
+mnt=$(awk 'NR == 1 { print $1 }' "$TEST_MOUNTS")
+mv "$mnt/m1n1/boot-ctxr.bin.next" "$mnt/m1n1/boot-ctxr.bin"
+rm -f "$mnt/aura-try"
+SH
+run_check --boot-chain
+expect_pass "a running trial that commits before systemctl show"
+grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out" ||
+  fail "a trial committed before show reports the live Stage 2" "$(cat "$test_tmp/out")"
+! grep -Fq "aurora-stage2-commit.service makes it" "$test_tmp/out" ||
+  fail "a trial committed before show does not report a pending commit" "$(cat "$test_tmp/out")"
+aurora_commit_unit loaded inactive dead enabled
+cat >"$test_tmp/files/systemctl-jobs-hook" <<'SH'
+mnt=$(awk 'NR == 1 { print $1 }' "$TEST_MOUNTS")
+mv "$mnt/m1n1/boot-ctxr.bin.next" "$mnt/m1n1/boot-ctxr.bin"
+rm -f "$mnt/aura-try"
+SH
+run_check --boot-chain
+expect_pass "a running trial whose queued job commits before systemctl list-jobs"
+grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out" ||
+  fail "a queued trial committed before list-jobs reports the live Stage 2" "$(cat "$test_tmp/out")"
+! grep -Fq "aurora-stage2-commit.service makes it" "$test_tmp/out" ||
+  fail "a queued trial committed before list-jobs does not report a pending commit" "$(cat "$test_tmp/out")"
+aurora_commit_unit loaded inactive dead enabled "42 aurora-stage2-commit.service start waiting"
+cat >"$test_tmp/files/systemctl-jobs-hook" <<'SH'
+printf 'LoadState=loaded\nActiveState=failed\nSubState=failed\nUnitFileState=enabled\n' >"$TEST_FILES/systemctl-show"
+SH
+run_check --boot-chain
+expect_fail "a running trial whose queued job fails between systemctl reads" \
+  "aurora-stage2-commit.service failed, so the next boot will fall back to the previous m1n1/boot-ctxr.bin; see 'journalctl -b -u aurora-stage2-commit.service'"
+pass "an armed trial passes, and a running Stage 2 trial passes only while aurora-stage2-commit.service is activating or has a start job queued"
 
 aurora_system
 aurora_trial armed
@@ -1199,15 +1321,18 @@ aurora_system
 aurora_trial spent
 run_check --boot-chain
 expect_fail "a Stage 2 trial that fell back" "the Stage 2 trial of m1n1/boot-ctxr.bin.next fell back, so this Mac boots the previous m1n1/boot-ctxr.bin"
+no_systemctl_called "a Stage 2 trial that fell back"
 cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin"
 run_check --boot-chain
 expect_pass "a fallen-back trial's leftovers beside the current Stage 2"
+no_systemctl_called "a fallen-back trial's leftovers"
 grep -Fq "warning: an earlier Stage 2 trial of m1n1/boot-ctxr.bin.next fell back" "$test_tmp/err" ||
   fail "a fallen-back trial's leftovers are reported" "$(cat "$test_tmp/err")"
 aurora_system
 aurora_trial spent
 printf 'm1n1/boot-ctxr.bin.next\0' >"$root/proc/device-tree/chosen/aurora,trial"
 cp "$test_tmp/aurora-previous.bin" "$esp/m1n1/boot-ctxr.bin.next"
+aurora_commit_unit loaded activating start enabled
 run_check --boot-chain
 expect_fail "this boot running a trial of an older build" "the running Stage 2 trial m1n1/boot-ctxr.bin.next on the system ESP (/boot/efi) is not what Aurora's update-m1n1 builds now"
 # A trial disarmed by hand: the candidate stays, with no aura-try.
@@ -1216,9 +1341,11 @@ aurora_trial ""
 printf 'armed\nm1n1/boot-ctxr.bin.next\n' >"$esp/aura-try.disarmed"
 run_check --boot-chain
 expect_fail "an orphaned trial beside a stale Stage 2" "m1n1/boot-ctxr.bin.next is there with no aura-try marker arming it, an orphaned Stage 2 trial"
+no_systemctl_called "an orphaned trial beside a stale Stage 2"
 cp "$test_tmp/aurora-expected.bin" "$esp/m1n1/boot-ctxr.bin"
 run_check --boot-chain
 expect_pass "an orphaned trial beside the current Stage 2"
+no_systemctl_called "an orphaned trial beside the current Stage 2"
 grep -Fq "warning: m1n1/boot-ctxr.bin.next is on the system ESP (/boot/efi) with no aura-try marker arming it" "$test_tmp/err" ||
   fail "an orphaned trial is reported" "$(cat "$test_tmp/err")"
 pass "a stale, incomplete, foreign, fallen-back or orphaned Stage 2 trial is reported"
