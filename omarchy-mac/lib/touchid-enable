@@ -1,7 +1,7 @@
 #!/bin/bash
 # Turns Touch ID on once the owner has agreed: installs this Mac's calibration
-# and, on the Neo and the 16-inch M4 Pro, its sensor root key if missing, records
-# the agreement so the driver loads at every boot, and loads it now.
+# and, on the Neo and the M4 Macs, its sensor root key if missing, records the
+# agreement so the driver loads at every boot, and loads it now.
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 firmware=${OMARCHY_MAC_TOUCHID_FIRMWARE:-/usr/lib/firmware}
@@ -28,8 +28,7 @@ omarchy-hw-apple-silicon || exit 0
 recorded=0
 rebuilt=0
 rebuilt_calibration=0
-# The sensor root key's name; the 16-inch M4 Pro's and M4 Max's sensor nodes
-# name their own.
+# The sensor root key's name; the M4 Macs' sensor nodes name their own.
 root_key=apple/msrk-j700.bin
 fail() {
   if (( recorded )); then
@@ -109,8 +108,8 @@ for name in "$calibration" "$root_key"; do
   [[ $name =~ ^apple/[A-Za-z0-9._-]+\.bin$ ]] || fail "the sensor names an unexpected firmware file ($name)"
 done
 # The Macs whose sensor loads a sealed root key after a nonce session, by the
-# SoC their seal record names: the Neo, and the 16-inch M4 Pro and M4 Max,
-# whose calibration is sealed the same way and rebuilt with the key.
+# SoC their seal record names: the Neo, and the 16-inch M4 Pro and M4 Max and
+# the 13-inch M4 Air, whose calibration is sealed and rebuilt the same way.
 chip=""
 if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,t8140; then
   chip=00008140
@@ -118,8 +117,10 @@ elif tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j616s; then
   chip=00006040
 elif tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j616c; then
   chip=00006041
+elif tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j713; then
+  chip=00008132
 fi
-if [[ $chip == 00006040 || $chip == 00006041 ]] && ! installed "$calibration"; then
+if [[ $chip == 00006040 || $chip == 00006041 || $chip == 00008132 ]] && ! installed "$calibration"; then
   # Rebuilt from the factory records asahi-installer leaves on the ESP and
   # checked against this Mac's iBoot System Container, like the root key.
   echo "Reading this Mac's Touch ID calibration..."
