@@ -14,5 +14,7 @@ options="xart_writes=1 provision_keybag=1"
 # the xART guard refuses; xart_guard_pins pins those, keeping the guard on (#506).
 if compatible apple,t8103 && compatible apple,j313; then
   options+=" xart_guard_pins=1"
+elif compatible apple,t6001 && compatible apple,j316c; then
+  options+=" xart_guard=1 xart_guard_pins=1"
 fi
 printf 'options apple_sep %s\n' "$options"

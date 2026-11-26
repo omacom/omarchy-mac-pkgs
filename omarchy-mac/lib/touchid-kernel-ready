@@ -1,7 +1,5 @@
 #!/bin/bash
-# Fails on the M1 Air (J313) unless apple_sep can pin its setup lockers
-# (xart_guard_pins, omacom/linux-aurora#506); every other Mac passes. Eligibility
-# asks it before offering Touch ID, the load unit before loading the driver.
+# Check the running kernel's driver before offering setup or loading it at boot.
 
 tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
 modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
@@ -11,11 +9,33 @@ compatible() {
   [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
 }
 
-# A built-in driver lists no parameters, so it fails too.
-if compatible apple,t8103 && compatible apple,j313 &&
-  ! grep -q '^xart_guard_pins:' <<<"$("$modinfo" -p apple_sep 2>/dev/null)"; then
-  echo "This kernel's apple_sep has no xart_guard_pins, so Touch ID stays off on this M1 Air until a kernel with it boots." >&2
-  exit 1
+if compatible apple,t6001 && compatible apple,j316c; then
+  # Use the driver with independently selectable writes and keybag provisioning
+  # that the M1 Max build targets. A pins-only check also admits the 7.3 ABI.
+  required=(xart_guard xart_guard_pins xart_writes provision_keybag)
+  # A module loaded earlier keeps the settings it actually probed with.
+  module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+  driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
+  if [[ -d $module ]]; then
+    for diag in "$driver"/*/diag; do
+      if [[ -r $diag/xart && $(<"$diag/xart") == "disabled" ]]; then
+        continue
+      elif [[ ! -r $diag/xart || $(<"$diag/xart") != "enabled" || ! -r $diag/xart_guard || $(<"$diag/xart_guard") != "1" ]]; then
+        echo "Touch ID needs the running M1 Max driver to report read-only storage or guard level 1." >&2
+        exit 1
+      fi
+    done
+  fi
+elif compatible apple,t8103 && compatible apple,j313; then
+  required=(xart_guard_pins)
 else
   exit 0
 fi
+
+parameters=$("$modinfo" -p apple_sep 2>/dev/null) || exit 1
+for parameter in "${required[@]}"; do
+  if ! grep -q "^$parameter:" <<<"$parameters"; then
+    echo "Touch ID stays off because this kernel's apple_sep lacks $parameter." >&2
+    exit 1
+  fi
+done

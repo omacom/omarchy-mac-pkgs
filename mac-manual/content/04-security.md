@@ -41,6 +41,8 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 
 On a MacBook Air M1, the first setup rewrites three records in that shared state that macOS created. Setup offers Touch ID there only with a kernel whose Secure Enclave driver lets exactly those three through and keeps refusing changes to every other macOS record. If that Mac later starts a kernel without that driver, Touch ID stays off until one with it is back. Back up macOS before you turn Touch ID on there too.
 
+This local test build targets the 16-inch 2021 MacBook Pro with M1 Max and a patched 7.2 Aurora driver. Setup requires guard pinning and independent controls for storage writes and key creation. First enrollment and matching on that combination still need a hardware test. Back up macOS before agreeing to setup.
+
 On a MacBook Neo, setup also reads the sensor's key from the factory records the installer left on the boot partition, into a firmware file only root can read. Turning Touch ID off deletes that file.
 
 Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.

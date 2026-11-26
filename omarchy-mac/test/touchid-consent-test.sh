@@ -157,7 +157,7 @@ neo() {
 run() {
   PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_FIRMWARE=$fixture/firmware \
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
-    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
+    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module OMARCHY_MAC_TOUCHID_DRIVER=$fixture/driver \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
     OMARCHY_MAC_TOUCHID_GUARD_LIST=$fixture/guard-list \
@@ -180,6 +180,27 @@ printf 'disabled\0' >"$tree/soc/spi@39b108000/fingerprint@0/status"
 [[ $(eligibility) == "none" ]] || fail 'a disabled sensor node is no Touch ID'
 machine apple,j314s apple,t6000 apple,arm-platform
 [[ $(eligibility) == "unsupported:m1-family" ]] || fail 'M1-family Macs wait for their xART guard path'
+machine apple,j314c apple,t6001 apple,arm-platform
+[[ $(eligibility) == "unsupported:m1-family" ]] || fail 'the 14-inch M1 Max still waits for a board test'
+machine apple,j316c apple,t6001 apple,arm-platform
+printf '%s\n' xart_guard: xart_guard_pins: >"$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'the M1 Max requires separate write and provisioning controls'
+run touchid-kernel-ready 2>/dev/null && fail 'the boot path skips a kernel without separate controls'
+printf '%s\n' xart_writes: provision_keybag: >"$fixture/missing-pins"
+cat "$fixture/missing-pins" >>"$fixture/modinfo-params"
+[[ $(eligibility) == "available" ]] || fail 'the matching M1 Max driver passes the setup checks'
+[[ $(run touchid-options) == "options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1" ]] ||
+  fail 'the M1 Max explicitly requests the guard when enabling the driver'
+mkdir -p "$fixture/module" "$fixture/driver/test.sep/diag"
+echo enabled >"$fixture/driver/test.sep/diag/xart"
+echo 0 >"$fixture/driver/test.sep/diag/xart_guard"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'a module on disk never vouches for an unguarded running driver'
+echo 1 >"$fixture/driver/test.sep/diag/xart_guard"
+[[ $(eligibility) == "available" ]] || fail 'a writable M1 Max driver with the guard on passes'
+cp "$fixture/missing-pins" "$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'stock M1 Max drivers still wait for pinning'
+touch "$fixture/guard-list"
+run touchid-retry-aside && [[ -f $fixture/guard-list ]] || fail 'the M1 Max preserves a previous guard list'
 machine apple,j293 apple,t8103 apple,arm-platform
 [[ $(eligibility) == "unsupported:m1-family" ]] || fail 'a T8103 board other than the M1 Air still waits for its xART guard path'
 machine apple,j313 apple,t8103 apple,arm-platform
