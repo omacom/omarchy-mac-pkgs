@@ -1,0 +1,22 @@
+#!/bin/bash
+# Prints the modprobe.d line that lets the Secure Enclave driver set up Touch ID
+# on this Mac, for touchid-enable and enable-fingerprint to write.
+
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+omarchy-hw-apple-silicon || exit 0
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+options="xart_writes=1 provision_keybag=1"
+# M1 cold-boot setup can rewrite shared session records. Pin them under the
+# level-1 guard, as in the guarded J313 and J316c hardware tests.
+if { compatible apple,t8103 && compatible apple,j313; } || { compatible apple,t6001 && compatible apple,j316c; }; then
+  options+=" xart_guard=1 xart_guard_pins=1"
+elif compatible apple,j616c; then
+  # The 16-inch M4 Max was qualified with the guard on. Its profile defaults
+  # to guard off in Aurora 7.3.0.aurora1-40.
+  options+=" xart_guard=1"
+fi
+printf 'options apple_sep %s\n' "$options"

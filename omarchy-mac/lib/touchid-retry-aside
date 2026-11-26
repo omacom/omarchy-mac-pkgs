@@ -1,0 +1,34 @@
+#!/bin/bash
+# Sets aside an earlier Touch ID try's guard list and uncommitted keybag, which
+# keep xart_guard_pins's one-time pin window shut. A committed keybag keeps its
+# list. The caller holds the Touch ID lock.
+
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+keybag=${OMARCHY_MAC_TOUCHID_KEYBAG:-/var/lib/aurora-sep-keybag.bin}
+guard_list=${OMARCHY_MAC_TOUCHID_GUARD_LIST:-/var/lib/aurora-sep-xart-owned.bin}
+omarchy-hw-apple-silicon || exit 0
+
+# Only the M1 Air has a tested procedure for retrying a failed setup.
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j313 || exit 0
+[[ $("$helpers/touchid-options") == *xart_guard_pins=1* ]] || exit 0
+# Committed, as the driver writes it: its magic, then state 1 or 3 at 0x14.
+if [[ -f $keybag && $(head -c 16 "$keybag" 2>/dev/null) == "APPLE-SEP-KBAG01" ]] &&
+  [[ $(od -An -tu4 -j20 -N4 "$keybag" 2>/dev/null | tr -d ' ') == [13] ]]; then
+  exit 0
+fi
+if [[ ! -e $guard_list && ! -e $keybag ]]; then
+  exit 0
+fi
+aside=${guard_list%/*}/aurora-sep-touchid-retry-$(date +%Y%m%d-%H%M%S)
+if ! mkdir -p -m 0700 "$aside"; then
+  echo "An earlier Touch ID try's state could not be set aside in $aside." >&2
+  exit 1
+fi
+for stale in "$guard_list" "$keybag"; do
+  if [[ -e $stale ]] && ! mv -f "$stale" "$aside/"; then
+    echo "An earlier Touch ID try's $stale could not be set aside in $aside." >&2
+    exit 1
+  fi
+done
+echo "An earlier Touch ID try's state is kept in $aside."

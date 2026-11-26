@@ -14,6 +14,9 @@ Before=display-manager.service fprintd.service
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+# On the M1 Air and 16-inch M1 Max, load only a driver with the guarded
+# setup options this package writes.
+ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready
 ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer
 ExecStart=/usr/bin/modprobe apple-sep
 TimeoutStartSec=30s

@@ -30,17 +30,9 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
       echo "Touch ID was turned off while this ran, so setup goes on without it."
       exit 0
     elif [[ ! -e $options ]]; then
-      # The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
-      # 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
-      # Linux to its own xART records. Other Macs keep the kernel's level: the guard
-      # blocks matching on M1-family Macs.
-      driver_options="xart_writes=1 provision_keybag=1"
-      if tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null | grep -Fxq apple,j616c; then
-        driver_options+=" xart_guard=1"
-      fi
-      { mkdir -p -m 0755 "${options%/*}" &&
+      { option_line=$(/usr/lib/omarchy-mac/touchid-options) && mkdir -p -m 0755 "${options%/*}" &&
         printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-          "options apple_sep $driver_options" >"$options.new" &&
+          "$option_line" >"$options.new" &&
         chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
         { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
     fi
@@ -51,6 +43,34 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
   if [[ $status != "ready" ]]; then
+    if [[ $(/usr/lib/omarchy-mac/touchid-eligibility 2>/dev/null) == "unsupported:kernel" ]]; then
+      echo "Touch ID is turned on, but this kernel can't set it up on this Mac."
+      echo "Boot a kernel with the guarded Touch ID driver for this Mac, then set"
+      echo "up the fingerprint again. Setup goes on with any other fingerprint reader."
+      exit 0
+    fi
+    # A recorded status that isn't ready ends a setup, a crashed one included, so
+    # its state is set aside for the restart; with none recorded, or while the
+    # activation runs, the setup may still be going and is left alone.
+    if [[ $recorded_status != "no status" ]]; then
+      lock=/run/omarchy-mac/touchid.lock
+      if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null || ! flock -w 300 "$lock_fd"; then
+        echo "Touch ID's earlier try could not be set aside: its lock, $lock, is unavailable." >&2
+        exit 1
+      fi
+      if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
+        echo "Touch ID was turned off while this ran, so setup goes on without it."
+        exit 0
+      fi
+      # The activation is a oneshot, so while it runs it is "activating", which
+      # is-active doesn't count as active.
+      activation=$(systemctl show -p ActiveState --value omarchy-mac-touchid-activate.service 2>/dev/null)
+      if [[ $(cat /run/omarchy-mac/touchid 2>/dev/null) != "ready" ]] &&
+        [[ $activation == "inactive" || $activation == "failed" ]]; then
+        /usr/lib/omarchy-mac/touchid-retry-aside || exit 1
+      fi
+      exec {lock_fd}>&-
+    fi
     echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
     echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
     echo "ready, see journalctl -u omarchy-mac-touchid-activate."

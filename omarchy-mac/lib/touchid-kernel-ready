@@ -1,0 +1,38 @@
+#!/bin/bash
+# Check the running kernel's driver before offering setup or loading it at boot.
+
+tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
+omarchy-hw-apple-silicon || exit 0
+
+compatible() {
+  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+}
+
+if compatible apple,t6001 && compatible apple,j316c; then
+  # A module loaded earlier keeps the settings it actually probed with.
+  module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+  driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
+  if [[ -d $module ]]; then
+    for diag in "$driver"/*/diag; do
+      if [[ -r $diag/xart && $(<"$diag/xart") == "disabled" ]]; then
+        continue
+      elif [[ ! -r $diag/xart || $(<"$diag/xart") != "enabled" || ! -r $diag/xart_guard || $(<"$diag/xart_guard") != "1" ]]; then
+        echo "Touch ID needs the running M1 Max driver to report read-only storage or guard level 1." >&2
+        exit 1
+      fi
+    done
+  fi
+elif ! { compatible apple,t8103 && compatible apple,j313; }; then
+  exit 0
+fi
+
+parameters=$("$modinfo" -p apple_sep 2>/dev/null) || exit 1
+# Both M1 setup paths pass all four options. A driver exposing just the pins
+# can use a different interface to enable storage writes and provisioning.
+for parameter in xart_guard xart_guard_pins xart_writes provision_keybag; do
+  if ! grep -q "^$parameter:" <<<"$parameters"; then
+    echo "Touch ID stays off because this kernel's apple_sep lacks $parameter." >&2
+    exit 1
+  fi
+done

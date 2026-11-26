@@ -165,19 +165,15 @@ preloaded=0
 if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
   preloaded=1
 fi
-# The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
-# 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
-# Linux to its own xART records. Other Macs keep the kernel's level: the guard
-# blocks matching on M1-family Macs.
-driver_options="xart_writes=1 provision_keybag=1"
-if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j616c; then
-  driver_options+=" xart_guard=1"
-fi
 # A write that fails partway never replaces the options, since a file without
 # them would load a read-only driver at every boot.
+option_line=$("$helpers/touchid-options") || fail "this Mac's driver options could not be worked out"
+# A try that failed under the guard keeps the pin window shut until its state
+# is set aside.
+"$helpers/touchid-retry-aside" || fail "an earlier Touch ID try's state could not be set aside"
 { mkdir -p -m 0755 "${options%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-    "options apple_sep $driver_options" >"$options.new" &&
+    "$option_line" >"$options.new" &&
   chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
   { rm -f "$options.new" 2>/dev/null; fail "the driver's options could not be written to $options"; }
 mkdir -p -m 0755 "${loaded%/*}"

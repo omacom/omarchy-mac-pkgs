@@ -21,6 +21,8 @@ load=$units/omarchy-mac-touchid-load.service
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$load" && grep -Fxq 'ExecStart=/usr/bin/modprobe apple-sep' "$load" &&
   grep -Fxq 'ExecStartPre=/usr/bin/udevadm wait --timeout=20 /dev/disk/by-partlabel/iBootSystemContainer' "$load" ||
   fail "the driver loads at boot only on the owner's record, after the iBoot System Container's link it opens"
+grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready' "$load" ||
+  fail "the load skips an M1 Air whose kernel has no pins"
 ! grep -Eq '^(Wants|Requires|BindsTo|After)=.*\.device' "$load" ||
   fail "the load waits for the link only once its condition holds: a device dependency holds up every boot"
 for name in enable-fingerprint disable-fingerprint; do
@@ -36,13 +38,16 @@ mkdir -p "$fixture/bin" "$fixture/extractors"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/omarchy-hw-apple-silicon"
 # The stub keeps the driver options it was loaded with, as modprobe reads them.
 # With no-node or no-keybag, the driver loads but that never appears.
-printf '#!/bin/sh\necho modprobe "$@" >>"%s"\ncp "%s" "%s" 2>/dev/null\n[ -e "%s" ] && exit 1\nmkdir -p "%s"\n[ -e "%s" ] || touch "%s"\n[ -e "%s" ] || touch "%s"\n' \
-  "$fixture/calls" "$fixture/etc/modprobe.conf" "$fixture/options-at-load" "$fixture/modprobe-fails" \
+printf '#!/bin/sh\necho modprobe "$@" >>"%s"\ncp "%s" "%s" 2>/dev/null\n[ -e "%s" ] && touch "%s"\n[ -e "%s" ] && exit 1\nmkdir -p "%s"\n[ -e "%s" ] || touch "%s"\n[ -e "%s" ] || touch "%s"\n' \
+  "$fixture/calls" "$fixture/etc/modprobe.conf" "$fixture/options-at-load" "$fixture/guard-list" "$fixture/list-at-load" "$fixture/modprobe-fails" \
   "$fixture/module" "$fixture/no-node" "$fixture/sep-bio" "$fixture/no-keybag" "$fixture/keybag" >"$fixture/bin/modprobe"
-printf '#!/bin/sh\necho systemctl "$@" >>"%s"\n[ "$1" = start ] && printf "%%s\\n" "$(cat "%s")" >"%s"\nexit 0\n' \
-  "$fixture/calls" "$fixture/activation" "$fixture/run/touchid" >"$fixture/bin/systemctl"
+printf '#!/bin/sh\nif [ "$1" = show ]; then cat "%s" 2>/dev/null || echo inactive; exit 0; fi\necho systemctl "$@" >>"%s"\n[ "$1" = start ] && printf "%%s\\n" "$(cat "%s")" >"%s"\nexit 0\n' \
+  "$fixture/activation-state" "$fixture/calls" "$fixture/activation" "$fixture/run/touchid" >"$fixture/bin/systemctl"
 printf '#!/bin/sh\n[ -e "%s" ] || echo /usr/lib/omarchy/mac/enable-fingerprint\n' "$fixture/no-hook" >"$fixture/bin/omarchy-lifecycle-dispatch"
 printf '#!/bin/sh\nexit 0\n' >"$fixture/bin/sleep"
+printf '#!/bin/sh\ncase "$*" in *"%s"*) [ -e "%s" ] && exit 1 ;; esac\nexec /usr/bin/mv "$@"\n' "$fixture/guard-list" "$fixture/mv-fails" >"$fixture/bin/mv"
+printf '#!/bin/sh\n[ "$*" = "-p apple_sep" ] || exit 1\nif [ -e "%s" ]; then cat "%s"; else printf "xart_guard:\\nxart_guard_pins:\\nxart_writes:\\nprovision_keybag:\\n"; fi\n' \
+  "$fixture/modinfo-params" "$fixture/modinfo-params" >"$fixture/bin/modinfo"
 printf '#!/bin/sh\necho calibration >>"%s"\nprintf calibration >"$2"\n' "$fixture/calls" >"$fixture/extractors/extract-mesa-calibration"
 chmod +x "$fixture/bin/"* "$fixture/extractors/"*
 
@@ -167,7 +172,7 @@ key_copies() {
 # A device tree: the machine's compatible list, a sensor node, and the identity.
 machine() {
   rm -rf "$tree" "$fixture/firmware" "$fixture/run" "$fixture/etc" "$fixture/sep-bio" "$fixture/keybag" "$fixture/calls" "$fixture/no-hook" "$fixture/no-node" "$fixture/no-keybag" "$fixture/options-at-load" "$fixture/module" \
-    "$fixture/esp"
+    "$fixture/esp" "$fixture/modinfo-params" "$fixture/guard-list" "$fixture/list-at-load" "$fixture/mv-fails" "$fixture"/aurora-sep-touchid-retry-*
   mkdir -p "$tree/soc/spi@39b108000/fingerprint@0" "$tree/chosen" "$fixture/firmware" "$fixture/run"
   printf '%s\0' "$@" >"$tree/compatible"
   printf 'apple,mesa-fingerprint\0' >"$tree/soc/spi@39b108000/fingerprint@0/compatible"
@@ -185,9 +190,10 @@ neo() {
 run() {
   PATH="$fixture/bin:$PATH" OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_FIRMWARE=$fixture/firmware \
     OMARCHY_MAC_TOUCHID_EXTRACTORS=$fixture/extractors OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on \
-    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module \
+    OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_MODULE=$fixture/module OMARCHY_MAC_TOUCHID_DRIVER=$fixture/driver \
     OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib \
     OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag \
+    OMARCHY_MAC_TOUCHID_GUARD_LIST=$fixture/guard-list \
     OMARCHY_MAC_TOUCHID_ESP=$fixture/esp OMARCHY_MAC_TOUCHID_CONTAINER=${container:-$work/factory/isc.img} \
     OMARCHY_MAC_TOUCHID_PYTHON=${python:-python3} OMARCHY_MAC_PAMD=$fixture/pam.d \
     OMARCHY_MAC_TOUCHID_PAM_LOCK=$fixture/run/touchid-pam.lock OMARCHY_MAC_TOUCHID_PAM_MODULE=$fixture/pam_aurora_touchid.so \
@@ -209,6 +215,43 @@ printf 'disabled\0' >"$tree/soc/spi@39b108000/fingerprint@0/status"
 [[ $(eligibility) == "none" ]] || fail 'a disabled sensor node is no Touch ID'
 machine apple,j314s apple,t6000 apple,arm-platform
 [[ $(eligibility) == "unsupported:m1-family" ]] || fail 'M1-family Macs wait for their xART guard path'
+machine apple,j314c apple,t6001 apple,arm-platform
+[[ $(eligibility) == "unsupported:m1-family" ]] || fail 'the 14-inch M1 Max still waits for a board test'
+machine apple,j316c apple,t6001 apple,arm-platform
+printf '%s\n' xart_guard: xart_guard_pins: >"$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'the M1 Max requires separate write and provisioning controls'
+run touchid-kernel-ready 2>/dev/null && fail 'the boot path skips a kernel without separate controls'
+printf '%s\n' xart_writes: provision_keybag: >"$fixture/missing-pins"
+cat "$fixture/missing-pins" >>"$fixture/modinfo-params"
+[[ $(eligibility) == "available" ]] || fail 'the matching M1 Max driver passes the setup checks'
+[[ $(run touchid-options) == "options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1" ]] ||
+  fail 'the M1 Max explicitly requests the guard when enabling the driver'
+mkdir -p "$fixture/module" "$fixture/driver/test.sep/diag"
+echo enabled >"$fixture/driver/test.sep/diag/xart"
+echo 0 >"$fixture/driver/test.sep/diag/xart_guard"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'a module on disk never vouches for an unguarded running driver'
+echo 1 >"$fixture/driver/test.sep/diag/xart_guard"
+[[ $(eligibility) == "available" ]] || fail 'a writable M1 Max driver with the guard on passes'
+cp "$fixture/missing-pins" "$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'stock M1 Max drivers still wait for pinning'
+touch "$fixture/guard-list"
+run touchid-retry-aside && [[ -f $fixture/guard-list ]] || fail 'the M1 Max preserves a previous guard list'
+machine apple,j293 apple,t8103 apple,arm-platform
+[[ $(eligibility) == "unsupported:m1-family" ]] || fail 'a T8103 board other than the M1 Air still waits for its xART guard path'
+machine apple,j313 apple,t8103 apple,arm-platform
+[[ $(eligibility) == "available" ]] || fail 'the M1 Air J313 is available on a kernel that pins its setup lockers' "$(eligibility)"
+printf 'xart_guard_pin:pin one locker (u8)\nxart_guard:-1 (i8)\n' >"$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'the M1 Air is not offered Touch ID on a kernel that pins one locker at the create' "$(eligibility)"
+: >"$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'the M1 Air is not offered Touch ID when modinfo shows no parameter (built in, or no driver)' "$(eligibility)"
+run touchid-kernel-ready 2>/dev/null && fail 'the boot-time load skips the M1 Air when modinfo shows no pins'
+printf '%s\n' xart_guard_pins: >"$fixture/modinfo-params"
+[[ $(eligibility) == "unsupported:kernel" ]] || fail 'a pins-only M1 Air driver cannot accept the setup options'
+printf '%s\n' xart_guard: xart_writes: provision_keybag: >>"$fixture/modinfo-params"
+run touchid-kernel-ready || fail 'the boot-time load runs on an M1 Air whose kernel has the pins'
+machine apple,j414c apple,t6021 apple,arm-platform
+: >"$fixture/modinfo-params"
+run touchid-kernel-ready || fail "the boot-time load never checks the pins on a Mac other than the M1 Air"
 machine apple,j504 apple,t8122 apple,arm-platform
 [[ $(eligibility) == "unsupported:board" ]] || fail 'a T8122 board whose wiring the driver has not read is unsupported'
 machine apple,j613 apple,t8122 apple,arm-platform
@@ -288,6 +331,76 @@ grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/options
 [[ $(<"$fixture/calls") == $'calibration\nmodprobe apple-sep\nsystemctl start omarchy-mac-touchid-activate.service\nsystemctl try-restart fprintd.service' ]] ||
   fail 'it carves, loads the driver, waits for the activation, then restarts a running fprintd' "$(<"$fixture/calls")"
 [[ $out == *"Touch ID is on."* ]] || fail 'it says so' "$out"
+! grep -q xart_guard "$fixture/etc/modprobe.conf" || fail 'a Mac other than the M1 Air gets no xART guard option'
+# The M1 Air loads with the guard pinning its setup lockers and carves its
+# calibration under its sensor's name.
+machine apple,j313 apple,t8103 apple,arm-platform
+printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+echo ready >"$fixture/activation"
+out=$(run touchid-enable 2>&1) || fail 'the M1 Air turns on' "$out"
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1' "$fixture/options-at-load" ||
+  fail 'the M1 Air loads the driver with the xART guard pinning its setup lockers' "$(<"$fixture/options-at-load")"
+[[ $(<"$fixture/firmware/updates/apple/mesacal-j313.bin") == "calibration" ]] ||
+  fail "the M1 Air's calibration is carved under its sensor's firmware name"
+# Keybag files as the driver writes them: magic, version 2, a state, padding.
+keybag_file() {
+  { printf 'APPLE-SEP-KBAG01\002\000\000\000'; printf "\\$(printf %o "$1")\\000\\000\\000"; head -c $(( $2 - 24 )) /dev/zero; } >"$fixture/keybag"
+}
+# A try that failed under the guard left a spent list and a keybag header; both
+# are set aside before the load, so the pin window can open again.
+machine apple,j313 apple,t8103 apple,arm-platform
+printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+printf 'spent' >"$fixture/guard-list"
+keybag_file 0 52
+echo ready >"$fixture/activation"
+out=$(run touchid-enable 2>&1) || fail 'the M1 Air turns on after a failed try' "$out"
+aside=("$fixture"/aurora-sep-touchid-retry-*)
+[[ ! -e $fixture/guard-list && ! -e $fixture/list-at-load && $(<"${aside[0]}/guard-list") == "spent" && $(stat -c %s "${aside[0]}/keybag") == 52 ]] ||
+  fail "a failed try's list and keybag header are set aside before the load" "$out"
+# A list that can't be moved stops the setup before the load.
+machine apple,j313 apple,t8103 apple,arm-platform
+printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+printf 'spent' >"$fixture/guard-list"
+keybag_file 0 52
+touch "$fixture/mv-fails"
+echo ready >"$fixture/activation"
+! out=$(run touchid-enable 2>&1) && [[ $out == *"could not be set aside"* && -e $fixture/guard-list && ! -e $fixture/etc/touchid-on ]] &&
+  ! grep -q modprobe "$fixture/calls" ||
+  fail "a list that can't be set aside stops the setup before the driver loads" "$out"
+# A committed keybag, in either state the driver writes, keeps its list.
+for state in 1 3; do
+  machine apple,j313 apple,t8103 apple,arm-platform
+  printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+  printf 'owned' >"$fixture/guard-list"
+  keybag_file "$state" 116
+  echo ready >"$fixture/activation"
+  out=$(run touchid-enable 2>&1) || fail "the M1 Air with a keybag in state $state turns on" "$out"
+  [[ $(<"$fixture/guard-list") == "owned" && $(stat -c %s "$fixture/keybag") == 116 ]] &&
+    ! compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+    fail "a committed keybag in state $state and its list are kept" "$out"
+done
+# A list alone, a keybag header alone, and a header-sized file whose state is
+# not committed are each set aside.
+for case in list header unwritten; do
+  machine apple,j313 apple,t8103 apple,arm-platform
+  printf 'apple/mesacal-j313.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
+  case $case in
+    list) printf 'spent' >"$fixture/guard-list" ;;
+    header) keybag_file 0 52 ;;
+    unwritten) head -c 116 /dev/zero >"$fixture/keybag" ;;
+  esac
+  echo ready >"$fixture/activation"
+  out=$(run touchid-enable 2>&1) || fail "the M1 Air turns on after a failed try ($case)" "$out"
+  [[ ! -e $fixture/guard-list && ( $case == list || ! -s $fixture/keybag ) ]] &&
+    compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+    fail "a failed try's state is set aside ($case)" "$out"
+done
+# A Mac other than the M1 Air never moves its list.
+machine apple,j414c apple,t6021 apple,arm-platform
+printf 'kept' >"$fixture/guard-list"
+echo ready >"$fixture/activation"
+out=$(run touchid-enable 2>&1) || fail 'an M2 Max turns on' "$out"
+[[ $(<"$fixture/guard-list") == "kept" ]] || fail "an M2 Max's guard list is never set aside" "$out"
 # A Neo's sensor key is rebuilt only now, from its factory records on the ESP,
 # byte for byte, root-only, and nowhere else.
 neo
@@ -562,6 +675,8 @@ for name in enable-fingerprint disable-fingerprint; do
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-pam|$fixture/bin/pam-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-options|OMARCHY_MAC_TOUCHID_TREE=$tree $ROOT/lib/touchid-options|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-retry-aside|OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib OMARCHY_MAC_TOUCHID_KEYBAG=$fixture/keybag OMARCHY_MAC_TOUCHID_GUARD_LIST=$fixture/guard-list $ROOT/lib/touchid-retry-aside|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
   chmod +x "$entry/$name"
@@ -599,6 +714,17 @@ ask ready '' && [[ ! -s $fixture/calls && ! -s $fixture/out ]] || fail 'a Touch 
 [[ $(cat "$fixture/pam-calls" 2>/dev/null) == "add" ]] || fail 'a Touch ID turned on before the re-arm existed gets its PAM lines'
 grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" ||
   fail 'a Touch ID turned on before the driver options existed gets them'
+machine apple,j313 apple,t8103 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1' "$fixture/etc/modprobe.conf" ||
+  fail 'an M1 Air turned on before the driver options existed gets them with the pin' "$(<"$fixture/out")"
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on"
+[[ ! -e $fixture/etc/modprobe.conf ]] || fail "the M1 Air's options are gone before the M2 Max runs"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" ||
+  fail 'an agreed M2 Max gets its options again, with no pin' "$(<"$fixture/etc/modprobe.conf")"
 # No options yet, and none can be written.
 rm "$fixture/etc/modprobe.conf"
 mkdir -p "$fixture/etc/modprobe.conf.new/in-the-way"
@@ -640,6 +766,55 @@ rm -f "$fixture/etc/modprobe.conf"
 ask blocked '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" &&
   grep -q 'Restart this Mac' "$fixture/out" && [[ ! -s $fixture/calls ]] ||
   fail 'an agreed Mac that reads blocked gets its options and is told to restart' "$(<"$fixture/out")"
+# On the M1 Air, an agreed setup that failed for good (a crash between the
+# agreement and the load included) is set aside, so the restart sets it up again.
+agreed_m1_air() {
+  machine apple,j313 apple,t8103 apple,arm-platform
+  mkdir -p "$fixture/etc"
+  touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
+  printf 'spent' >"$fixture/guard-list"
+  keybag_file 0 52
+  echo "$1" >"$fixture/eligibility"
+}
+agreed_m1_air available
+ask failed '' && grep -q 'Restart this Mac' "$fixture/out" && [[ ! -e $fixture/guard-list && ! -e $fixture/keybag ]] &&
+  compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air whose setup failed has its state set aside and is told to restart" "$(<"$fixture/out")"
+for final in not-ready blocked; do
+  agreed_m1_air available
+  ask "$final" '' && grep -q 'Restart this Mac' "$fixture/out" && [[ ! -e $fixture/guard-list ]] ||
+    fail "an agreed M1 Air whose activation recorded $final has its state set aside" "$(<"$fixture/out")"
+done
+# While the activation runs, its earlier status may be stale: nothing moves.
+agreed_m1_air available
+echo activating >"$fixture/activation-state"
+ask failed '' && [[ -e $fixture/guard-list && -e $fixture/keybag ]] ||
+  fail "an agreed M1 Air whose activation is running is left alone" "$(<"$fixture/out")"
+# An activation unit that failed has ended, so its state is set aside.
+agreed_m1_air available
+echo failed >"$fixture/activation-state"
+ask failed '' && [[ ! -e $fixture/guard-list ]] ||
+  fail "an agreed M1 Air whose activation unit failed has its state set aside" "$(<"$fixture/out")"
+rm "$fixture/activation-state"
+# With no status recorded the activation may still be running: nothing moves.
+agreed_m1_air available
+without_status available '' && grep -q 'Restart this Mac' "$fixture/out" && [[ -e $fixture/guard-list && -e $fixture/keybag ]] &&
+  ! compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air with no status recorded is left alone" "$(<"$fixture/out")"
+# A committed keybag keeps its list through the agreed path too.
+for state in 1 3; do
+  agreed_m1_air available
+  keybag_file "$state" 116
+  ask failed '' && [[ -e $fixture/guard-list && $(stat -c %s "$fixture/keybag") == 116 ]] ||
+    fail "an agreed M1 Air with a keybag committed in state $state keeps it and its list" "$(<"$fixture/out")"
+done
+agreed_m1_air unsupported:kernel
+ask blocked '' && grep -q "this kernel can't set it up" "$fixture/out" && ! grep -q 'Restart this Mac' "$fixture/out" &&
+  [[ -e $fixture/guard-list ]] && ! compgen -G "$fixture/aurora-sep-touchid-retry-*" >/dev/null ||
+  fail "an agreed M1 Air on a kernel without the pins is told so, not to restart, and nothing moves" "$(<"$fixture/out")"
+machine apple,j414c apple,t6021 apple,arm-platform
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
 # An agreed Mac whose activation hasn't answered is never asked again, so a no
 # can't claim to leave on a Touch ID that is on.
 without_status available n && ! grep -qE 'experimental|stays off' "$fixture/out" && grep -q "isn't ready yet (no status)" "$fixture/out" &&
