@@ -609,6 +609,10 @@ machine apple,j616c apple,t6041 apple,arm-platform
 mkdir -p "$fixture/etc" && touch "$fixture/etc/touchid-on"
 ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1' "$fixture/etc/modprobe.conf" ||
   fail 'an M4 Max turned on before the driver options existed gets them with the xART guard on' "$(<"$fixture/out")"
+machine apple,j614c apple,t6041 apple,arm-platform
+mkdir -p "$fixture/etc" && touch "$fixture/etc/touchid-on"
+ask ready '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1' "$fixture/etc/modprobe.conf" ||
+  fail 'a 14-inch M4 Max turned on before the driver options existed gets them with the xART guard on' "$(<"$fixture/out")"
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc" && touch "$fixture/etc/touchid-on"
 rm "$fixture/etc/touchid-on"
@@ -786,8 +790,10 @@ rm "$fixture/esp/asahi/all_firmware.tar.gz"
 mkdir -p "$fixture/firmware/updates/apple"
 cp "$work/factory/j616c-cal.bin" "$fixture/firmware/updates/apple/mesacal-j616c.bin"
 [[ $(eligibility) == "unsupported:no-root-key" ]] || fail "an M4 Max with a calibration but no records can't rebuild its sensor key"
-machine apple,j614c apple,t6041 apple,arm-platform
-[[ $(eligibility) == "unsupported:board" ]] || fail 'the 14-inch M4 Max, not yet tried, is unsupported'
+machine apple,j614s apple,t6040 apple,arm-platform
+[[ $(eligibility) == "unsupported:board" ]] || fail 'the 14-inch M4 Pro, not yet tried, is unsupported'
+machine apple,j614c apple,t6040 apple,arm-platform
+[[ $(eligibility) == "unsupported:board" ]] || fail 'the 14-inch M4 Max is admitted only on its own SoC'
 machine apple,j616s apple,t6041 apple,arm-platform
 [[ $(eligibility) == "unsupported:board" ]] || fail 'a board admitted on another SoC is not admitted on T6041'
 j616c
@@ -818,6 +824,50 @@ PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
     ! -e $fixture/etc/touchid-on ]] ||
   fail "turning it off deletes an M4 Max's sensor key and calibration"
 pass 'the 16-inch M4 Max rebuilds its calibration and sensor key from its own factory records'
+
+# The 14-inch M4 Max: the 16-inch's sensor wiring and enclave profile on the same
+# SoC, so its records are sealed for 00006041, and its node names its own files.
+j614c() {
+  machine apple,j614c apple,t6041 apple,arm-platform
+  rm -rf "$tree/soc" "$fixture/firmware/updates" "$fixture/etc/touchid-on"
+  mkdir -p "$tree/spi@429108000/fingerprint@0" "$fixture/esp/asahi"
+  printf 'apple,mesa-fingerprint\0' >"$tree/spi@429108000/fingerprint@0/compatible"
+  printf 'okay\0' >"$tree/spi@429108000/fingerprint@0/status"
+  printf 'apple/mesacal-j614c.bin\0apple/msrk-j614c.bin\0' >"$tree/spi@429108000/fingerprint@0/firmware-name"
+  cp "$work/factory/j616c.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+}
+j614c
+[[ $(eligibility) == "available" ]] || fail 'a 14-inch M4 Max with its factory records on the ESP is available' "$(eligibility)"
+rm "$fixture/esp/asahi/all_firmware.tar.gz"
+[[ $(eligibility) == "unsupported:no-calibration" ]] || fail "a 14-inch M4 Max without its factory records can't rebuild its calibration"
+j614c
+echo ready >"$fixture/activation"
+container=$work/factory/j616c-isc.img
+out=$(run touchid-enable 2>&1) || fail 'a 14-inch M4 Max turns on' "$out"
+for file in cal:mesacal-j614c.bin key:msrk-j614c.bin; do
+  installed=$fixture/firmware/updates/apple/${file#*:}
+  cmp -s "$installed" "$work/factory/j616c-${file%%:*}.bin" && [[ $(stat -c %a "$installed") == 600 && ! -e $installed.new ]] ||
+    fail "the 14-inch M4 Max's ${file#*:} is rebuilt from its factory records, root-only" "$out"
+done
+[[ -z $(find "$fixture/firmware" -name '*j616c*') ]] || fail "the 14-inch M4 Max writes only the files its node names"
+grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1' "$fixture/options-at-load" ||
+  fail "the 14-inch M4 Max's driver loads with the xART guard on"
+j614c
+cp "$work/factory/j616c-other-chip.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+container=$work/factory/j616c-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"is not an M4 Max MacBook Pro's"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j614c*') ]] ||
+  fail "records sealed for the M4 Pro give a 14-inch M4 Max nothing, and it says why" "$out"
+unset container
+mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
+cp "$work/factory/j616c-key.bin" "$fixture/firmware/updates/apple/msrk-j614c.bin"
+cp "$work/factory/j616c-cal.bin" "$fixture/firmware/updates/apple/mesacal-j614c.bin"
+touch "$fixture/etc/touchid-on"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
+  [[ ! -e $fixture/firmware/updates/apple/msrk-j614c.bin && ! -e $fixture/firmware/updates/apple/mesacal-j614c.bin &&
+    ! -e $fixture/etc/touchid-on ]] ||
+  fail "turning it off deletes a 14-inch M4 Max's sensor key and calibration"
+pass 'the 14-inch M4 Max rebuilds its calibration and sensor key from its own factory records, with the xART guard on'
 
 if command -v systemd-analyze >/dev/null; then
   stub_systemd_boot_targets "$work/root"

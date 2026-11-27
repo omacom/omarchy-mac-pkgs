@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Rebuilds a Touch ID sensor's sealed factory data once its owner has agreed
 to turn Touch ID on: the sensor root key (the MSRk record) on a MacBook Neo,
-apple/msrk-j700.bin, or a 16-inch M4 Pro or M4 Max, apple/msrk-j616s.bin or
-apple/msrk-j616c.bin; and with --record FSC2 their calibration,
-apple/mesacal-j616s.bin or apple/mesacal-j616c.bin.
+apple/msrk-j700.bin, a 16-inch M4 Pro or M4 Max, apple/msrk-j616s.bin or
+apple/msrk-j616c.bin, or a 14-inch M4 Max, apple/msrk-j614c.bin; and with
+--record FSC2 their calibration, apple/mesacal-j616s.bin, apple/mesacal-j616c.bin
+or apple/mesacal-j614c.bin.
 
 Both are device-private. asahi-installer leaves this Mac's factory records
 on the ESP, in asahi/all_firmware.tar.gz; each file is the record's IM4P
