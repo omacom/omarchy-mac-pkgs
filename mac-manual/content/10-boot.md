@@ -25,6 +25,7 @@ An Apple Silicon Mac has no UEFI of its own. Everything up to U-Boot is Apple's 
 - `limine-mkinitcpio-hook` builds a unified kernel image on every kernel or initramfs change and keeps it on the EFI system partition, where U-Boot can reach it.
 - `limine-snapper-sync` lists snapper snapshots in the boot menu, and `omarchy-snapshot restore` restores one. See [Snapshots and recovery]({{page:snapshots}}).
 - The menu the user sees is Limine's, the same as on x86 Omarchy.
+- The kernel command line starts with the `root=UUID=` line `omarchy-mac-limine-cmdline` derives from `/etc/default/grub` into `/etc/default/limine`, which it owns, and the drop-ins in `/etc/limine-entry-tool.d/` add theirs. Both carry Omarchy's quiet boot words (`loglevel=0`, `systemd.show_status=false`). For verbose boot messages, add a drop-in whose name sorts before `omarchy-defaults.conf`, since a later word wins and later drop-ins' words come first: `echo 'KERNEL_CMDLINE[default]+=" loglevel=7 systemd.show_status=true"' | sudo tee /etc/limine-entry-tool.d/00-boot-logs.conf`, then `sudo omarchy-mac-boot-update`. The splash still covers them; press Esc at it to see them.
 
 GRUB stays only as a recovery fallback while older Macs are moved over. New installs never boot through it.
 
