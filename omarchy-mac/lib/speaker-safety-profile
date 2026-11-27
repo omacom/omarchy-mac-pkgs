@@ -1,0 +1,21 @@
+#!/bin/bash
+# speakersafetyd's ExecCondition: exits 1, so systemd skips the unit, when the
+# daemon has no profile for this Mac. It reads its profile as here, by the first
+# compatible less its letter suffix (apple,j614c is apple/j614.conf), and panics without one.
+
+tree=${OMARCHY_MAC_SPEAKER_TREE:-/proc/device-tree}
+profiles=${OMARCHY_MAC_SPEAKER_PROFILES:-/usr/share/speakersafetyd}
+omarchy-hw-apple-silicon || exit 1
+
+machine=""
+if [[ -r $tree/compatible ]]; then
+  machine=$(tr '\0' '\n' <"$tree/compatible" | head -n1)
+fi
+machine=${machine%"${machine##*[![:alpha:]]}"}
+maker=${machine%%,*}
+model=${machine#*,}
+if [[ $machine == *,* && -n $maker && -n $model && -f $profiles/$maker/$model.conf ]]; then
+  exit 0
+else
+  exit 1
+fi

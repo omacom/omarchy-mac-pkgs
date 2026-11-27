@@ -107,7 +107,9 @@ case "$*" in
   "show -p LoadState --value omarchy-vendor-firmware.service") echo loaded ;;
   "show -p ActiveState --value omarchy-vendor-firmware.service") echo active ;;
   "show -p Result --value omarchy-vendor-firmware.service") echo success ;;
-  "is-active speakersafetyd.service") echo active ;;
+  "is-active speakersafetyd.service") echo "${TEST_SPEAKER_STATE:-active}" ;;
+  "show -p LoadState --value speakersafetyd.service") echo "${TEST_SPEAKER_LOAD:-loaded}" ;;
+  "show -p Result --value speakersafetyd.service") echo "${TEST_SPEAKER_RESULT:-success}" ;;
   *) exit 1 ;;
 esac
 SH
@@ -219,6 +221,21 @@ fi
 grep -Fxq "FAIL  units            systemctl cannot list failed units" "$test_tmp/out" || fail "an unanswered systemctl is not a pass" "$(cat "$test_tmp/out")"
 grep -Fxq "FAIL  default-sink     the default sink is PipeWire's dummy output" "$test_tmp/out" || fail "a dummy sink is not a pass" "$(cat "$test_tmp/out")"
 pass "an unanswered systemctl and PipeWire's dummy sink fail"
+
+TEST_SPEAKER_STATE=inactive TEST_SPEAKER_RESULT=exec-condition run_check ||
+  fail "a speakersafetyd skipped for want of a profile is not a failure" "$(cat "$test_tmp/out")"
+grep -Fxq "SKIP  speakersafetyd   speakersafetyd was skipped: it has no profile for this Mac" "$test_tmp/out" ||
+  fail "a skipped speakersafetyd is reported as skipped" "$(cat "$test_tmp/out")"
+TEST_SPEAKER_STATE=inactive run_check && fail "a speakersafetyd that met its condition but is not running fails"
+grep -Fxq "FAIL  speakersafetyd   speakersafetyd is inactive" "$test_tmp/out" || fail "a stopped speakersafetyd is named" "$(cat "$test_tmp/out")"
+for load in masked not-found; do
+  TEST_SPEAKER_STATE=inactive TEST_SPEAKER_LOAD=$load TEST_SPEAKER_RESULT=exec-condition run_check &&
+    fail "a $load speakersafetyd fails"
+  grep -Fxq "FAIL  speakersafetyd   speakersafetyd is inactive" "$test_tmp/out" || fail "a $load speakersafetyd is named" "$(cat "$test_tmp/out")"
+done
+TEST_SPEAKER_STATE=failed TEST_SPEAKER_RESULT=exit-code run_check && fail "a failed speakersafetyd fails"
+grep -Fxq "FAIL  speakersafetyd   speakersafetyd is failed" "$test_tmp/out" || fail "a failed speakersafetyd is named" "$(cat "$test_tmp/out")"
+pass "a speakersafetyd skipped for want of a profile is skipped, and a stopped, masked, missing or failed one fails"
 
 TEST_USER_MANAGER_DOWN=1 run_check && fail "a user manager that does not answer fails"
 grep -Fxq "FAIL  units            failed: user manager did not answer" "$test_tmp/out" || fail "an unanswered user manager is named" "$(cat "$test_tmp/out")"
