@@ -19,14 +19,23 @@ kver=7.1.12-2-7-ARCH
 uid=$(id -u)
 mkdir -p "$stub_bin"
 
-# A healthy M2 Max: Aurora kernel, Limine, a logged-in session.
+# A healthy M2 Max: Aurora kernel, Limine, a logged-in session. Its device tree is
+# where Linux keeps it, and /proc/device-tree links to it. `make_fixture m4` makes
+# it a 14-inch M4 Max instead.
 make_fixture() {
   rm -rf "$fixture"
   local root=$fixture
-  mkdir -p "$root/proc/device-tree" "$root/proc/asound" "$root/usr/lib/modules/$kver" "$root/var/lib/omarchy" \
+  mkdir -p "$root/sys/firmware/devicetree/base" "$root/proc/asound" "$root/usr/lib/modules/$kver" "$root/var/lib/omarchy" \
     "$root/run/user/$uid/hypr/instance1" "$root/boot/efi/EFI/Linux" "$root/boot/efi/m1n1" "$root/.snapshots"
-  printf 'apple,j416c\0apple,t6021\0apple,arm-platform\0' >"$root/proc/device-tree/compatible"
-  printf 'Apple MacBook Pro (16-inch, M2 Max, 2023)\0' >"$root/proc/device-tree/model"
+  ln -s ../sys/firmware/devicetree/base "$root/proc/device-tree"
+  if [[ ${1:-} == m4 ]]; then
+    printf 'apple,j614c\0apple,t6041\0apple,arm-platform\0' >"$root/proc/device-tree/compatible"
+    printf 'Apple MacBook Pro (14-inch, M4 Max, 2024)\0' >"$root/proc/device-tree/model"
+  else
+    printf 'apple,j416c\0apple,t6021\0apple,arm-platform\0' >"$root/proc/device-tree/compatible"
+    printf 'Apple MacBook Pro (16-inch, M2 Max, 2023)\0' >"$root/proc/device-tree/model"
+  fi
+  printf 'laptop\0' >"$root/proc/device-tree/chassis-type"
   printf ' 0 [AppleJ416HPAI  ]: aop_audio - MacBook Pro J416 HPAI\n                      MacBook Pro J416 High-Power Audio Interface\n 1 [AppleJ416      ]: macaudio - MacBook Pro J416\n                      MacBook Pro J416\n' >"$root/proc/asound/cards"
   printf 'cpu 1 2 3\nbtime 1790289337\n' >"$root/proc/stat"
   printf 'linux-aurora\n' >"$root/usr/lib/modules/$kver/pkgbase"
@@ -39,6 +48,72 @@ make_fixture() {
   printf 'uki\n' >"$root/boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
   printf 'limine config\n' >"$root/boot/efi/limine.conf"
   printf 'm1n1 stage 2\n' >"$root/boot/efi/m1n1/boot.bin"
+  make_peripherals "${1:-}"
+}
+
+# Its ports and peripherals: three labelled USB-C connectors, each behind its own
+# controller, with a security key in the first; the GPU, camera, SD card reader,
+# keyboard backlight and battery; and Touch ID ready to be turned on. Before the
+# M4 Pro and M4 Max the connectors sit on I2C and the controllers and the reader's
+# PCIe bus under /soc, the last controller with the older port/endpoint form; on
+# them all three sit at the root.
+dt_strings() {
+  mkdir -p "${1%/*}"
+  printf '%s\0' "${@:2}" >"$1"
+}
+dt_u32() {
+  mkdir -p "${1%/*}"
+  printf "$(printf '\\x%02x' 0 0 0 "$2")" >"$1"
+}
+make_peripherals() {
+  local root=$fixture tree=$fixture/proc/device-tree index=0 port name controller address endpoint
+  local pd=soc/i2c@39b040000/usb-pd@ bus=soc/ reader=soc/pcie@590000000
+  local -a ports=("Left Back:702280000:38" "Left Front:b02280000:3f" "Right:f02280000:3b")
+  if [[ ${1:-} == m4 ]]; then
+    pd=spmi@0/usb-pd@ bus="" reader=pcie@1cb0000000
+    ports=("Left Back:382280000:0" "Left Front:38a280000:1" "Right:392280000:2")
+  fi
+  for port in "${ports[@]}"; do
+    IFS=: read -r name controller address <<<"$port"
+    name="USB-C $name" endpoint=ports/port@0/endpoint
+    [[ -n $bus && $index == 2 ]] && endpoint=port/endpoint
+    dt_strings "$tree/$pd$address/connector/compatible" usb-c-connector
+    dt_strings "$tree/$pd$address/connector/label" "$name"
+    dt_u32 "$tree/$pd$address/connector/ports/port@0/endpoint/remote-endpoint" $((16 + index))
+    dt_u32 "$tree/${bus}usb@$controller/$endpoint/phandle" $((16 + index))
+    dt_strings "$root/sys/class/typec/port$index/device/of_node/connector/label" "$name"
+    printf '[host] device\n' >"$root/sys/class/typec/port$index/data_role"
+    index=$((index + 1))
+  done
+  controller=${ports[0]#*:} controller=${controller%%:*}
+  mkdir -p "$root/sys/class/typec/port0-partner" "$root/sys/bus/usb/devices"
+  local key=$root/sys/devices/platform/$controller.usb/xhci-hcd.0.auto/usb3/3-1
+  mkdir -p "$key"
+  printf 'YubiKey OTP+FIDO+CCID\n' >"$key/product"
+  printf '12\n' >"$key/speed"
+  ln -s "../../../devices/platform/$controller.usb/xhci-hcd.0.auto/usb3/3-1" "$root/sys/bus/usb/devices/3-1"
+  ln -s "../../../devices/platform/$controller.usb/xhci-hcd.0.auto/usb3" "$root/sys/bus/usb/devices/usb3"
+  dt_strings "$root/sys/class/drm/renderD128/device/of_node/compatible" apple,agx-t6021
+  ln -s ../../../../bus/platform/drivers/asahi "$root/sys/class/drm/renderD128/device/driver"
+  for name in card0-eDP-1:connected card1-DP-1:disconnected card1-HDMI-A-1:disconnected; do
+    mkdir -p "$root/sys/class/drm/${name%%:*}"
+    printf '%s\n' "${name#*:}" >"$root/sys/class/drm/${name%%:*}/status"
+  done
+  dt_strings "$tree/isp@22a000000/compatible" apple,t6020-isp apple,isp
+  dt_strings "$root/sys/class/video4linux/video0/device/of_node/compatible" apple,t6020-isp apple,isp
+  dt_strings "$tree/$reader/pci@1,0/mmc@0,0/compatible" pci17a0,9755
+  mkdir -p "$root/sys/class/mmc_host/mmc0"
+  dt_strings "$tree/led-controller/led-0/function" kbd_backlight
+  mkdir -p "$root/sys/class/leds/apple::kbd_backlight" "$root/sys/class/power_supply/macsmc-battery" "$root/run/omarchy-mac"
+  mkdir -p "$root/sys/class/leds/apple::kbd_backlight/device"
+  ln -s ../../../../bus/platform/drivers/leds_pwm "$root/sys/class/leds/apple::kbd_backlight/device/driver"
+  printf '128\n' >"$root/sys/class/leds/apple::kbd_backlight/brightness"
+  printf '255\n' >"$root/sys/class/leds/apple::kbd_backlight/max_brightness"
+  printf 'Battery\n' >"$root/sys/class/power_supply/macsmc-battery/type"
+  printf '87\n' >"$root/sys/class/power_supply/macsmc-battery/capacity"
+  printf 'Discharging\n' >"$root/sys/class/power_supply/macsmc-battery/status"
+  printf '80\n' >"$root/sys/class/power_supply/macsmc-battery/charge_control_end_threshold"
+  printf 'available\n' >"$root/run/omarchy-mac/touchid"
 }
 
 stub() {
@@ -114,7 +189,17 @@ SH
 stub hyprctl <<'SH'
 #!/bin/bash
 [[ $HYPRLAND_INSTANCE_SIGNATURE == instance1 ]] || exit 1
-echo '[{"name":"eDP-1","width":3456,"height":2160,"refreshRate":120.0},{"name":"USB-1","width":3440,"height":1440,"refreshRate":59.973}]'
+shown='{"name":"eDP-1","width":3456,"height":2160,"refreshRate":120.0,"disabled":false}'
+if (( ${TEST_SHOWS_DP:-0} )); then
+  shown+=',{"name":"DP-1","width":3840,"height":2160,"refreshRate":60.0,"disabled":false}'
+else
+  shown+=',{"name":"USB-1","width":3440,"height":1440,"refreshRate":59.973,"disabled":false}'
+fi
+# monitors -j lists what Hyprland shows; monitors all -j also what it keeps disabled.
+if [[ $* == "monitors all -j" ]] && (( ${TEST_DISABLED_DP:-0} )); then
+  shown+=',{"name":"DP-1","width":3840,"height":2160,"refreshRate":60.0,"disabled":true}'
+fi
+echo "[$shown]"
 SH
 stub wpctl <<'SH'
 #!/bin/bash
@@ -182,10 +267,19 @@ for line in \
   "PASS  sound-cards      AppleJ416HPAI, AppleJ416" \
   "PASS  default-sink     MacBook Pro J416 Speakers (audio_effect.j416-convolver)" \
   "PASS  snapshots        /.snapshots is a btrfs subvolume holding 2 snapshots" \
+  "PASS  gpu              renderD128 is the Apple GPU (apple,agx-t6021), driven by asahi" \
+  "INFO  display-ports    DP-1 disconnected, HDMI-A-1 disconnected" \
+  "PASS  usb-c            USB-C Left Back (attached, host), USB-C Left Front (empty), USB-C Right (empty)" \
+  "INFO  usb-devices      YubiKey OTP+FIDO+CCID on USB-C Left Back at 12 Mb/s" \
+  "PASS  camera           the camera is /dev/video0" \
+  "PASS  sd-reader        mmc0, no card inserted" \
+  "PASS  kbd-backlight    apple::kbd_backlight at 128 of 255" \
+  "PASS  battery          macsmc-battery: 87%, Discharging, charging stops at 80%" \
+  "INFO  touchid          Touch ID can be turned on under Setup > Security > Fingerprint" \
   "INFO  release          asahi-quattro-59ee15f6, Aurora lane rc" \
   "INFO  boot-file        $(file_sha256 "$fixture/boot/efi/EFI/Linux/omarchy_linux-aurora.efi")  /boot/efi/EFI/Linux/omarchy_linux-aurora.efi" \
   "INFO  boot-file        $(file_sha256 "$fixture/boot/efi/m1n1/boot.bin")  /boot/efi/m1n1/boot.bin" \
-  "15 passed, 0 failed, 0 warnings, 0 skipped"; do
+  "21 passed, 0 failed, 0 warnings, 0 skipped"; do
   grep -Fxq -- "$line" "$test_tmp/out" || fail "healthy report has: $line" "$(cat "$test_tmp/out")"
 done
 pass "a healthy Mac passes every check and prints its boot-file hashes"
@@ -223,6 +317,125 @@ pass "an unanswered systemctl and PipeWire's dummy sink fail"
 TEST_USER_MANAGER_DOWN=1 run_check && fail "a user manager that does not answer fails"
 grep -Fxq "FAIL  units            failed: user manager did not answer" "$test_tmp/out" || fail "an unanswered user manager is named" "$(cat "$test_tmp/out")"
 pass "a user manager that does not answer fails the units check"
+
+# A kernel that lost a peripheral the device tree describes fails each check, and
+# a display that is plugged in but not shown fails too.
+make_fixture
+rm -rf "$fixture/sys/class/drm/renderD128" "$fixture/sys/class/typec/port2" "$fixture/sys/class/video4linux" \
+  "$fixture/sys/class/mmc_host" "$fixture/sys/class/leds" "$fixture/sys/class/power_supply"
+printf 'connected\n' >"$fixture/sys/class/drm/card1-DP-1/status"
+printf 'failed\n' >"$fixture/run/omarchy-mac/touchid"
+# A phone charging from a port and a keyboard with its own backlight are not the Mac's.
+mkdir -p "$fixture/sys/class/power_supply/apple_mfi_fastcharge_3-2" "$fixture/sys/class/leds/g15::kbd_backlight/device"
+printf 'Battery\n' >"$fixture/sys/class/power_supply/apple_mfi_fastcharge_3-2/type"
+printf 'Device\n' >"$fixture/sys/class/power_supply/apple_mfi_fastcharge_3-2/scope"
+ln -s ../../../../bus/hid/drivers/hid-lg-g15 "$fixture/sys/class/leds/g15::kbd_backlight/device/driver"
+printf '1\n' >"$fixture/sys/class/leds/g15::kbd_backlight/brightness"
+printf '2\n' >"$fixture/sys/class/leds/g15::kbd_backlight/max_brightness"
+run_check && fail "a Mac that lost its peripherals fails"
+for line in \
+  "FAIL  gpu              no render node belongs to the Apple GPU, so the desktop renders in software" \
+  "FAIL  display-ports    a display is connected to DP-1, but Hyprland shows nothing there" \
+  "FAIL  usb-c            the device tree has 3 USB-C connectors, the kernel registered 2 ports: USB-C Left Back (attached, host), USB-C Left Front (empty)" \
+  "FAIL  camera           the device tree enables the camera's ISP, but no video device belongs to it" \
+  "FAIL  sd-reader        the device tree has an SD card reader, but the kernel registered no MMC host" \
+  "FAIL  kbd-backlight    the device tree has a keyboard backlight, but the kernel registered no LED for it" \
+  "FAIL  battery          a MacBook whose battery the kernel does not report" \
+  "FAIL  touchid          Touch ID did not come up this boot (failed); see journalctl -u omarchy-mac-touchid-activate and journalctl -k"; do
+  grep -Fxq -- "$line" "$test_tmp/out" || fail "a Mac that lost its peripherals reports: $line" "$(cat "$test_tmp/out")"
+done
+pass "a lost GPU, port, camera, reader, backlight or battery fails, even beside a phone's battery or a keyboard's backlight, and so does a display Hyprland does not show"
+
+# The same display, shown by Hyprland, is reported with the connector it is on;
+# a card in the reader and an unlabelled port's device are named too.
+make_fixture
+printf 'connected\n' >"$fixture/sys/class/drm/card1-DP-1/status"
+mkdir -p "$fixture/sys/class/mmc_host/mmc0/mmc0:0001" "$fixture/sys/devices/platform/39b280000.usb/xhci-hcd.3.auto/usb5/5-1"
+printf '480\n' >"$fixture/sys/devices/platform/39b280000.usb/xhci-hcd.3.auto/usb5/5-1/speed"
+printf '05ac\n' >"$fixture/sys/devices/platform/39b280000.usb/xhci-hcd.3.auto/usb5/5-1/idVendor"
+printf '1234\n' >"$fixture/sys/devices/platform/39b280000.usb/xhci-hcd.3.auto/usb5/5-1/idProduct"
+ln -s ../../../devices/platform/39b280000.usb/xhci-hcd.3.auto/usb5/5-1 "$fixture/sys/bus/usb/devices/5-1"
+mkdir -p "$fixture/sys/class/drm/card2-DSI-1"
+printf 'connected\n' >"$fixture/sys/class/drm/card2-DSI-1/status"
+TEST_SHOWS_DP=1 run_check || fail "a shown external display passes" "$(cat "$test_tmp/out")"
+for line in \
+  "INFO  display-ports    DP-1 connected, HDMI-A-1 disconnected" \
+  "PASS  sd-reader        mmc0, a card inserted" \
+  "INFO  usb-devices      YubiKey OTP+FIDO+CCID on USB-C Left Back at 12 Mb/s, 05ac:1234 on a port the device tree does not name at 480 Mb/s"; do
+  grep -Fxq -- "$line" "$test_tmp/out" || fail "a shown display, a card and an unnamed port report: $line" "$(cat "$test_tmp/out")"
+done
+pass "a shown external display, an inserted card and a device on an unnamed port are reported, and a Touch Bar is not a port"
+
+# A display Hyprland keeps disabled is noted, not failed.
+make_fixture
+printf 'connected\n' >"$fixture/sys/class/drm/card1-DP-1/status"
+TEST_DISABLED_DP=1 run_check || fail "a display Hyprland keeps disabled passes" "$(cat "$test_tmp/out")"
+grep -Fxq "INFO  display-ports    DP-1 connected, HDMI-A-1 disconnected; Hyprland keeps DP-1 disabled or mirrored" "$test_tmp/out" ||
+  fail "a display Hyprland keeps disabled is noted" "$(cat "$test_tmp/out")"
+pass "a display Hyprland keeps disabled is noted, not failed"
+
+# On the M4 Pro and M4 Max the connectors, controllers and the reader's bus sit at
+# the root, reached through the /proc/device-tree link.
+make_fixture m4
+run_check || true
+for line in \
+  "PASS  usb-c            USB-C Left Back (attached, host), USB-C Left Front (empty), USB-C Right (empty)" \
+  "INFO  usb-devices      YubiKey OTP+FIDO+CCID on USB-C Left Back at 12 Mb/s" \
+  "PASS  sd-reader        mmc0, no card inserted"; do
+  grep -Fxq -- "$line" "$test_tmp/out" || fail "a 14-inch M4 Max reports: $line" "$(cat "$test_tmp/out")"
+done
+rm -rf "$fixture/sys/class/mmc_host"
+run_check && fail "a 14-inch M4 Max that lost its SD card reader fails"
+grep -Fxq "FAIL  sd-reader        the device tree has an SD card reader, but the kernel registered no MMC host" "$test_tmp/out" ||
+  fail "a 14-inch M4 Max's lost reader is named" "$(cat "$test_tmp/out")"
+pass "a 14-inch M4 Max names its ports and the device on each, and fails a lost reader"
+
+# Touch ID turned on whose activation never recorded a status fails; a Mac with no
+# sensor records none either.
+make_fixture
+rm "$fixture/run/omarchy-mac/touchid"
+mkdir -p "$fixture/etc/omarchy-mac"
+: >"$fixture/etc/omarchy-mac/touchid-on"
+run_check && fail "Touch ID turned on with no status fails"
+grep -Fxq "FAIL  touchid          Touch ID is on, but nothing recorded its status this boot; see journalctl -k for apple_sep" "$test_tmp/out" ||
+  fail "Touch ID turned on with no status is named" "$(cat "$test_tmp/out")"
+rm "$fixture/etc/omarchy-mac/touchid-on"
+run_check || fail "no Touch ID status without Touch ID turned on passes" "$(cat "$test_tmp/out")"
+grep -Fxq "INFO  touchid          no Touch ID status: this Mac has no sensor" "$test_tmp/out" ||
+  fail "no Touch ID status without Touch ID turned on is noted" "$(cat "$test_tmp/out")"
+pass "Touch ID turned on with no status fails, and no status without it is noted"
+
+# A desktop Mac has none of them, and Touch ID says why it is not offered.
+make_fixture
+rm -rf "$fixture/proc/device-tree/soc/i2c@39b040000" "$fixture/proc/device-tree/isp@22a000000" "$fixture/proc/device-tree/soc/pcie@590000000" \
+  "$fixture/proc/device-tree/led-controller" "$fixture/sys/class/typec" "$fixture/sys/class/video4linux" \
+  "$fixture/sys/class/mmc_host" "$fixture/sys/class/leds" "$fixture/sys/class/power_supply" \
+  "$fixture/sys/class/drm/card0-eDP-1" "$fixture/sys/class/drm/card1-DP-1" "$fixture/sys/bus/usb/devices/3-1"
+printf 'Apple Mac mini (M2 Pro, 2023)\0' >"$fixture/proc/device-tree/model"
+printf 'desktop\0' >"$fixture/proc/device-tree/chassis-type"
+mkdir -p "$fixture/sys/class/power_supply/hid-a4:83:e7:12:34:56-battery-0"
+printf 'Battery\n' >"$fixture/sys/class/power_supply/hid-a4:83:e7:12:34:56-battery-0/type"
+printf 'Device\n' >"$fixture/sys/class/power_supply/hid-a4:83:e7:12:34:56-battery-0/scope"
+printf 'unsupported:board\n' >"$fixture/run/omarchy-mac/touchid"
+run_check || fail "a desktop Mac without these peripherals passes" "$(cat "$test_tmp/out")"
+for line in \
+  "INFO  display-ports    HDMI-A-1 disconnected" \
+  "SKIP  usb-c            this Mac has no USB-C connector in its device tree" \
+  "INFO  usb-devices      nothing attached" \
+  "SKIP  camera           the device tree leaves the camera off on this Mac" \
+  "SKIP  sd-reader        this Mac has no SD card reader" \
+  "SKIP  kbd-backlight    this Mac has no keyboard backlight" \
+  "SKIP  battery          no battery on this Mac" \
+  "INFO  touchid          Touch ID is not offered on this Mac (board)"; do
+  grep -Fxq -- "$line" "$test_tmp/out" || fail "a desktop Mac reports: $line" "$(cat "$test_tmp/out")"
+done
+pass "a desktop Mac skips the ports and peripherals it does not have, a mouse's battery included"
+rm -rf "$fixture/sys/class/drm/card1-HDMI-A-1"
+run_check && fail "a desktop Mac whose display driver registered no connector fails"
+grep -Fxq "FAIL  display-ports    the display driver registered no connector" "$test_tmp/out" ||
+  fail "a desktop Mac without a display connector is named" "$(cat "$test_tmp/out")"
+pass "a desktop Mac whose display driver registered no connector fails"
+make_fixture
 
 rm "$fixture/run/user/$uid/bus"
 run_check || fail "no user manager is not a failure" "$(cat "$test_tmp/out")"
