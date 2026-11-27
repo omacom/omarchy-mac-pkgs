@@ -150,10 +150,11 @@ mapfile -t sourced < <(source_hid \
   usbhid=/lib/modules/x/usbhid.ko \
   thunderbolt=/lib/modules/x/thunderbolt.ko \
   thunderbolt_apple=/lib/modules/x/thunderbolt_apple.ko \
+  dwc3-apple=/lib/modules/x/dwc3-apple.ko \
   spi-hid-apple-of='(builtin)')
 [[ ${sourced[0]} == 0 ]] || fail "the drop-in sources cleanly" "status ${sourced[0]}"
-[[ ${sourced[1]} == "btrfs hid_apple hid_magicmouse dockchannel-hid usbhid thunderbolt thunderbolt_apple" ]] ||
-  fail "modular HID drivers, thunderbolt and thunderbolt_apple (dock keyboards, omarchy-mx-mac#86) are early-loaded; built-in SPI HID is left out" "MODULES=(${sourced[1]})"
+[[ ${sourced[1]} == "btrfs hid_apple hid_magicmouse dockchannel-hid usbhid thunderbolt thunderbolt_apple dwc3-apple" ]] ||
+  fail "modular HID drivers, thunderbolt and thunderbolt_apple (dock keyboards, omarchy-mx-mac#86) and dwc3-apple (Type-C port keyboards, omacom/linux-aurora#380) are early-loaded; built-in SPI HID is left out" "MODULES=(${sourced[1]})"
 [[ ${sourced[2]} == unset ]] || fail "the drop-in leaves no variable behind" "${sourced[2]}"
 echo 'ok - modular HID drivers and thunderbolt are early-loaded and built-in SPI HID is skipped'
 
@@ -250,7 +251,7 @@ mint_ko() {
 }
 
 for module in hid-apple hid-magicmouse dockchannel-hid usbhid thunderbolt thunderbolt_apple \
-  crypto_lzo crypto_lz4 dm_crypt dm_integrity; do
+  dwc3-apple crypto_lzo crypto_lz4 dm_crypt dm_integrity; do
   mint_ko "$module"
 done
 # HID drop-in looks under drivers/hid as well as extra/.
@@ -311,6 +312,7 @@ grep -Eq 'dockchannel-hid|dockchannel_hid' "$list" || fail "lsinitcpio lists doc
 grep -Eq 'usbhid' "$list" || fail "lsinitcpio lists usbhid" "$(cat "$list")"
 grep -Eq '(^|/)thunderbolt\.ko' "$list" || fail "lsinitcpio lists thunderbolt (dock keyboards, omarchy-mx-mac#86)" "$(cat "$list")"
 grep -Eq '(^|/)thunderbolt[-_]apple\.ko' "$list" || fail "lsinitcpio lists thunderbolt_apple, the Apple Silicon USB4 host router" "$(cat "$list")"
+grep -Eq '(^|/)dwc3[-_]apple\.ko' "$list" || fail "lsinitcpio lists dwc3-apple, the Type-C USB controller glue (omacom/linux-aurora#380)" "$(cat "$list")"
 grep -Fq 'omarchy-vendorfw.sh' "$list" || fail "lsinitcpio lists the late vendorfw script"
 grep -Fq 'omarchy-vendorfw-initrd.sh' "$list" || fail "lsinitcpio lists the early vendorfw helper"
 grep -Fq 'omarchy-vendorfw.service' "$list" || fail "lsinitcpio lists the late vendorfw unit"
