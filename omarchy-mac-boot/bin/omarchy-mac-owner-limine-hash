@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# omarchy:summary=Hash the selected Limine entry for an owner-managed boot manifest
+# omarchy:args=boot/efi/limine.conf
+# omarchy:hidden=true
+
+set -euo pipefail
+export LC_ALL=C
+
+details=0
+if [[ ${1:-} == "--details" ]]; then
+  details=1
+  shift
+fi
+if (( $# != 1 )) || [[ $1 != "boot/efi/limine.conf" && $1 != "boot/limine.conf" ]]; then
+  echo "Run from the filesystem root: omarchy-mac-owner-limine-hash boot/efi/limine.conf (or boot/limine.conf)." >&2
+  exit 1
+fi
+menu=$1
+esp=${menu%/*}
+
+shadow=$(cd -- "$esp" && find . -maxdepth 3 \( -ipath './efi/boot/limine.conf' -o -ipath './boot/limine/limine.conf' \
+  -o -ipath './boot/limine.conf' -o -ipath './limine/limine.conf' \) -print -quit)
+if [[ -n $shadow ]]; then
+  echo "A higher-priority Limine menu shadows the ESP-root menu." >&2
+  exit 1
+fi
+
+# Read one menu generation. Keep the header and the named direct child of
+# Omarchy, while checking selecting options even below the first entry.
+selection=$(awk '
+  {
+    sub(/^[[:space:]]+/, "")
+    if (/^#/ || /^[[:space:]]*$/) next
+    if (index($0, "${") != 0) unsupported = 1
+    if (/^\//) {
+      in_menu = 1
+      entry = ""
+      parent_entry = 0
+      if (/^\/[^/]/) {
+        parent = ($0 ~ /^\/\+?Omarchy[[:space:]]*$/)
+        if (parent) {
+          parents++
+          parent_entry = 1
+        }
+      } else if (parent && /^\/\/[^/]/) {
+        entry = $0
+        sub(/[[:space:]]+$/, "", entry)
+        entries[entry]++
+        stanza[entry] = $0 "\n"
+      }
+      next
+    }
+    option = $0
+    sub(/[[:space:]]*:.*$/, "", option)
+    option = tolower(option)
+    value = $0
+    sub(/^[^:]*:[[:space:]]*/, "", value)
+    sub(/[[:space:]]+$/, "", value)
+    if (option == "default_entry") {
+      defaults++
+      default_entry = value
+    }
+    if (option == "remember_last_entry" && tolower(value) != "no") unsupported = 1
+    if (!in_menu || parent_entry || option == "global_dtb") header = header $0 "\n"
+    is_conditional = (option == "if_fw_type" || option == "if_arch" || option == "if_loader_arch")
+    if (parent_entry && is_conditional) unsupported = 1
+    if (entry != "") {
+      stanza[entry] = stanza[entry] $0 "\n"
+      if (option == "path") {
+        paths[entry]++
+        target[entry] = value
+      }
+      if (option == "protocol") {
+        protocols[entry]++
+        protocol[entry] = tolower(value)
+      }
+      if (is_conditional) conditional[entry]++
+    }
+  }
+  END {
+    if (unsupported || defaults != 1 || parents != 1 || default_entry !~ /^Omarchy\/[A-Za-z0-9_.+-]+$/) exit 1
+    kernel = substr(default_entry, 9)
+    entry = "//" kernel
+    if (entries[entry] != 1 || paths[entry] != 1 || protocols[entry] != 1 || protocol[entry] != "efi" || conditional[entry]) exit 1
+    print kernel
+    print target[entry]
+    print "default_entry: " default_entry
+    printf "%s%s", header, stanza[entry]
+  }
+' "$menu") || {
+  echo "The manifest needs one named Omarchy default EFI entry, without macros, boot conditions or remember_last_entry." >&2
+  exit 1
+}
+
+kernel=${selection%%$'\n'*}
+selection=${selection#*$'\n'}
+path=${selection%%$'\n'*}
+uki="EFI/Linux/omarchy_$kernel.efi"
+hash=${path##*#}
+if [[ $path != "boot():/$uki#$hash" || ! $hash =~ ^[a-f0-9]{128}$ ]] ||
+  ! uki_hash=$(b2sum -- "$esp/$uki") || [[ ${uki_hash%% *} != "$hash" ]]; then
+  echo "The named Limine default entry does not point to the recorded UKI with its correct hash." >&2
+  exit 1
+fi
+
+digest=$(printf '%s\n' "${selection#*$'\n'}" | sha256sum)
+if (( details )); then
+  printf '%s %s\n' "$kernel" "${digest%% *}"
+else
+  printf '%s  %s\n' "${digest%% *}" "$menu"
+fi

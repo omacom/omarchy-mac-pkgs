@@ -126,3 +126,122 @@ pass "apple: a passing check with the owner marker prints only the skip line and
 rm "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi"
 owner_update "/boot/efi/EFI/Linux/omarchy_linux-aurora.efi (the Limine UKI) is missing"
 pass "apple: a failing check with the owner marker prints one advisory and offers the reboot"
+
+limine_mac
+mkdir -p "$mac_root/etc/omarchy-mac-boot"
+: >"$mac_root/etc/omarchy-mac-boot/owner-boot-chain"
+manifest=$mac_root/etc/omarchy-mac-boot/owner-boot-chain.sha256
+owner_uki=boot/efi/EFI/Linux/omarchy_linux-owner.efi
+owner_stage2=boot/efi/m1n1/boot-ctxr.bin
+owner_tree=boot/efi/pinned.dtb
+cp "$mac_esp/EFI/Linux/omarchy_linux-aurora.efi" "$mac_root/$owner_uki"
+cp "$mac_esp/m1n1/boot.bin" "$mac_root/$owner_stage2"
+cp "$mac_root${mac_dtbs[0]}" "$mac_root/$owner_tree"
+sed -i '1i default_entry: Omarchy/linux-owner' "$mac_esp/limine.conf"
+printf '  //linux-owner\n    protocol: efi\n    path: boot():/EFI/Linux/omarchy_linux-owner.efi#%s\n' \
+  "$(b2sum "$mac_root/$owner_uki" | cut -d' ' -f1)" >>"$mac_esp/limine.conf"
+
+record_owner_manifest() {
+  (
+    cd "$mac_root"
+    "$BOOT/bin/omarchy-mac-owner-limine-hash" boot/efi/limine.conf &&
+      sha256sum boot/efi/EFI/BOOT/BOOTAA64.EFI "$owner_stage2" "$owner_tree" "$@"
+  ) >"$manifest"
+}
+owner_refused() {
+  run_update aarch64-apple "$tmp/mac-boot"
+  (( status == 1 )) && ! reboot_offered ||
+    fail "apple: owner verification refuses $1 and offers no reboot" "status $status: $(cat "$tmp/out" "$tmp/err")"
+  grep -Fq "$2" "$tmp/err" && grep -Fq "do not reboot yet" "$tmp/err" ||
+    fail "apple: explains why owner verification refused $1" "$(cat "$tmp/err")"
+}
+
+record_owner_manifest "$owner_uki"
+run_update aarch64-apple "$tmp/mac-boot"
+grep -Fxq "sudo omarchy-lifecycle-dispatch update-verify" "$SUDO_TEST_LOG" ||
+  fail "apple: owner boot verification uses the privileged lifecycle dispatcher"
+(( status == 0 )) && reboot_offered &&
+  grep -Fq "Owner-managed boot files verified against the approved manifest." "$tmp/out" &&
+  ! grep -Fq "The packaged check would fail" "$tmp/out" ||
+  fail "apple: the approved custom default verifies with the stock entry listed first" "$(cat "$tmp/out" "$tmp/err")"
+
+cp "$mac_esp/limine.conf" "$tmp/approved-menu"
+cp "$manifest" "$tmp/approved-manifest"
+printf '/+Snapshots\n  //Snapshot 1\n    protocol: efi\n    path: boot():/snapshot.efi\n' >>"$mac_esp/limine.conf"
+run_update aarch64-apple "$tmp/mac-boot"
+(( status == 0 )) && reboot_offered ||
+  fail "apple: a snapshot can add an entry without changing the approved default" "$(cat "$tmp/out" "$tmp/err")"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+sed -i '/path: .*omarchy_linux-owner.efi/a\    comment: changed default entry' "$mac_esp/limine.conf"
+owner_refused "a changed default stanza" "approved Limine default entry or header has changed"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+sed -i 's@default_entry: Omarchy/linux-owner@default_entry: Omarchy/linux-aurora@' "$mac_esp/limine.conf"
+cp "$tmp/approved-manifest" "$manifest"
+(cd "$mac_root" && sha256sum boot/efi/EFI/Linux/omarchy_linux-aurora.efi) >>"$manifest"
+owner_refused "switching the default even to another recorded UKI" "approved Limine default entry or header has changed"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+
+record_owner_manifest boot/efi/EFI/Linux/omarchy_linux-aurora.efi
+owner_refused "a manifest covering only a nondefault UKI" "must cover the named Omarchy default entry"
+record_owner_manifest "$owner_uki"
+chmod g+w "$manifest"
+owner_refused "a group-writable manifest" "writable only by that user"
+chmod g-w "$manifest"
+chmod g+w "${manifest%/*}"
+owner_refused "a group-writable manifest directory" "writable only by that user"
+chmod g-w "${manifest%/*}"
+cat >"$mac_stubs/stat" <<'STAT'
+#!/bin/bash
+if [[ $1 == "-c" && $2 == "%u %a" && ${4##*/} == "omarchy-mac-boot" ]]; then
+  printf '%s 755\n' "$((EUID + 1))"
+else
+  exec /usr/bin/stat "$@"
+fi
+STAT
+chmod +x "$mac_stubs/stat"
+owner_refused "a manifest directory owned by another user" "writable only by that user"
+rm "$mac_stubs/stat"
+
+for coverage_file in "$owner_stage2" boot/efi/EFI/BOOT/BOOTAA64.EFI "$owner_tree"; do
+  awk -v target="$coverage_file" '$2 != target' "$tmp/approved-manifest" >"$manifest"
+  owner_refused "missing required coverage for $coverage_file" "The owner boot manifest must cover"
+done
+cp "$tmp/approved-manifest" "$manifest"
+head -n 1 "$tmp/approved-manifest" >>"$manifest"
+owner_refused "a duplicate manifest entry" "Missing, duplicate or invalid owner boot file"
+cp "$tmp/approved-manifest" "$manifest"
+(cd "$mac_root" && sha256sum boot/efi/../efi/pinned.dtb) >>"$manifest"
+owner_refused "a manifest entry with a parent segment" "Missing, duplicate or invalid owner boot file"
+cp "$tmp/approved-manifest" "$manifest"
+
+printf 'armed\n' >"$mac_esp/aura-try"
+owner_refused "a pending trial" "An Aura one-boot trial marker is still present"
+rm "$mac_esp/aura-try"
+
+cp "$mac_root/$owner_stage2" "$tmp/stage2"
+printf 'changed Stage 2\n' >>"$mac_root/$owner_stage2"
+mkdir -p "$mac_root/var/lib/omarchy/mac-boot"
+esp_marker=$mac_root/var/lib/omarchy/mac-boot/esp-rebuild-pending
+: >"$esp_marker"
+: >"$mac_root/boot/.omarchy-mac-rolled-back"
+owner_refused "a changed Aura Stage 2" "boot-ctxr.bin: FAILED"
+[[ -f $mac_root/boot/.omarchy-mac-rolled-back && -f $esp_marker ]] || fail "apple: failure retains the recovery markers"
+cp "$tmp/stage2" "$mac_root/$owner_stage2"
+
+sed -i '/path: .*omarchy_linux-owner.efi/s/linux-owner/linux-aurora/' "$mac_esp/limine.conf"
+owner_refused "a default entry targeting another UKI" "does not point to the recorded UKI"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+printf -v wrong_digest '%0128d' 0
+sed -i -E "/path: .*omarchy_linux-owner.efi/s/#[a-f0-9]{128}$/#$wrong_digest/" "$mac_esp/limine.conf"
+owner_refused "an invalid menu UKI digest" "with its correct hash"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+printf 'remember_last_entry: yes\n' >>"$mac_esp/limine.conf"
+owner_refused "a last-used entry override" "without macros, boot conditions or remember_last_entry"
+cp "$tmp/approved-menu" "$mac_esp/limine.conf"
+touch "$mac_esp/EFI/BOOT/Limine.conf"
+owner_refused "a higher-priority EFI menu" "shadows the ESP-root menu"
+rm "$mac_esp/EFI/BOOT/Limine.conf"
+run_update aarch64-apple "$tmp/mac-boot"
+(( status == 0 )) && reboot_offered && [[ ! -e $mac_root/boot/.omarchy-mac-rolled-back && ! -e $esp_marker ]] ||
+  fail "apple: the verified chain completes and clears the recovery markers"
+pass "apple: owner verification allows snapshot entries and blocks drift or an ambiguous boot target"
