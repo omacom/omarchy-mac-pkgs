@@ -25,6 +25,7 @@ Run on an aarch64 Linux host with `/dev/kvm`, passwordless sudo (loop devices, c
 ```bash
 tools/acceptance/mac-image/run --image /var/tmp/omarchy-images/<set>/image
 tools/acceptance/mac-image/run --image DIR --scenario password-change
+tools/acceptance/mac-image/run --image DIR --mac t6041-j614c
 tools/acceptance/mac-image/run --payload omarchy-<date>-aarch64-apple-silicon-mac-edge-os-package.zip
 ```
 
@@ -44,7 +45,7 @@ Passwords are random per run and redacted from the evidence. A kept run director
 ## How the guest stands in for a Mac
 
 - **Kernel and firmware:** the Aurora kernel cannot run on QEMU's `virt` machine (no PL011 console, no generic PCI host, no ACPI). The guest boots a generic Arch Linux ARM `linux-aarch64` kernel from the dated snapshot instead, through UEFI as a Mac boots through U-Boot's: the image's boot tooling builds its UKI only under UEFI. The firmware is Arch Linux's `edk2-aarch64` from the permanent archive, pinned by digest (`OMARCHY_VM_UEFI_URL` and `OMARCHY_VM_UEFI_SHA256` override both). Its initramfs is built inside the image's own root from the image's own mkinitcpio configuration, so the `asahi`, `omarchy-vendorfw`, `omarchy-mac-encrypt`, `sd-encrypt` and `plymouth` hooks under test are the image's. What the image writes to the ESP (its UKI and Limine menu) is what the next boot's command line comes from, but the guest never runs Limine, m1n1 or U-Boot.
-- **Device tree:** QEMU's own `virt` device tree gets an Apple root compatible (`apple,j314s`, `apple,t6000`, `apple,arm-platform`) and model. The image's detectors then take their Apple paths: the Limine rebuild after conversion, the deferred Limine step, and the Apple re-key.
+- **Device tree:** QEMU's own `virt` device tree gets an Apple root compatible (`apple,j314s`, `apple,t6000`, `apple,arm-platform`) and model. The image's detectors then take their Apple paths: the Limine rebuild after conversion, the deferred Limine step, and the Apple re-key. `--mac BOARD` gives it another Mac's root compatible and model instead, read from the image kernel's own device tree for that board (`BOARD` as its `.dtb` is named, such as `t6041-j614c`), so the scenarios take the image's paths for that Mac. A kernel with no device tree for the board stops the run.
 - **Console:** the guest has no display. Owner setup asks on tty1, so credential drop-ins on the kernel command line move it to the serial console and order the serial login after it. The harness answers setup there as an owner would, keeping every default. The disk password prompt appears on the serial console with Plymouth disabled (`plymouth.enable=0`).
 - **Checks:** the harness stops a guest after the writeback interval rather than shutting it down, then checks its disk offline. The disk is attached read-write and mounted read-only, so the kernel replays the journals.
 

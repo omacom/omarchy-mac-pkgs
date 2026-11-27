@@ -16,7 +16,7 @@
 # instead of tty1, the only change to the image's own behaviour. m1n1, U-Boot,
 # Limine itself and the Apple hardware are qualified on a real Mac.
 #
-#   tools/acceptance/mac-image/run --image DIR [--scenario NAME]...
+#   tools/acceptance/mac-image/run --image DIR [--scenario NAME]... [--mac BOARD]
 #   tools/acceptance/mac-image/run --list
 #
 # Evidence goes to ~/vm-evidence/mac-image-<run-id>/ (run.txt, serial logs,
@@ -28,6 +28,7 @@ acceptance=$(cd "$(dirname "$0")/.." && pwd)
 image_dir=""
 payload=""
 lane=""
+mac_board=""
 keep=0
 list=0
 requested=()
@@ -73,6 +74,7 @@ while (($#)); do
     --lane) (($# >= 2)) || { echo "--lane needs edge, rc or stable" >&2; exit 1; }; lane=$2; shift ;;
     --scenario) (($# >= 2)) || { echo "--scenario needs a name" >&2; exit 1; }; IFS=, read -ra names <<<"$2"; requested+=("${names[@]}"); shift ;;
     --list) list=1 ;;
+    --mac) (($# >= 2)) || { echo "--mac needs a board" >&2; exit 1; }; mac_board=$2; shift ;;
     --keep) keep=1 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -98,6 +100,8 @@ done
 [[ -n $image_dir || -n $payload ]] || { echo "give --image DIR or --payload ZIP" >&2; exit 1; }
 [[ -z $image_dir || -z $payload ]] || { echo "--image and --payload are exclusive" >&2; exit 1; }
 [[ -z $image_dir || -z $lane ]] || { echo "--lane is read from IMAGE with --image" >&2; exit 1; }
+[[ -z $mac_board || $mac_board =~ ^t[0-9]{4}-[a-z0-9]+$ ]] ||
+  { echo "--mac takes a device tree name like t6041-j614c, not $mac_board" >&2; exit 1; }
 [[ $run_id =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || { echo "OMARCHY_VM_RUN_ID must be 1-64 letters, digits, dots, dashes or underscores" >&2; exit 1; }
 [[ $vm_cpus =~ ^[1-9][0-9]*$ && $vm_memory_mb =~ ^[1-9][0-9]*$ && $boot_timeout =~ ^[1-9][0-9]*$ && $disk_gib =~ ^[1-9][0-9]*$ &&
   $update_timeout =~ ^[1-9][0-9]*$ ]] || {
@@ -398,6 +402,10 @@ build_generic_kernel() {
   local image_kernel
   image_kernel=$(ls "$lower/usr/lib/modules")
   [[ $(wc -l <<<"$image_kernel") == 1 ]] || fail "the image root holds more than one kernel: $image_kernel"
+  if [[ -n $mac_board ]]; then
+    sudo -n cat "$lower/usr/lib/modules/$image_kernel/dtbs/$mac_board.dtb" >"$work/mac.dtb" 2>/dev/null ||
+      fail "the image's kernel $image_kernel has no device tree for $mac_board"
+  fi
   # The overlay and the chroot's /dev, /proc and /sys live in a private mount
   # namespace that ends with the build. Bound into the host's, they propagate
   # into every service's namespace, where the host's unmount does not reach
@@ -458,6 +466,12 @@ fetch_uefi() {
 # queue: small reads and writes ran 50-65% faster than with no MSI controller.
 machine=${OMARCHY_VM_MACHINE:-virt,accel=kvm,gic-version=3,msi=gicv2m,acpi=off}
 make_apple_dtb() {
+  if [[ -n $mac_board ]]; then
+    local compatible
+    compatible=$(fdtget -t s "$work/mac.dtb" / compatible) && apple_model=$(fdtget -t s "$work/mac.dtb" / model) ||
+      fail "the device tree for $mac_board has no root compatible and model"
+    read -ra apple_compatible <<<"$compatible"
+  fi
   qemu-system-aarch64 -M "$machine,dumpdtb=$work/apple.dtb" -cpu host -m "$vm_memory_mb" -smp "$vm_cpus" \
     -display none >/dev/null 2>&1 || fail "could not dump QEMU's virt device tree"
   fdtput -t s "$work/apple.dtb" / compatible "${apple_compatible[@]}" linux,dummy-virt &&

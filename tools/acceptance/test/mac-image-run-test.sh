@@ -55,6 +55,49 @@ done
 [[ ! -e $test_tmp/home ]] || fail "a refused host keeps no state"
 pass "valid selections reach the host checks, and a refused host keeps no state"
 
+expect_refusal "--mac needs a board" --image "$test_tmp" --mac
+expect_refusal "--mac takes a device tree name like t6041-j614c, not j614c" --image "$test_tmp" --mac j614c
+expect_refusal "this harness boots aarch64 guests" --image "$test_tmp" --mac t6041-j614c
+pass "--mac takes a device tree name, and a valid one reaches the host checks"
+
+# The guest's identity: the default Mac's, or the one --mac names, read from
+# the image kernel's device tree for it. QEMU's dump is a stand-in tree.
+require_command dtc
+require_command fdtget
+awk '/^make_apple_dtb\(\) \{/,/^}/' "$harness" >"$test_tmp/apple-dtb.sh"
+compile_tree() { # output, dts body
+  printf '/dts-v1/;\n/ {\n%s\n};\n' "$2" | dtc -q -I dts -O dtb -o "$1" - || fail "compiles the $1 fixture"
+}
+compile_tree "$test_tmp/virt.dtb" 'compatible = "linux,dummy-virt";'
+compile_tree "$test_tmp/t6041-j614c.dtb" 'compatible = "apple,j614c", "apple,t6041", "apple,arm-platform"; model = "Apple MacBook Pro (14-inch, M4 Max, 2024)";'
+compile_tree "$test_tmp/t6041-j999.dtb" 'compatible = "apple,j999", "apple,t6041";'
+guest_identity() { # [board]
+  rm -rf "$test_tmp/work"
+  mkdir -p "$test_tmp/work"
+  [[ -z ${1:-} ]] || cp "$test_tmp/$1.dtb" "$test_tmp/work/mac.dtb"
+  (
+    fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
+    ok() { :; }
+    qemu-system-aarch64() { cp "$test_tmp/virt.dtb" "${2##*dumpdtb=}"; }
+    eval "$(grep -E '^apple_(compatible|model)=' "$harness")"
+    # shellcheck disable=SC2034 # read by the sourced harness function
+    work=$test_tmp/work machine=virt vm_memory_mb=1 vm_cpus=1 mac_board=${1:-}
+    source "$test_tmp/apple-dtb.sh"
+    make_apple_dtb
+    printf '%s|%s\n' "$(fdtget -t s "$work/apple.dtb" / compatible)" "$(fdtget -t s "$work/apple.dtb" / model)"
+  ) >"$test_tmp/out" 2>&1
+}
+guest_identity || fail "the default identity is set" "$(cat "$test_tmp/out")"
+[[ $(cat "$test_tmp/out") == "apple,j314s apple,t6000 apple,arm-platform linux,dummy-virt|Apple MacBook Pro (14-inch, M1 Pro, 2021)" ]] ||
+  fail "without --mac the guest is the M1 Pro" "$(cat "$test_tmp/out")"
+guest_identity t6041-j614c || fail "the --mac identity is set" "$(cat "$test_tmp/out")"
+[[ $(cat "$test_tmp/out") == "apple,j614c apple,t6041 apple,arm-platform linux,dummy-virt|Apple MacBook Pro (14-inch, M4 Max, 2024)" ]] ||
+  fail "--mac t6041-j614c gives the guest the J614c's compatible and model" "$(cat "$test_tmp/out")"
+! guest_identity t6041-j999 || fail "a board device tree without a model is refused"
+grep -Fq 'the device tree for t6041-j999 has no root compatible and model' "$test_tmp/out" ||
+  fail "names the board whose device tree lacks a model" "$(cat "$test_tmp/out")"
+pass "the guest is the M1 Pro by default and the named board with --mac, from its own device tree"
+
 # The cases that wait for an entrypoint probe the paths their skip reasons name.
 for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check /usr/lib/omarchy/mac-boot/reset-prepare; do
   [[ $(grep -Fc -- "$path" "$harness") -ge 2 ]] || fail "$path is both probed and named in its skip reason"
