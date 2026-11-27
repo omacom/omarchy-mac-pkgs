@@ -1,0 +1,13 @@
+[Unit]
+Description=Fast CPU for the focused app on the 16-inch MacBook Pro with M4 Max
+ConditionFirmware=device-tree-compatible(apple,j616c)
+
+[Service]
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStart=/usr/bin/omarchy-mac-focus-boost
+KillMode=mixed
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
