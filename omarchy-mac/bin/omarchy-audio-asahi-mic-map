@@ -37,7 +37,7 @@ LEGACY = MAPPING + '.monitor'
 VIRTUAL = 'media.class=Audio/Source/Virtual'
 OWNER = 'omarchy.asahi-mic.owner'
 ROUTE_CLIENT = 'omarchy-asahi-mic-route'
-DSP = re.compile(r'effect_output\.j[0-9]+-mic')
+DSP = re.compile(r'effect_output\.[jk][0-9]+-mic')
 # asahi-audio's mono DSP output: AUX0, or MONO since asahi-audio ab1b469.
 DSP_PORTS = ('capture_AUX0', 'capture_MONO')
 # The microphone array's ALSA card, present even when its DSP graph is not,

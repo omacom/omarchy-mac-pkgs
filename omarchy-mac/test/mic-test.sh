@@ -22,6 +22,9 @@ m = importlib.util.module_from_spec(spec); loader.exec_module(m)
 # The host's model and sound cards stay out of it.
 m.MODEL = Path('/nonexistent/model'); m.ASOUND_CARDS = Path('/nonexistent/cards'); m.WIREPLUMBER_CONF = Path('/nonexistent/conf.d')
 DSP = 'effect_output.j414-mic'
+# The M5 MacBook Pros are K boards: their mono DSP source is effect_output.k114-mic or k116-mic.
+assert all(m.DSP.fullmatch(n) for n in (DSP, 'effect_output.k114-mic', 'effect_output.k116-mic'))
+assert not any(m.DSP.fullmatch(n) for n in ('effect_output.x114-mic', 'audio_effect.k114-mic', 'effect_output.k114-mic.monitor'))
 EXISTING = 'module-remap-source', 'source_name=omarchy_asahi_mic master=' + DSP + ' channels=2 source_properties=' + m.OWNER + '=existing'
 # The virtual source 0.1.2 mapped into, under the same name.
 VIRTUAL_MODULE = dict(index='39', name='module-null-sink', argument='media.class=Audio/Source/Virtual sink_name=omarchy_asahi_mic channels=2 sink_properties=' + m.OWNER + '=virtual')

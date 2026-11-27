@@ -1,12 +1,12 @@
 {
   "hidden": [
     "effect_output\\.(j[0-9]+|mini|studio)-convolver",
-    "audio_effect\\.j[0-9]+-mic",
+    "audio_effect\\.[jk][0-9]+-mic",
     "input\\.omarchy_asahi_mic",
     "alsa_output\\.platform-sound\\.RawSpeakers",
     "alsa_input\\.platform-sound\\.RawMics"
   ],
   "replaced": [
-    { "node": "effect_output\\.j[0-9]+-mic", "by": "omarchy_asahi_mic" }
+    { "node": "effect_output\\.[jk][0-9]+-mic", "by": "omarchy_asahi_mic" }
   ]
 }
