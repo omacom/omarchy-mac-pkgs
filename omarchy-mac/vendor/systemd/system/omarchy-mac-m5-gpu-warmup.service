@@ -1,0 +1,11 @@
+# Remove once the M5 GPU no longer faults on the second application job after
+# boot (aurora-silicon/linux#2727). The script does nothing on other Macs.
+[Unit]
+Description=Warm up the M5 GPU before the display manager
+After=systemd-modules-load.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/omarchy-mac/m5-gpu-warmup
+TimeoutStartSec=30s
