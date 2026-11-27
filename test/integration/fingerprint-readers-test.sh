@@ -45,7 +45,9 @@ detects || fail "a Mac whose Touch ID can enrol and match has a reader"
 touch_id ready attached restored legacy
 detects || fail "restored historical enrollments can attempt a real match"
 touch_id ready attached empty legacy
-detects && fail "a historical bag without restored enrollments is no reader"
+detects || fail "a historical bag with an empty restore can enroll its first print"
+touch_id ready attached empty blocked
+detects && fail "a storage refusal still blocks the empty reader"
 touch_id ready attached unproven legacy
 detects && fail "historical provenance cannot bypass a failed restore"
 touch_id ready attached empty unverified

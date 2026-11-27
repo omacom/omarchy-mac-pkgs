@@ -4,6 +4,9 @@
 helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
 options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
 
+managed_comment="# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this."
+guarded=0
+
 guarded_options() {
   printf '%s\n' 'blacklist apple_sep' 'options apple_sep xart_writes=0 provision_keybag=0'
 }
@@ -18,18 +21,22 @@ case ${1:-} in
     [[ -f $options ]] || exit 0
     if grep -Eq '^options apple_sep .*xart_guard_pins=1([[:space:]]|$)' "$options" ||
       { omarchy-hw-apple-silicon && source "$helpers/touchid-board.sh" && guarded_m1; }; then
+      guarded=1
       settings=$(guarded_options)
     else
       exit 0
     fi
     ;;
-  --write|"")
+  --write|--ensure|"")
     omarchy-hw-apple-silicon || exit 1
     source "$helpers/touchid-board.sh" || exit 1
     if guarded_m1; then
+      guarded=1
       settings=$(guarded_options)
     elif ! other_touchid_board; then
       exit 1
+    elif [[ ${1:-} == "--ensure" && -e $options ]]; then
+      exit 0
     elif compatible apple,j616c; then
       settings='options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1'
     else
@@ -42,11 +49,32 @@ if [[ -z ${1:-} ]]; then
   printf '%s\n' "$settings"
 else
   write_settings() {
-    printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." "$settings"
+    printf '%s\n' "$managed_comment" "$settings" || return 1
+    if (( guarded )) && [[ -f $options ]]; then
+      # Supersede this package's writes while retaining e.g. os_uuid_hi/lo.
+      # Ignore a single managed passive line; a separate admin denial survives.
+      awk -v header="$managed_comment" '
+        $0 == header { managed = 1; next }
+        $0 == "blacklist apple_sep" { managed = (managed == 1 ? 2 : 0); next }
+        $0 == "options apple_sep xart_writes=0 provision_keybag=0" && managed == 2 { managed = 0; next }
+        { managed = 0 }
+        $1 == "options" && ($2 == "apple_sep" || $2 == "apple-sep") {
+          opts = ""
+          for (i = 3; i <= NF; i++) {
+            if ($i ~ /^(xart_writes|provision_keybag|xart_guard|xart_guard_pins)=1$/) continue
+            opts = opts " " $i
+          }
+          if (opts) print "options apple_sep" opts
+          next
+        }
+        { print }
+      ' "$options"
+    fi
   }
-  cmp -s "$options" <(write_settings) && exit 0
+  content=$(write_settings) || exit 1
+  cmp -s "$options" <(printf '%s\n' "$content") && exit 0
   mkdir -p -m 0755 "${options%/*}" || exit 1
   temporary=$(mktemp "${options%/*}/.omarchy-mac-touchid.XXXXXX") || exit 1
   trap 'rm -f "$temporary"' EXIT
-  write_settings >"$temporary" && chmod 0644 "$temporary" && mv -fT "$temporary" "$options"
+  printf '%s\n' "$content" >"$temporary" && chmod 0644 "$temporary" && mv -fT "$temporary" "$options"
 fi

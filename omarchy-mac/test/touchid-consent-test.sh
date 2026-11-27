@@ -481,9 +481,12 @@ echo 'options apple_sep xart_writes=0' >"$fixture/admin-options"
 machine apple,j316c apple,t6001
 mkdir -p "$fixture/etc"
 printf '%s\n' 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1' >"$fixture/etc/modprobe.conf"
+echo 'options apple_sep os_uuid_hi=0x1234 os_uuid_lo=0xabcd' >>"$fixture/etc/modprobe.conf"
 rm -rf "$tree"
 run touchid-options --migrate && ! grep -q 'writes=1' "$fixture/etc/modprobe.conf" &&
-  grep -Fxq 'blacklist apple_sep' "$fixture/etc/modprobe.conf" || fail 'upgrading an offline guarded installation withdraws persistent writes'
+  grep -Fxq 'blacklist apple_sep' "$fixture/etc/modprobe.conf" &&
+  grep -Fxq 'options apple_sep os_uuid_hi=0x1234 os_uuid_lo=0xabcd' "$fixture/etc/modprobe.conf" ||
+  fail 'upgrading an offline guarded installation withdraws persistent writes and preserves its identity'
 # Full owner entrypoint with real packaged helpers and activation. Fixed
 # production paths are mapped into this root. Only hardware and services are simulated.
 machine apple,j316c apple,t6001
@@ -827,6 +830,9 @@ ask ready '' && [[ ! -s $fixture/calls && ! -s $fixture/out ]] || fail 'a Touch 
 [[ $(cat "$fixture/pam-calls" 2>/dev/null) == "add" ]] || fail 'a Touch ID turned on before the re-arm existed gets its PAM lines'
 grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1' "$fixture/etc/modprobe.conf" ||
   fail 'a Touch ID turned on before the driver options existed gets them'
+echo 'options apple_sep os_uuid_hi=99' >>"$fixture/etc/modprobe.conf"
+ask ready '' && grep -Fxq 'options apple_sep os_uuid_hi=99' "$fixture/etc/modprobe.conf" ||
+  fail 'revisiting an agreed M2 preserves its existing driver settings'
 machine apple,j313 apple,t8103 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"

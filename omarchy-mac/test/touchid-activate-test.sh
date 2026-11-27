@@ -90,6 +90,12 @@ activate || fail 'Touch ID that is ready, attached, restored and usable succeeds
 [[ ! -e $status.new ]] || fail 'the status is replaced in one step'
 attributes ready attached restored legacy
 activate && [[ $(<"$status") == ready ]] || fail 'a restored historical bag can try a real match'
+attributes ready attached empty legacy
+activate && [[ $(<"$status") == ready ]] || fail 'a validated empty historical bag can enroll its first fingerprint'
+attributes ready attached empty blocked
+! run_script && [[ $(<"$status") == blocked ]] || fail 'a refused write blocks even a previously ready empty bag'
+attributes ready attached empty legacy
+activate
 attributes not-ready attached restored legacy
 ! OMARCHY_MAC_TOUCHID_ATTEMPTS=1 run_script && [[ $(<"$status") == not-ready ]] ||
   fail 'an earlier ready cannot stand in for the historical reader being ready this boot'
