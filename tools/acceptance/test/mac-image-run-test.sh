@@ -61,6 +61,24 @@ for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-oma
 done
 pass "each entrypoint case probes the path its skip reason names"
 
+# The run directory leaves room for every socket a run opens, gpg-agent's in
+# the keyring homes too: a deeper one failed the image's keyring import.
+awk '/^sockets_fit\(\) \{/,/^}/' "$harness" >"$test_tmp/sockets.sh"
+# shellcheck source=/dev/null
+source "$test_tmp/sockets.sh"
+sockets_fit /var/tmp/omarchy-mac-acceptance/44986971818-1/state/runs/44986971818-1 || fail "CI's run directory fits"
+sockets_fit /home/runner/vm-mac-image/runs/20261123T174147Z-1028 || fail "a default run directory fits"
+deep=/var/tmp/omarchy-mac-acceptance/j614c-20261123-214005/state/runs/20261123T174147Z-1028
+((${#deep} + 12 < 100)) || fail "the deep fixture's serial socket alone fits"
+! sockets_fit "$deep" || fail "a run directory too deep for gpg-agent's sockets is refused"
+work_for() { printf '/tmp/%*s' "$(($1 - 37))" '' | tr ' ' x; } # gpg-agent's longest socket path, in bytes
+sockets_fit "$(work_for 106)" || fail "a 106-byte gpg-agent socket path fits"
+! sockets_fit "$(work_for 107)" || fail "a 107-byte gpg-agent socket path is refused"
+wide=/tmp/$(printf '%*s' 40 '' | sed 's/ /é/g')
+[[ $(LC_ALL=C.UTF-8 bash -c 'x=é; echo ${#x}') == 1 ]] || fail "the C.UTF-8 locale counts é as one character"
+! LC_ALL=C.UTF-8 sockets_fit "$wide" || fail "a path that fits in characters but not in bytes is refused"
+pass "a run directory leaves room for gpg-agent's sockets as well as the serial socket, counted in bytes"
+
 # Owner setup over a recorded console: the harness's own serial functions read
 # a log written in advance, and the guest has already exited, so a prompt that
 # never comes fails at once instead of after its timeout.
