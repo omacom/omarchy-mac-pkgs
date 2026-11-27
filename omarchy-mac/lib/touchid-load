@@ -66,16 +66,25 @@ while read -r directive name arguments; do
   fi
   read -r -a fields <<<"$arguments"
   for field in "${fields[@]}"; do
-    case $field in
-      xart_writes=*|provision_keybag=*|xart_guard=*|xart_guard_pins=*)
-        if (( ! writable )) || [[ ${field#*=} == 1 ]]; then
+    key=${field%%=*}
+    key=${key//-/_}
+    value=${field#*=}
+    if [[ $value == \"*\" ]]; then value=${value:1:-1}; fi
+    [[ $field == *=* && $key =~ ^[a-zA-Z0-9_]+$ &&
+      $value =~ ^[+-]?([0-9]+|0[xX][[:xdigit:]]+|0[bB][01]+|0[oO][0-7]+)$ ]] || exit 1
+    case $key in
+      xart_writes|provision_keybag|xart_guard|xart_guard_pins)
+        if (( ! writable )) || [[ $value == 1 ]]; then
           continue
         fi
         echo "Touch ID cannot override apple_sep $field." >&2
         exit 1 ;;
     esac
-    [[ $field =~ ^([a-zA-Z0-9_]+)=(-?[0-9]+|0[xX][[:xdigit:]]+)$ ]] || exit 1
-    additional[${BASH_REMATCH[1]}]=$field
+    if [[ -v additional[$key] && ${additional[$key]} != "$key=$value" ]]; then
+      echo "Touch ID cannot choose between conflicting apple_sep $key values." >&2
+      exit 1
+    fi
+    additional[$key]="$key=$value"
   done
 done <<<"$configuration"
 (( passive )) || exit 1

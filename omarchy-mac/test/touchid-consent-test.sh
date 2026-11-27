@@ -422,7 +422,7 @@ for board in "apple,j313 apple,t8103" "apple,j316c apple,t6001"; do
   machine "$model" "$chip"
   printf 'apple/mesacal-m1.bin\0' >"$tree/soc/spi@39b108000/fingerprint@0/firmware-name"
   echo ready >"$fixture/activation"
-  echo 'options apple_sep xart_guard=1 os_uuid_hi=0x1234' >"$fixture/admin-options"
+  echo 'options apple_sep xart_guard=1 os-uuid-hi="0x1234" os_uuid_lo=+0o777' >"$fixture/admin-options"
   if [[ $model == apple,j313 ]]; then recovery_records 'first setup used'; else recovery_records; fi
   cp "$fixture/guard-list" "$work/spent"
   cp "$fixture/keybag" "$work/refused"
@@ -433,7 +433,8 @@ for board in "apple,j313 apple,t8103" "apple,j316c apple,t6001"; do
     [[ ! -e $fixture/guard-list && $(<"$fixture/firmware/updates/apple/mesacal-m1.bin") == calibration ]] ||
     fail 'only the unused guard list was archived before loading the driver'
   grep -Fxq 'modprobe -a -- macsmc ecdh_generic' "$fixture/calls" &&
-    grep -Fxq 'insmod xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1 os_uuid_hi=0x1234' "$fixture/calls" &&
+    grep '^insmod xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1 ' "$fixture/calls" | grep -qw os_uuid_hi=0x1234 &&
+    grep '^insmod ' "$fixture/calls" | grep -Fqw os_uuid_lo=+0o777 &&
     ! grep -Eq '(xart_writes|provision_keybag)=1' "$fixture/etc/modprobe.conf" &&
     [[ $(<"$fixture/apple-sep.ko.zst") == old ]] ||
     fail 'insertion uses the checked module bytes and one value for each parameter, including the existing identity' "$(<"$fixture/calls")"
@@ -501,6 +502,7 @@ printf '%s\n' 'options apple_sep os_uuid_hi=0x1234 xart_writes=0' >"$fixture/etc
 for attempt in 1 2; do
   ! out=$(run touchid-enable 2>&1) && [[ $out == *'cannot override'* && ! -e $fixture/etc/touchid-on ]] &&
     grep -Fxq 'options apple_sep os_uuid_hi=0x1234 xart_writes=0' "$fixture/etc/modprobe.conf" &&
+    [[ $(grep -o 'xart_writes=0' "$fixture/etc/modprobe.conf" | wc -l) == 1 ]] &&
     ! grep -q '^blacklist apple_sep$' "$fixture/etc/modprobe.conf" && ! grep -q insmod "$fixture/calls" ||
     fail "a failed setup keeps explicit denial and OS identity on attempt $attempt" "$out"
 done

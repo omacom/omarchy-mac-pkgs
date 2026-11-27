@@ -62,9 +62,10 @@ custom_settings() {
       }
     }
     $0 == header { managed = 1; next }
-    $0 == saved { managed = 2; next }
+    $0 == saved { managed = 3; next }
     $0 == "blacklist apple_sep" && managed == 1 { managed = 2; next }
     $0 == passive && managed == 2 { managed = 0; next }
+    managed == 3 && /^options apple_sep (xart_writes=0( provision_keybag=0)?|provision_keybag=0)$/ { managed = 0; next }
     { managed = 0 }
     $1 == "options" && ($2 == "apple_sep" || $2 == "apple-sep") {
       opts = ""
@@ -75,6 +76,7 @@ custom_settings() {
         gsub(/-/, "_", key)
         if (key == "xart_writes" || key == "provision_keybag") {
           if (field == parts[1] "=1") continue
+          if (denied[key]++) continue
           field = key "=0"
         } else if ((key == "xart_guard" || key == "xart_guard_pins") && field == parts[1] "=1") continue
         opts = opts " " field
@@ -91,7 +93,14 @@ if [[ $action == "--remove" ]]; then
     rm -f "$options"
     exit $?
   elif (( guarded )); then
-    content=$(printf '%s\n' "$saved_comment" "$passive" "$custom")
+    defaults=()
+    for option in xart_writes=0 provision_keybag=0; do
+      grep -Eq "^options apple_sep (.*[[:space:]])?$option([[:space:]]|$)" <<<"$custom" || defaults+=("$option")
+    done
+    content=$custom
+    if (( ${#defaults[@]} )); then
+      content=$(printf '%s\n' "$saved_comment" "options apple_sep ${defaults[*]}" "$custom")
+    fi
   else
     content=$custom
   fi
