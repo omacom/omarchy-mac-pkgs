@@ -190,6 +190,59 @@ retire_hook
 rm -rf "$tmp/elsewhere"
 pass "an upgrade, a reinstall, an owned or intervening tree (said why), no kernel-modules-hook, or DTBS not from the -ARCH default moves nothing"
 
+# dtc 1.7.1 or newer for dtb-overlays.sh: fdtoverlay -i BASE -o OUT OVERLAY,
+# and fdtget finds no opt-in or skip property.
+mkdir -p "$tmp/dtc"
+cat >"$tmp/dtc/dtc" <<'SH'
+#!/bin/bash
+[[ $1 != "--version" ]] || echo "Version: DTC 1.7.2"
+SH
+cat >"$tmp/dtc/fdtoverlay" <<'SH'
+#!/bin/bash
+cat "$2" "$5" >"$4"
+SH
+cat >"$tmp/dtc/fdtget" <<'SH'
+#!/bin/bash
+exit 1
+SH
+chmod +x "$tmp/dtc"/*
+
+# The packaged configuration with a package-owned overlay that applies to the
+# running kernel's t6000 device tree, through dtb-overlays.sh and those tools.
+# Arguments are configuration lines ahead of the packaged ones.
+overlay_mac() {
+  downgraded
+  mkdir -p "$mac_root/usr/lib/omarchy-mac-boot/dtb-overlays/t6000"
+  printf 'overlay\n' >"$mac_root/usr/lib/omarchy-mac-boot/dtb-overlays/t6000/omarchy-ane.dtbo"
+  {
+    printf '%s\n' "PATH=$tmp/dtc:\$PATH" "OMARCHY_DTB_OVERLAYS_ROOT=$mac_root" "$@"
+    sed "s|/usr/lib/omarchy-mac/boot/dtb-overlays.sh|$ROOT/lib/dtb-overlays.sh|" "$ROOT/files/etc/default/update-m1n1"
+  } >"$mac_root/etc/default/update-m1n1"
+}
+overlay_mac
+configured_dtbs=$(env -i PATH=/usr/bin:/bin bash --noprofile --norc -c '. "$1" 2>/dev/null; printf "%s" "${DTBS-}"' _ "$mac_root/etc/default/update-m1n1")
+[[ $configured_dtbs == *"$mac_root/run/omarchy-dtb-overlays/"* ]] ||
+  fail "the fixture's overlay applies, so update-m1n1's configuration sets DTBS from it" "$configured_dtbs"
+overlay_mac
+printf 'DTBS="/lib/modules/%s/dtbs/*.dtb"\n' "$mac_kver" >>"$mac_root/etc/default/update-m1n1"
+retire_hook
+left_alone "an owner's DTBS after the overlays"
+pass "with an overlay that applies, an owner's DTBS still leaves the saved modules alone"
+overlay_mac
+retire_hook
+(( retire_status == 0 )) && [[ ! -e $modules/$running && -f $modules/.old/$running/vmlinuz ]] ||
+  fail "a downgrade's saved modules move to .old when only a package-owned overlay sets DTBS" "status $retire_status: $(ls -A "$modules")"
+[[ ! -e $mac_root/run/omarchy-dtb-overlays ]] || fail "reading update-m1n1's configuration builds no overlaid device trees"
+pass "an overlay that applies is not an owner's DTBS: the hook reads the configuration without building overlays and retires the saved modules"
+for setting in "DTBS=\"/lib/modules/$mac_kver/dtbs/*.dtb\"" "M1N1_UPDATE_DISABLED=1"; do
+  for line in "OMARCHY_DTB_OVERLAYS=0; $setting" "if . $ROOT/lib/dtb-overlays.sh; then $setting; fi"; do
+    overlay_mac "$line"
+    retire_hook
+    left_alone "$line"
+  done
+done
+pass "with an overlay that applies, the owner's settings stop the hook beside the switch and after the library"
+
 downgraded
 TEST_RSYNC_FAILS=1 retire_hook
 (( retire_status == 1 )) && grep -Fq "nothing was removed" "$tmp/retire.err" && [[ -d $modules/$running && -f $modules/$running/vmlinuz ]] ||
