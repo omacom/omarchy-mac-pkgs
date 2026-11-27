@@ -157,6 +157,19 @@ for name, payload in (("j616c-key.bin", im4p), ("j616c-cal.bin", fsc2_im4p)):
     with open(os.path.join(out, name), "wb") as fd:
         fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
                            + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
+# A 13-inch M4 MacBook Air's: the same records, sealed for its own SoC (T8132).
+j713_seal = der(0x30, der(0x16, b"IM4M") + der(0x02, b"\x00") + der(0x04, b"a" * 900))
+archive("j713.tar.gz", [("MSRk-00003356-AA", msrk), ("FSC2-00003356-AA", fsc2), ("seal-00008132-001E", j713_seal),
+                        (named, trust), ("trustobject-current", trust)])
+archive("j713-other-chip.tar.gz", [("MSRk-00003356-AA", msrk), ("FSC2-00003356-AA", fsc2), ("seal-00008140-001E", j713_seal),
+                                   (named, trust), ("trustobject-current", trust)])
+with open(os.path.join(out, "j713-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + msrk + filler(4096) + fsc2 + j713_seal + trust + filler(1 << 20))
+for name, payload in (("j713-key.bin", im4p), ("j713-cal.bin", fsc2_im4p)):
+    image = der(0x30, der(0x16, b"IMG4") + payload + der(0xA0, j713_seal))
+    with open(os.path.join(out, name), "wb") as fd:
+        fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
+                           + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
 PY
 python3 -I "$work/factory.py" "$work/factory"
 # Any copy of the sensor key under the fixture other than the one named.
@@ -818,6 +831,56 @@ PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
     ! -e $fixture/etc/touchid-on ]] ||
   fail "turning it off deletes an M4 Max's sensor key and calibration"
 pass 'the 16-inch M4 Max rebuilds its calibration and sensor key from its own factory records'
+
+# The 13-inch M4 MacBook Air: the same generation of sensor under /soc, its
+# records sealed for 00008132.
+j713() {
+  machine apple,j713 apple,t8132 apple,arm-platform
+  rm -rf "$tree/soc" "$tree/spi@429108000" "$fixture/firmware/updates" "$fixture/etc/touchid-on"
+  mkdir -p "$tree/soc/spi@3ad108000/fingerprint@0" "$fixture/esp/asahi"
+  printf 'apple,mesa-fingerprint\0' >"$tree/soc/spi@3ad108000/fingerprint@0/compatible"
+  printf 'okay\0' >"$tree/soc/spi@3ad108000/fingerprint@0/status"
+  printf 'apple/mesacal-j713.bin\0apple/msrk-j713.bin\0' >"$tree/soc/spi@3ad108000/fingerprint@0/firmware-name"
+  cp "$work/factory/j713.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+}
+j713
+[[ $(eligibility) == "available" ]] || fail 'an M4 Air with its factory records on the ESP is available' "$(eligibility)"
+rm "$fixture/esp/asahi/all_firmware.tar.gz"
+[[ $(eligibility) == "unsupported:no-calibration" ]] || fail "an M4 Air without its factory records can't rebuild its calibration"
+mkdir -p "$fixture/firmware/updates/apple"
+cp "$work/factory/j713-cal.bin" "$fixture/firmware/updates/apple/mesacal-j713.bin"
+[[ $(eligibility) == "unsupported:no-root-key" ]] || fail "an M4 Air with a calibration but no records can't rebuild its sensor key"
+for board in j604 j715; do
+  machine "apple,$board" apple,t8132 apple,arm-platform
+  [[ $(eligibility) == "unsupported:board" ]] || fail 'a T8132 board not yet tried is unsupported' "$board"
+done
+machine apple,j713 apple,t8122 apple,arm-platform
+[[ $(eligibility) == "unsupported:board" ]] || fail 'the M4 Air is admitted on its own SoC only'
+j713
+echo ready >"$fixture/activation"
+container=$work/factory/j713-isc.img
+out=$(run touchid-enable 2>&1) || fail 'an M4 Air turns on' "$out"
+for file in cal:mesacal-j713.bin key:msrk-j713.bin; do
+  installed=$fixture/firmware/updates/apple/${file#*:}
+  cmp -s "$installed" "$work/factory/j713-${file%%:*}.bin" && [[ $(stat -c %a "$installed") == 600 && ! -e $installed.new ]] ||
+    fail "the M4 Air's ${file#*:} is rebuilt from its factory records, root-only" "$out"
+done
+! grep -Fxq calibration "$fixture/calls" || fail "the M4 Air's calibration is resealed, never carved"
+j713
+cp "$work/factory/j713-other-chip.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+container=$work/factory/j713-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"is not an M4 MacBook Air's"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j713*') ]] ||
+  fail "records sealed for another SoC give an M4 Air nothing, and it says why" "$out"
+unset container
+mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
+cp "$work/factory/j713-key.bin" "$fixture/firmware/updates/apple/msrk-j713.bin"
+cp "$work/factory/j713-cal.bin" "$fixture/firmware/updates/apple/mesacal-j713.bin"
+touch "$fixture/etc/touchid-on"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
+  [[ -z $(find "$fixture/firmware" -name '*j713*') && ! -e $fixture/etc/touchid-on ]] ||
+  fail "turning it off deletes an M4 Air's sensor key and calibration"
+pass 'the 13-inch M4 MacBook Air rebuilds its calibration and sensor key from its own factory records'
 
 if command -v systemd-analyze >/dev/null; then
   stub_systemd_boot_targets "$work/root"

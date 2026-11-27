@@ -2,8 +2,8 @@
 # omarchy-lifecycle-dispatch disable-fingerprint: Omarchy's fingerprint removal
 # runs this as root once the fingerprints are deleted. Removing the owner's
 # agreement stops the driver loading, and writing, at boot; the key store stays.
-# The sensor key a Neo or a 16-inch M4 Pro or M4 Max rebuilt goes too, with the
-# M4s' calibration: turning Touch ID on again rebuilds them.
+# The sensor key a Neo or an M4 Mac rebuilt goes too, with the M4s'
+# calibration: turning Touch ID on again rebuilds them.
 omarchy-hw-apple-silicon || exit 0
 
 # Waits for a Touch ID setup still running, which could otherwise install its
@@ -20,7 +20,8 @@ fi
 # What Touch ID setup rebuilt from the factory records; the next setup rebuilds it.
 rebuilt=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin
   /usr/lib/firmware/updates/apple/mesacal-j616s.bin /usr/lib/firmware/updates/apple/msrk-j616c.bin
-  /usr/lib/firmware/updates/apple/mesacal-j616c.bin)
+  /usr/lib/firmware/updates/apple/mesacal-j616c.bin /usr/lib/firmware/updates/apple/msrk-j713.bin
+  /usr/lib/firmware/updates/apple/mesacal-j713.bin)
 records=(/etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf)
 present=()
 for file in "${records[@]}" "${rebuilt[@]}" "${rebuilt[@]/%/.new}"; do
