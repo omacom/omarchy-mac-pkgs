@@ -14,6 +14,7 @@ build() {
     add_binary mv
     add_binary rmdir
     add_binary sleep
+    add_binary timeout
     add_file /usr/lib/omarchy/initcpio/omarchy-vendorfw.sh
     add_file /usr/lib/omarchy/initcpio/omarchy-vendorfw-initrd.sh
     add_file /usr/lib/omarchy/initcpio/omarchy-vendorfw.service \
