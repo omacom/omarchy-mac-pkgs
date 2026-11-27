@@ -39,9 +39,9 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 - With FileVault on, macOS can't unlock its disk and won't start, and the startup picker may not open. Getting the Mac back takes a DFU restore, which erases it.
 - With FileVault off, macOS resets its keychain and Touch ID fingerprints and shows a warning.
 
-On a MacBook Air M1, the first setup rewrites three records in that shared state that macOS created. Setup offers Touch ID there only with a kernel whose Secure Enclave driver lets exactly those three through and keeps refusing changes to every other macOS record. If that Mac later starts a kernel without that driver, Touch ID stays off until one with it is back. Back up macOS before you turn Touch ID on there too.
+On the M1 MacBook Air and the 16-inch 2021 MacBook Pro with M1 Max, setup requires a kernel that guards the shared records during first setup. The M1 Max also requires the driver's enrollment and verification startup fixes. Setup checks the driver at every boot before permitting writes. If the driver was already running when you agreed, restart your Mac and open fingerprint setup again. If setup asks for a compatible kernel, install one with those features and restart.
 
-On the 16-inch 2021 MacBook Pro with M1 Max, setup requires a driver that can pin those records under the guard and control storage writes and key creation separately. Enrollment and a separate fingerprint match have been verified on that model with a patched Aurora 7.2.11 kernel.
+An interrupted first setup can leave a key store whose creation the Secure Enclave never confirmed. Setup preserves it and tells you when it needs inspection. A confirmed refusal can be retried automatically on the next guarded load if no shared record was pinned. Existing fingerprints and their key store are kept.
 
 On a MacBook Neo or a 16-inch MacBook Pro with M4 Pro, setup also reads the sensor's key (and on the M4 Pro its calibration) from the factory records the installer left on the boot partition, into firmware files only root can read. Turning Touch ID off deletes those files, and turning it on again rebuilds them.
 

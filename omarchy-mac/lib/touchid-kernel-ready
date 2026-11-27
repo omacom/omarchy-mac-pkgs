@@ -1,38 +1,55 @@
 #!/bin/bash
-# Check the running kernel's driver before offering setup or loading it at boot.
-
-tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
+# Exit 1 for an incompatible module image, 2 for a driver that needs a restart.
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
 modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
-omarchy-hw-apple-silicon || exit 0
-
-compatible() {
-  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
-}
-
-if compatible apple,t6001 && compatible apple,j316c; then
-  # A module loaded earlier keeps the settings it actually probed with.
-  module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
-  driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
-  if [[ -d $module ]]; then
-    for diag in "$driver"/*/diag; do
-      if [[ -r $diag/xart && $(<"$diag/xart") == "disabled" ]]; then
-        continue
-      elif [[ ! -r $diag/xart || $(<"$diag/xart") != "enabled" || ! -r $diag/xart_guard || $(<"$diag/xart_guard") != "1" ]]; then
-        echo "Touch ID needs the running M1 Max driver to report read-only storage or guard level 1." >&2
-        exit 1
-      fi
-    done
-  fi
-elif ! { compatible apple,t8103 && compatible apple,j313; }; then
-  exit 0
+module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
+status=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+omarchy-hw-apple-silicon || exit 1
+source "$helpers/touchid-board.sh" || exit 1
+if ! guarded_m1; then
+  other_touchid_board
+  exit $?
 fi
 
-parameters=$("$modinfo" -p apple_sep 2>/dev/null) || exit 1
-# Both M1 setup paths pass all four options. A driver exposing just the pins
-# can use a different interface to enable storage writes and provisioning.
-for parameter in xart_guard xart_guard_pins xart_writes provision_keybag; do
-  if ! grep -q "^$parameter:" <<<"$parameters"; then
-    echo "Touch ID stays off because this kernel's apple_sep lacks $parameter." >&2
-    exit 1
+# Test the file we will insert, even if pacman replaces the installed module.
+disk_ready() {
+  local image=$1 parameters parameter
+  [[ $("$modinfo" -F xart_guard_pins_abi "$image") == "1" ]] || return 1
+  if compatible apple,j316c; then
+    [[ $("$modinfo" -F t6000_registration "$image") == "1" ]] || return 1
   fi
-done
+  parameters=$("$modinfo" -p "$image") || return 1
+  for parameter in xart_guard xart_guard_pins xart_writes provision_keybag; do
+    grep -q "^$parameter:" <<<"$parameters" || return 1
+  done
+}
+
+case ${1:-} in
+  image) disk_ready "${2:?missing module image}"; exit $? ;;
+  activate) ;;
+  "") disk_ready apple_sep || exit 1 ;;
+  *) exit 1 ;;
+esac
+
+# No diagnostics yet is normal during binding. Setup can record consent for the
+# next boot, but activation always requires proof from this running driver.
+if [[ -d $module ]]; then
+  shopt -s nullglob
+  diagnostics=("$driver"/*/diag)
+  if (( ${#diagnostics[@]} == 1 )); then
+    diag=${diagnostics[0]}
+    if [[ -r $diag/xart && $(<"$diag/xart") == "enabled" ]]; then
+      [[ -r $diag/xart_guard && $(<"$diag/xart_guard") == 1 &&
+        -r $diag/xart_guard_pins && $(<"$diag/xart_guard_pins") == 1 &&
+        -s ${status%/*}/touchid-guarded-build-id ]] &&
+        cmp -s "${status%/*}/touchid-guarded-build-id" "$module/notes/.note.gnu.build-id" || exit 2
+      exit 0
+    elif [[ -r $diag/xart && $(<"$diag/xart") != "disabled" ]]; then
+      exit 2
+    fi
+  elif (( ${#diagnostics[@]} > 1 )); then
+    exit 2
+  fi
+fi
+[[ ${1:-} != "activate" ]] || exit 2

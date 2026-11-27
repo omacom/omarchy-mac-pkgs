@@ -11,9 +11,7 @@ python=${OMARCHY_MAC_TOUCHID_PYTHON:-python3}
 esp=${OMARCHY_MAC_TOUCHID_ESP:-/boot/efi}
 omarchy-hw-apple-silicon || exit 0
 
-compatible() {
-  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
-}
+source "$helpers/touchid-board.sh" || exit 1
 
 installed() {
   local directory
@@ -48,25 +46,23 @@ elif [[ -z $sensor ]]; then
   exit 0
 fi
 
-# The 16-inch M4 Pro and M4 Max: on each, Touch ID has enrolled, matched, and
-# matched again after a restart. Their sensor loads a calibration and a root key that are both
-# rebuilt from sealed factory records.
-sealed_board() {
-  { compatible apple,t6040 && compatible apple,j616s; } || { compatible apple,t6041 && compatible apple,j616c; }
-}
-
 # These cold-boot Macs need a kernel that can pin setup records under the guard.
-if { compatible apple,t8103 && compatible apple,j313; } || { compatible apple,t6001 && compatible apple,j316c; }; then
-  if ! "$helpers/touchid-kernel-ready" 2>/dev/null; then
-    echo unsupported:kernel
+if guarded_m1; then
+  "$helpers/touchid-kernel-ready" 2>/dev/null
+  case $? in
+    0) ;;
+    2) echo unsupported:restart; exit 0 ;;
+    *) echo unsupported:kernel; exit 0 ;;
+  esac
+  if [[ ! -d ${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep} ]] &&
+    ! "$helpers/touchid-retry-aside" --check 2>/dev/null; then
+    echo unsupported:recovery
     exit 0
   fi
 elif compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
   echo unsupported:m1-family
   exit 0
-elif ! compatible apple,t8112 && ! compatible apple,t6020 && ! compatible apple,t6021 && ! compatible apple,t8140 &&
-  ! { compatible apple,t8122 && { compatible apple,j613 || compatible apple,j615; }; } &&
-  ! sealed_board; then
+elif ! other_touchid_board; then
   echo unsupported:board
   exit 0
 fi

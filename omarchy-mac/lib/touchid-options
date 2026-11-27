@@ -1,22 +1,52 @@
 #!/bin/bash
-# Prints the modprobe.d line that lets the Secure Enclave driver set up Touch ID
-# on this Mac, for touchid-enable and enable-fingerprint to write.
+# Guarded M1 writes are authorized for one checked insertion only. An automatic
+# load on an older kernel must never inherit permission to write or provision.
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
 
-tree=${OMARCHY_MAC_TOUCHID_TREE:-/proc/device-tree}
-omarchy-hw-apple-silicon || exit 0
-
-compatible() {
-  [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
+guarded_options() {
+  printf '%s\n' 'blacklist apple_sep' 'options apple_sep xart_writes=0 provision_keybag=0'
 }
 
-options="xart_writes=1 provision_keybag=1"
-# M1 cold-boot setup can rewrite shared session records. Pin them under the
-# level-1 guard, as in the guarded J313 and J316c hardware tests.
-if { compatible apple,t8103 && compatible apple,j313; } || { compatible apple,t6001 && compatible apple,j316c; }; then
-  options+=" xart_guard=1 xart_guard_pins=1"
-elif compatible apple,j616c; then
-  # The 16-inch M4 Max was qualified with the guard on. Its profile defaults
-  # to guard off in Aurora 7.3.0.aurora1-40.
-  options+=" xart_guard=1"
+case ${1:-} in
+  --migrate)
+    # The old guarded options identify an opted-in M1 even in an offline root.
+    [[ -f $options ]] || exit 0
+    status=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+    lock=${status%/*}/touchid.lock
+    mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock" && flock -w 300 "$lock_fd" || exit 1
+    [[ -f $options ]] || exit 0
+    if grep -Eq '^options apple_sep .*xart_guard_pins=1([[:space:]]|$)' "$options" ||
+      { omarchy-hw-apple-silicon && source "$helpers/touchid-board.sh" && guarded_m1; }; then
+      settings=$(guarded_options)
+    else
+      exit 0
+    fi
+    ;;
+  --write|"")
+    omarchy-hw-apple-silicon || exit 1
+    source "$helpers/touchid-board.sh" || exit 1
+    if guarded_m1; then
+      settings=$(guarded_options)
+    elif ! other_touchid_board; then
+      exit 1
+    elif compatible apple,j616c; then
+      settings='options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1'
+    else
+      settings='options apple_sep xart_writes=1 provision_keybag=1'
+    fi
+    ;;
+  *) exit 1 ;;
+esac
+if [[ -z ${1:-} ]]; then
+  printf '%s\n' "$settings"
+else
+  write_settings() {
+    printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." "$settings"
+  }
+  cmp -s "$options" <(write_settings) && exit 0
+  mkdir -p -m 0755 "${options%/*}" || exit 1
+  temporary=$(mktemp "${options%/*}/.omarchy-mac-touchid.XXXXXX") || exit 1
+  trap 'rm -f "$temporary"' EXIT
+  write_settings >"$temporary" && chmod 0644 "$temporary" && mv -fT "$temporary" "$options"
 fi
-printf 'options apple_sep %s\n' "$options"

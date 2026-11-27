@@ -42,6 +42,12 @@ detects() {
 detects && fail "a Mac whose Touch ID was never activated has no reader"
 touch_id ready attached restored usable
 detects || fail "a Mac whose Touch ID can enrol and match has a reader"
+touch_id ready attached restored legacy
+detects || fail "restored historical enrollments can attempt a real match"
+touch_id ready attached empty legacy
+detects && fail "a historical bag without restored enrollments is no reader"
+touch_id ready attached unproven legacy
+detects && fail "historical provenance cannot bypass a failed restore"
 touch_id ready attached empty unverified
 detects || fail "a Mac with nothing enrolled yet, behind a guard that has refused nothing, has a reader"
 pass "the runtime finds Touch ID where omarchy-mac names it, once it can enrol and match"
