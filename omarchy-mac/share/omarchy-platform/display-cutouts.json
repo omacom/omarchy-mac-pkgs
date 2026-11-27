@@ -3,6 +3,7 @@
     { "connector": "eDP", "width": 3024, "height": 1964, "top": 64 },
     { "connector": "eDP", "width": 3024, "height": 1986, "top": 96 },
     { "connector": "eDP", "width": 3456, "height": 2234, "top": 64 },
+    { "connector": "eDP", "width": 3472, "height": 2266, "top": 96 },
     { "connector": "eDP", "width": 2560, "height": 1664, "top": 56 },
     { "connector": "eDP", "width": 2880, "height": 1864, "top": 56 }
   ]
