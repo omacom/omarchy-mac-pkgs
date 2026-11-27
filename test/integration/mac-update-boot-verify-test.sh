@@ -14,7 +14,12 @@ require_command b2sum
 # omarchy update runs inside the runtime's sudo boundary fixture, as upstream's
 # update-boot-verify test runs it: every step but its boot check is a stub, and
 # the boot check runs the real omarchy-update-boot, dispatcher and detector.
+host_path=$PATH
 source "$OMARCHY_TEST_RUNTIME/test/shell.d/fixtures/sudo-boundary-test.sh"
+# Newer fixtures put their stand-ins, cp among them, first on PATH. Only the
+# update runs with them; the Limine Mac fixture builds with the host's commands.
+boundary_path=$PATH
+PATH=$host_path
 copy_boundary_file bin/omarchy-update
 rm "$SUDO_TEST_ROOT/bin/omarchy-update-boot"
 for command in omarchy-update-boot omarchy-lifecycle-dispatch omarchy-hw-platform; do
@@ -27,14 +32,16 @@ mkdir -p "$tmp"
 fake_platform "$tmp/aarch64-apple" "$(runtime_platform aarch64-apple)"
 
 # omarchy update -y on platform $1, with the boot package's entrypoints in the
-# lifecycle root $2. The update's PATH is fixed, so uname goes beside the stubs.
+# lifecycle root $2, on the boundary's PATH. uname goes beside the stubs.
 run_update() {
   local platform=$1 lifecycle=$2
+  PATH=$boundary_path
   reset_boundary
-  cp "$tmp/$platform/bin/uname" "$SUDO_TEST_ROOT/bin/uname"
+  /usr/bin/cp "$tmp/$platform/bin/uname" "$SUDO_TEST_ROOT/bin/uname"
   status=0
   OMARCHY_PROC_ROOT="$tmp/$platform/proc" OMARCHY_LIFECYCLE_ROOT="$lifecycle" \
     "$SUDO_TEST_ROOT/bin/omarchy-update" -y >"$tmp/out" 2>"$tmp/err" || status=$?
+  PATH=$host_path
 }
 
 ran() {
