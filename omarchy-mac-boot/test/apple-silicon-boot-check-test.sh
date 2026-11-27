@@ -1236,6 +1236,37 @@ run_check --boot-chain
 expect_pass "an empty M1N1_UPDATE_DISABLED"
 pass "M1N1_UPDATE_DISABLED fails Aurora's Stage 2 in both checks"
 
+# When bootchain.py selects m1n1/boot.bin while m1n1/boot-ctxr.bin is also on
+# the ESP, warn on stderr only (including in rollback-ESP mode) without failing.
+uncompared_warning="Apple Silicon boot check: warning: Aurora's update-m1n1 targets m1n1/boot.bin, so this check did not compare m1n1/boot-ctxr.bin on the system ESP (/boot/efi); a Stage 1 that boots m1n1/boot-ctxr.bin is not covered"
+aurora_system
+run_check --boot-chain
+expect_pass "Aurora's m1n1/boot-ctxr.bin as the compared target"
+! grep -Fq "m1n1/boot-ctxr.bin" "$test_tmp/out" "$test_tmp/err" ||
+  fail "no uncompared warning when m1n1/boot-ctxr.bin is the compared target" "$(cat "$test_tmp/out" "$test_tmp/err")"
+rm "$root/usr/share/aura/monitor-free"
+write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot.bin" t6000-j314s.dtb t6041-j616c.dtb t6041-j616s.dtb t8103-j274.dtb
+run_check --boot-chain
+expect_pass "Aurora's m1n1/boot.bin with an uncompared m1n1/boot-ctxr.bin on the ESP"
+grep -Fq "$uncompared_warning" "$test_tmp/err" ||
+  fail "an uncompared m1n1/boot-ctxr.bin warns on stderr" "$(cat "$test_tmp/err")"
+! grep -Fq "m1n1/boot-ctxr.bin" "$test_tmp/out" ||
+  fail "the uncompared m1n1/boot-ctxr.bin warning stays off stdout" "$(cat "$test_tmp/out")"
+OMARCHY_BOOT_CHECK_ROLLBACK_ESP=1 run_check --boot-chain
+expect_pass "rollback-ESP mode with an uncompared m1n1/boot-ctxr.bin on the ESP"
+grep -Fq "m1n1/boot.bin and Limine on the system ESP are the ones that booted this snapshot" "$test_tmp/out" ||
+  fail "rollback-ESP mode reports m1n1/boot.bin on stdout" "$(cat "$test_tmp/out")"
+grep -Fq "$uncompared_warning" "$test_tmp/err" ||
+  fail "rollback-ESP mode warns on stderr about an uncompared m1n1/boot-ctxr.bin" "$(cat "$test_tmp/err")"
+! grep -Fq "m1n1/boot-ctxr.bin" "$test_tmp/out" ||
+  fail "rollback-ESP mode keeps the uncompared m1n1/boot-ctxr.bin warning off stdout" "$(cat "$test_tmp/out")"
+rm "$esp/m1n1/boot-ctxr.bin"
+run_check --boot-chain
+expect_pass "Aurora's m1n1/boot.bin without m1n1/boot-ctxr.bin on the ESP"
+! grep -Fq "m1n1/boot-ctxr.bin" "$test_tmp/out" "$test_tmp/err" ||
+  fail "no uncompared warning when m1n1/boot-ctxr.bin is absent" "$(cat "$test_tmp/out" "$test_tmp/err")"
+pass "an uncompared m1n1/boot-ctxr.bin alongside m1n1/boot.bin warns on stderr only"
+
 # What bootchain.py refuses, the check reports; a wrapper it cannot read, or
 # a Stage 2 built from another kernel's device trees, fails closed.
 aurora_system

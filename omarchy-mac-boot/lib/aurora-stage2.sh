@@ -199,6 +199,8 @@ aurora_check_stage2() {
 
   mount_system_esp
   sudo test -f "$mountpoint/$stage2" || fail "the system ESP ($esp) has no $stage2"
+  [[ $stage2 != "m1n1/boot.bin" ]] || ! sudo test -f "$mountpoint/m1n1/boot-ctxr.bin" ||
+    echo "Apple Silicon boot check: warning: Aurora's update-m1n1 targets $stage2, so this check did not compare m1n1/boot-ctxr.bin on the system ESP ($esp); a Stage 1 that boots m1n1/boot-ctxr.bin is not covered" >&2
   limine_on_system_esp
   if [[ ${OMARCHY_BOOT_CHECK_ROLLBACK_ESP:-0} == 1 ]]; then
     echo "Apple Silicon boot check: $stage2 and Limine on the system ESP are the ones that booted this snapshot"
