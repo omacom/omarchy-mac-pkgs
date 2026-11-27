@@ -213,6 +213,23 @@ grep -Fxq "FAIL  boot-file        /boot/efi/limine.conf is missing on a limine M
 pass "a Limine Mac without its unified kernel image or limine.conf fails"
 make_fixture
 
+# An M4 on aura boots m1n1/boot-ctxr.bin, alone or beside a boot.bin.
+printf 'aura stage 2\n' >"$fixture/boot/efi/m1n1/boot-ctxr.bin"
+run_check || fail "a Mac with both Stage 2 files passes" "$(cat "$test_tmp/out")"
+for name in boot.bin boot-ctxr.bin; do
+  grep -Fxq "INFO  boot-file        $(file_sha256 "$fixture/boot/efi/m1n1/$name")  /boot/efi/m1n1/$name" "$test_tmp/out" ||
+    fail "each Stage 2 file present is hashed: $name" "$(cat "$test_tmp/out")"
+done
+rm "$fixture/boot/efi/m1n1/boot.bin"
+run_check || fail "an aura Mac whose Stage 2 is boot-ctxr.bin passes" "$(cat "$test_tmp/out")"
+grep -Fxq "INFO  boot-file        $(file_sha256 "$fixture/boot/efi/m1n1/boot-ctxr.bin")  /boot/efi/m1n1/boot-ctxr.bin" "$test_tmp/out" &&
+  ! grep -q 'boot\.bin is missing' "$test_tmp/out" || fail "boot-ctxr.bin stands in for boot.bin" "$(cat "$test_tmp/out")"
+rm "$fixture/boot/efi/m1n1/boot-ctxr.bin"
+run_check && fail "a Mac with no Stage 2 fails"
+grep -Fxq "FAIL  boot-file        /boot/efi/m1n1/boot.bin is missing on a limine Mac" "$test_tmp/out" || fail "a missing Stage 2 is named" "$(cat "$test_tmp/out")"
+pass "the Stage 2 is boot.bin or, on an aura M4, boot-ctxr.bin, and each one present is hashed"
+make_fixture
+
 if TEST_SYSTEMCTL_DOWN=1 TEST_DUMMY_SINK=1 run_check; then
   fail "an unanswered systemctl and a dummy sink fail"
 fi

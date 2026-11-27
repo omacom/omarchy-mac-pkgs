@@ -142,7 +142,21 @@ else
   report INFO boot-loader "GRUB, ESP ${esp:-not mounted}"
   boot_files=("$root/boot/vmlinuz-$kernel" "$root/boot/grub/grub.cfg")
 fi
-[[ -n $esp ]] && boot_files+=("$esp/m1n1/boot.bin")
+# aura's Mach-O Stage 1 (M4 and later) boots m1n1/boot-ctxr.bin, with or without
+# a boot.bin beside it, so hash each one present.
+if [[ -n $esp ]]; then
+  stage2=()
+  for name in boot.bin boot-ctxr.bin; do
+    if (( have_sudo )) && sudo -n test -f "$esp/m1n1/$name"; then
+      stage2+=("$esp/m1n1/$name")
+    fi
+  done
+  if (( ${#stage2[@]} )); then
+    boot_files+=("${stage2[@]}")
+  else
+    boot_files+=("$esp/m1n1/boot.bin")
+  fi
+fi
 if (( have_sudo )); then
   for file in "${boot_files[@]}"; do
     if hash=$(sudo -n sha256sum "$file" 2>/dev/null); then
