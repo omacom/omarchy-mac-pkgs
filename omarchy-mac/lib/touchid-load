@@ -49,10 +49,15 @@ fi
 declare -A additional=()
 passive=0
 while read -r directive name arguments; do
-  [[ ${name//-/_} == "apple_sep" ]] || continue
   case $directive in
-    install) echo "Touch ID needs the custom apple_sep install command to be reviewed." >&2; exit 1 ;;
-    options) ;;
+    install|softdep)
+      # kmod applies these directives by pattern, including to named loads.
+      if [[ apple_sep == $name ]]; then
+        echo "Touch ID cannot bypass the configured $directive for $name." >&2
+        exit 1
+      fi
+      continue ;;
+    options) [[ $name == "apple_sep" ]] || continue ;;
     *) continue ;;
   esac
   if [[ $arguments == "xart_writes=0 provision_keybag=0" ]] && (( ! passive )); then

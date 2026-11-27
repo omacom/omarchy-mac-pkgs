@@ -33,7 +33,8 @@ rebuilt_calibration=0
 root_key=apple/msrk-j700.bin
 fail() {
   if (( recorded )); then
-    rm -f "$agreed" "$options"
+    rm -f "$agreed"
+    "$helpers/touchid-options" --remove || echo "Touch ID could not clear its managed options in $options." >&2
   fi
   if (( rebuilt )); then
     rm -f "$firmware/updates/$root_key"

@@ -478,10 +478,37 @@ machine apple,j313 apple,t8103
 echo 'options apple_sep xart_writes=0' >"$fixture/admin-options"
 ! out=$(run touchid-enable 2>&1) && [[ $out == *'cannot override'* ]] && ! grep -q insmod "$fixture/calls" ||
   fail 'an explicit read-only setting cannot be overridden' "$out"
+for variant in guarded readonly; do
+  for policy in 'install apple_* /bin/false' 'softdep apple_?ep pre: dependency'; do
+    machine apple,j316c apple,t6001
+    mkdir -p "$fixture/etc"
+    touch "$fixture/etc/touchid-on"
+    if [[ $variant == readonly ]]; then
+      sed -i '/^xart_guard_pins_abi=/d' "$fixture/apple-sep.ko.zst"
+      echo 'alias=of:N*T*Capple,sep' >>"$fixture/apple-sep.ko.zst"
+      cp "$fixture/apple-sep.ko.zst" "$fixture/expected-image"
+    fi
+    echo "$policy" >"$fixture/admin-options"
+    ! out=$(run touchid-load --boot 2>&1) && [[ $out == *'cannot bypass'* ]] && ! grep -q insmod "$fixture/calls" ||
+      fail "$variant insertion respects kmod policy $policy" "$out"
+  done
+done
+# A first-enable failure must never erase a denial, or the next attempt would
+# select another OS identity and silently become writable.
+machine apple,j316c apple,t6001
+mkdir -p "$fixture/etc"
+printf '%s\n' 'options apple_sep os_uuid_hi=0x1234 xart_writes=0' >"$fixture/etc/modprobe.conf"
+for attempt in 1 2; do
+  ! out=$(run touchid-enable 2>&1) && [[ $out == *'cannot override'* && ! -e $fixture/etc/touchid-on ]] &&
+    grep -Fxq 'options apple_sep os_uuid_hi=0x1234 xart_writes=0' "$fixture/etc/modprobe.conf" &&
+    ! grep -q '^blacklist apple_sep$' "$fixture/etc/modprobe.conf" && ! grep -q insmod "$fixture/calls" ||
+    fail "a failed setup keeps explicit denial and OS identity on attempt $attempt" "$out"
+done
 machine apple,j316c apple,t6001
 mkdir -p "$fixture/etc"
 printf '%s\n' 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1' >"$fixture/etc/modprobe.conf"
 echo 'options apple_sep os_uuid_hi=0x1234 os_uuid_lo=0xabcd' >>"$fixture/etc/modprobe.conf"
+touch "$fixture/etc/touchid-on"
 rm -rf "$tree"
 run touchid-options --migrate && ! grep -q 'writes=1' "$fixture/etc/modprobe.conf" &&
   grep -Fxq 'blacklist apple_sep' "$fixture/etc/modprobe.conf" &&
@@ -903,6 +930,17 @@ ask blocked '' && grep -q "this kernel can't set it up" "$fixture/out" && ! grep
 echo unsupported:restart >"$fixture/eligibility"
 ask blocked '' && grep -q 'Restart this Mac' "$fixture/out" && ! grep -q 'Boot a kernel' "$fixture/out" ||
   fail 'an unsafe preload on a compatible kernel gets reboot guidance'
+machine apple,j316c apple,t6001
+mkdir -p "$fixture/etc"
+touch "$fixture/etc/touchid-on"
+printf '%s\n' 'options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1 os_uuid_lo=0xabc' >"$fixture/etc/modprobe.conf"
+run touchid-options --ensure && PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 &&
+  [[ ! -e $fixture/etc/touchid-on ]] && grep -Fxq 'options apple_sep os_uuid_lo=0xabc' "$fixture/etc/modprobe.conf" &&
+  ! grep -Eq '^blacklist |xart_writes=1|provision_keybag=1' "$fixture/etc/modprobe.conf" ||
+  fail 'opting out keeps OS identity and removes consent to write and the auto-load blacklist'
+echo ready >"$fixture/activation"
+run touchid-enable >/dev/null && grep -Fxq 'insmod xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1 os_uuid_lo=0xabc' "$fixture/calls" ||
+  fail 'opting back in loads exactly the original OS identity'
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"
