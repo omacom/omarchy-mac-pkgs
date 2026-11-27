@@ -24,7 +24,7 @@ chmod +x "$work/bin/"*
 # new file under its own PID with its arguments, and stops its subscriber.
 "$ROOT"/install "$work/root"
 mapper=$work/root/usr/bin/omarchy-audio-asahi-mic-map
-# The host's pacman lock and audio session stay out of it.
+# The host's pacman lock, audio session and system bus stay out of it.
 cat >"$work/watch.py" <<'WATCH'
 import importlib.machinery, importlib.util, sys
 from pathlib import Path
@@ -36,7 +36,7 @@ mapper.AUDIO_FILES = ()
 sys.argv = [sys.argv[1], '--watch']
 sys.exit(mapper.main())
 WATCH
-env -u PULSE_SERVER -u PIPEWIRE_REMOTE WORK="$work" PATH="$work/bin:$PATH" XDG_RUNTIME_DIR="$work/run" XDG_STATE_HOME="$work/state" \
+env -u PULSE_SERVER -u PIPEWIRE_REMOTE WORK="$work" PATH="$work/bin:$PATH" XDG_RUNTIME_DIR="$work/run" XDG_STATE_HOME="$work/state" DBUS_SYSTEM_BUS_ADDRESS="unix:path=$work/no-bus" \
   python3 "$work/watch.py" "$mapper" "$work/db.lck" 2>"$work/log" &
 watcher=$!
 for _ in $(seq 100); do

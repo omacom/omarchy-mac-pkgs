@@ -7,6 +7,7 @@
 import argparse
 import array
 import contextlib
+import ctypes
 import fcntl
 import json
 import os
@@ -65,7 +66,7 @@ outage = dict(since=None, notified=False, repaired=False)
 # subscription is listening, so the watcher looks again shortly anyway.
 recheck = dict(at=None)
 # Whether the last outage pass found the lid closed.
-lid = dict(closed=False)
+lid = dict(closed=False, wakes=False)
 # Set once an update changed AUDIO_FILES and kept in the runtime record until
 # a pass has acted on it, so a watcher that reloads mid-update keeps it.
 installed = dict(pending=False, retry_at=None, record=None, signature=None)
@@ -516,6 +517,8 @@ def card_disabled(audio):
 def outage_due():
     # Seconds until a pending lost-array notice or post-repair look is due, for
     # the watcher's wait.
+    if lid['closed'] and lid['wakes']:
+        return None
     due = []
     if outage['since'] is not None and not outage['notified']:
         due.append(outage['since'] + OUTAGE_GRACE)
@@ -908,8 +911,10 @@ class Subscription:
     EVENT = re.compile(rb"^Event '(new|remove)' on (sink|source|card|module) #|^Event 'change' on (card|module|server) #")
     SOURCE_CHANGE = re.compile(rb"^Event 'change' on source #([0-9]+)$")
 
-    def __init__(self, command=('pactl', 'subscribe'), quiet=0.5, settle=5.0, backstop=600.0, retry=2.0, stale=None, poll=2.0, changed=None):
+    def __init__(self, command=('pactl', 'subscribe'), quiet=0.5, settle=5.0, backstop=600.0, retry=2.0, stale=None, poll=2.0, changed=None, lid_watch=None):
         self.command = list(command)
+        self.lid_watch = lid_watch
+        self.lid = None
         self.quiet, self.settle, self.backstop, self.retry = quiet, settle, backstop, retry
         # stale() is asked every poll seconds, across waits, whether to stop
         # for RELOAD. A pass a moment after subscribing covers a device that
@@ -933,9 +938,19 @@ class Subscription:
         self.buffer = b''
         if self.process is not None:
             self.confirm = time.monotonic() + 1.0
+        if self.lid_watch is not None and self.lid is None:
+            try:
+                self.lid = self.lid_watch()
+            except OSError:
+                pass
+            lid['wakes'] = self.lid is not None
         return self.process is not None
 
     def stop(self):
+        self.stop_subscriber()
+        self.stop_lid()
+
+    def stop_subscriber(self):
         process, self.process = self.process, None
         if process is None:
             return
@@ -947,6 +962,29 @@ class Subscription:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+    def stop_lid(self):
+        if self.lid is not None:
+            self.lid.close()
+        self.lid = None
+        lid['wakes'] = False
+
+    def poll_lid(self, read_streams, write_streams):
+        # Returns (changed, lid_wake) or None when the system bus is lost.
+        if self.lid is None:
+            return False, None
+        try:
+            changed = self.lid.read()
+            lid_events = self.lid.events()
+            lid_wake = self.lid.wake_at()
+        except OSError:
+            self.stop_lid()
+            return None
+        if lid_events & select.POLLIN:
+            read_streams.append(self.lid)
+        if lid_events & select.POLLOUT:
+            write_streams.append(self.lid)
+        return changed, lid_wake
 
     def lines(self):
         chunk = os.read(self.process.stdout.fileno(), 4096)
@@ -1003,22 +1041,46 @@ class Subscription:
             if polled:
                 return self.full()
             now = time.monotonic()
+            read_streams = [self.process.stdout]
+            write_streams = []
+            lid_state = self.poll_lid(read_streams, write_streams)
+            if lid_state is None:
+                return self.full()
+            lid_changed, lid_wake = lid_state
+            if lid_changed:
+                repair = True
+                due = now + self.quiet
+                if latest is None:
+                    latest = now + self.settle
             deadline = hard if due is None else min(due, latest) if repair else min(due, latest, hard)
             wake = deadline if self.next_poll is None else min(deadline, self.next_poll)
-            if wake <= now or not select.select([self.process.stdout], [], [], wake - now)[0]:
+            if lid_wake is not None:
+                wake = min(wake, lid_wake)
+            if wake <= now:
+                r_ready, w_ready = [], []
+            else:
+                r_ready, w_ready, _ = select.select(read_streams, write_streams, [], wake - now)
+            if not r_ready and not w_ready:
                 if time.monotonic() < deadline:
                     continue
                 if due is None or repair or time.monotonic() >= hard:
                     return self.full()
                 return True
-            lines = self.lines()
+            woken = False
+            if self.lid is not None and (self.lid in r_ready or self.lid in w_ready):
+                try:
+                    if self.lid.read():
+                        woken = repair = True
+                except OSError:
+                    self.stop_lid()
+                    return self.full()
+            lines = self.lines() if self.process.stdout in r_ready else []
             if lines is None:
                 # The subscription ended: pipewire-pulse went away or is not up
                 # yet. Repair now, then resubscribe after a pause.
-                self.stop()
+                self.stop_subscriber()
                 time.sleep(self.retry)
                 return self.full()
-            woken = False
             for line in lines:
                 if self.EVENT.match(line):
                     woken = repair = True
@@ -1033,10 +1095,73 @@ class Subscription:
                     latest = now + self.settle
 
 
+class LidWatch:
+    # Matches logind's property changes through libsystemd's sd-bus, which an
+    # unprivileged user may match on the system bus. The match is in place
+    # once __init__ returns, and a lost bus raises OSError on the next read.
+    MATCH = (b'org.freedesktop.login1', b'/org/freedesktop/login1', b'org.freedesktop.DBus.Properties', b'PropertiesChanged')
+
+    def __init__(self):
+        self.sd = ctypes.CDLL('libsystemd.so.0')
+        self.sd.sd_bus_message_unref.restype = ctypes.c_void_p
+        self.sd.sd_bus_close_unref.restype = ctypes.c_void_p
+        self.bus = ctypes.c_void_p()
+        if self.sd.sd_bus_open_system(ctypes.byref(self.bus)) < 0 or self.sd.sd_bus_match_signal(self.bus, None, *self.MATCH, None, None) < 0:
+            self.close()
+            raise OSError('No lid watch on the system bus')
+
+    def fileno(self):
+        return self.sd.sd_bus_get_fd(self.bus)
+
+    def events(self):
+        ev = self.sd.sd_bus_get_events(self.bus)
+        if ev < 0:
+            raise OSError('Lid watch bus disconnected')
+        return ev
+
+    def wake_at(self):
+        usec = ctypes.c_uint64()
+        result = self.sd.sd_bus_get_timeout(self.bus, ctypes.byref(usec))
+        if result < 0 or usec.value == (1 << 64) - 1:
+            return None
+        return usec.value / 1_000_000.0
+
+    def read(self):
+        named = False
+        while True:
+            message = ctypes.c_void_p()
+            result = self.sd.sd_bus_process(self.bus, ctypes.byref(message))
+            if result < 0:
+                raise OSError('Lid watch bus disconnected')
+            if message:
+                named = named or b'LidClosed' in self.names(message)
+                self.sd.sd_bus_message_unref(message)
+            if result == 0:
+                return named
+
+    def names(self, message):
+        # The changed properties of a PropertiesChanged (interface, a{sv}, as).
+        names = []
+        name = ctypes.c_char_p()
+        if (self.sd.sd_bus_message_is_signal(message, *self.MATCH[2:]) > 0 and self.sd.sd_bus_message_skip(message, b's') >= 0
+                and self.sd.sd_bus_message_enter_container(message, ord('a'), b'{sv}') > 0):
+            while self.sd.sd_bus_message_enter_container(message, ord('e'), b'sv') > 0:
+                if self.sd.sd_bus_message_read(message, b's', ctypes.byref(name)) <= 0:
+                    break
+                names.append(name.value)
+                if self.sd.sd_bus_message_skip(message, b'v') < 0 or self.sd.sd_bus_message_exit_container(message) < 0:
+                    break
+        return names
+
+    def close(self):
+        self.sd.sd_bus_close_unref(self.bus)
+        self.bus = ctypes.c_void_p()
+
+
 def supervise(operation, wait=None, program=None, changed=None):
     subscription = None
     if wait is None:
-        subscription = Subscription(stale=None if program is None else program.replaced, changed=changed)
+        subscription = Subscription(stale=None if program is None else program.replaced, changed=changed, lid_watch=LidWatch)
         subscription.start()
         wait = lambda: subscription.wait(outage_due())
     previous_error = None
