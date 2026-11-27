@@ -61,6 +61,35 @@ for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-oma
 done
 pass "each entrypoint case probes the path its skip reason names"
 
+# The probe reads the image root, never the host, even through an absolute link
+# such as the snapshot check hook's, or one whose .. would climb out of the root.
+awk '/^image_has\(\) \{/,/^}/' "$harness" >"$test_tmp/image-has.sh"
+image_has_in_fixture() {
+  (
+    sudo() { [[ ${1:-} == "-n" ]] && shift; "$@"; }
+    source "$test_tmp/image-has.sh"
+    image_has "$test_tmp/image" "$1"
+  )
+}
+mkdir -p "$test_tmp/image/usr/bin" "$test_tmp/image/usr/lib/omarchy/mac-boot" "$test_tmp/image/etc/boot/hooks/pre.d"
+: >"$test_tmp/image/usr/bin/omarchy-mac-snapshot-check"
+: >"$test_tmp/image/usr/lib/omarchy/mac-boot/update-verify"
+ln -s /usr/bin/omarchy-mac-snapshot-check "$test_tmp/image/etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check"
+ln -s /usr/bin/env "$test_tmp/image/etc/boot/hooks/pre.d/host-only"
+ln -s ../../../../usr/bin/omarchy-mac-snapshot-check "$test_tmp/image/etc/boot/hooks/pre.d/relative"
+ln -s missing "$test_tmp/image/etc/boot/hooks/pre.d/dangling"
+ln -s /usr/lib/../bin/omarchy-mac-snapshot-check "$test_tmp/image/etc/boot/hooks/pre.d/absolute-dotdot"
+: >"$test_tmp/outside"
+ln -s /../outside "$test_tmp/image/etc/boot/hooks/pre.d/escape"
+ln -s ../../../../../outside "$test_tmp/image/etc/boot/hooks/pre.d/escape-relative"
+for path in /usr/lib/omarchy/mac-boot/update-verify /etc/boot/hooks/pre.d/04-omarchy-mac-snapshot-check /etc/boot/hooks/pre.d/relative /etc/boot/hooks/pre.d/absolute-dotdot; do
+  image_has_in_fixture "$path" || fail "the image has $path"
+done
+for path in /usr/lib/omarchy/mac-boot/reset-prepare /etc/boot/hooks/pre.d/host-only /etc/boot/hooks/pre.d/dangling /etc/boot/hooks/pre.d/escape /etc/boot/hooks/pre.d/escape-relative; do
+  ! image_has_in_fixture "$path" || fail "the image lacks $path"
+done
+pass "the image probe finds files and links that resolve inside the image, and nothing only the host has or outside the root"
+
 # Owner setup over a recorded console: the harness's own serial functions read
 # a log written in advance, and the guest has already exited, so a prompt that
 # never comes fails at once instead of after its timeout.
