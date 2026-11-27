@@ -41,8 +41,11 @@ if (( ${#present[@]} )); then
     echo "Touch ID could not be turned off: remove ${left[*]}" >&2
     exit 1
   fi
-  echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
+  echo "Touch ID setup stops at the next boot. The key store for Linux stays on this Mac."
 fi
+# An enrolled reader may still be open in fprintd following fingerprint
+# removal. Revoke its access as soon as the owner's agreement is gone.
+/usr/lib/omarchy-mac/touchid-status --withdraw || exit 1
 # Without the record this takes the re-arm out of sudo's and polkit's stacks.
 /usr/lib/omarchy-mac/touchid-pam || exit 1
 exit 0

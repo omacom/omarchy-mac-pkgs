@@ -6,9 +6,25 @@ compatible() {
   [[ -r $tree/compatible ]] && tr '\0' '\n' <"$tree/compatible" | grep -Fxq "$1"
 }
 
+touchid_sensor() {
+  local node
+  for node in "$tree"/soc/*/fingerprint@* "$tree"/*/fingerprint@*; do
+    if [[ -r $node/compatible ]] && tr '\0' '\n' <"$node/compatible" | grep -Fxq apple,mesa-fingerprint &&
+      [[ ! -r $node/status || $(tr -d '\0' <"$node/status") == "okay" ]]; then
+      printf '%s\n' "$node"
+      return 0
+    fi
+  done
+  return 1
+}
+
 guarded_m1() {
   { compatible apple,t8103 && compatible apple,j313; } ||
     { compatible apple,t6001 && compatible apple,j316c; }
+}
+
+m1_family() {
+  compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001
 }
 
 sealed_board() {

@@ -82,3 +82,44 @@ printf '27c6\n' >"$tmp/usb/1-0/idVendor"
 printf '1234\n' >"$tmp/usb/1-0/idProduct"
 detects || fail "a USB reader is found beside a Touch ID that is not ready"
 pass "a Touch ID that is not ready leaves a USB reader to be found"
+
+# Follow the actual setup -> --resolve -> privileged dispatch -> owner hook
+# contract. Restrict all privilege and device access to the staged root.
+helpers=$tmp/pkg/usr/lib/omarchy-mac
+owner=$tmp/pkg/usr/lib/omarchy/mac/enable-fingerprint
+sed -e "s|/usr/lib/omarchy-mac/|$helpers/|g" -e "s|/etc/omarchy-mac/|$tmp/pkg/etc/omarchy-mac/|g" \
+  -e "s|/run/omarchy-mac/|$tmp/run/omarchy-mac/|g" "$MAC/entrypoints/enable-fingerprint" >"$owner"
+sed -i -e "s|:-/usr/lib/omarchy-mac|:-$helpers|g" -e "s|:-/sys/module/apple_sep|:-$tmp/module|g" \
+  -e "s|:-/sys/bus/platform/drivers/apple_sep|:-$tmp/sys/apple_sep|g" -e "s|:-/dev/sep-bio|:-$tmp/sep-bio|g" \
+  -e "s|:-/etc/omarchy-mac/touchid-on|:-$tmp/pkg/etc/omarchy-mac/touchid-on|g" \
+  -e "s|:-/run/omarchy-mac/touchid|:-$tmp/run/omarchy-mac/touchid|g" "$helpers/touchid-kernel-ready"
+sed -i "s|:-/proc/device-tree|:-$tmp/tree|g" "$helpers/touchid-board.sh"
+sed -e "s|^fixed_path=.*|fixed_path=$tmp/stub:/usr/bin|" -e "s|^  root=\"\"|  root=$tmp/pkg|" \
+  "$ROOT/bin/omarchy-lifecycle-dispatch" >"$tmp/bin/omarchy-lifecycle-dispatch"
+printf '#!/bin/bash\necho %s\n' "$(runtime_platform aarch64-apple)" >"$tmp/bin/omarchy-hw-platform"
+printf '#!/bin/bash\nexit 1\n' >"$tmp/stub/omarchy-pkg-missing"
+cat >"$tmp/stub/sudo" <<'SH'
+#!/bin/bash
+case "$*" in
+  "-n true") exit 0 ;;
+  "omarchy-lifecycle-dispatch enable-fingerprint"|fprintd-enroll*) exec "$@" ;;
+  *) exit 1 ;;
+esac
+SH
+for command in busctl fprintd-enroll; do
+  printf '#!/bin/bash\necho "%s $*" >>"%s"\nexit 1\n' "$command" "$tmp/probes" >"$tmp/stub/$command"
+done
+chmod +x "$tmp/bin/"* "$tmp/stub/"*
+mkdir -p "$tmp/module" "$tmp/tree"
+printf 'apple,j293\0apple,t8103\0' >"$tmp/tree/compatible"
+echo unsupported:m1-family >"$tmp/run/omarchy-mac/touchid"
+setup() {
+  OMARCHY_USB_DEVICES_PATH="$tmp/usb" OMARCHY_LIFECYCLE_ROOT="$tmp/pkg" PATH="$tmp/bin:$tmp/stub:/usr/bin" \
+    "$ROOT/bin/omarchy-setup-security-fingerprint" </dev/null >"$tmp/setup-output" 2>&1
+}
+! setup && grep -q 'nothing was enrolled' "$tmp/setup-output" && [[ ! -e $tmp/probes ]] ||
+  fail "the actual dispatcher stops setup before fprintd opens an unproven SEP alongside USB" "$(cat "$tmp/setup-output")"
+rm -rf "$tmp/module" "$tmp/sep-bio"
+! setup && grep -q GetDefaultDevice "$tmp/probes" && grep -q fprintd-enroll "$tmp/probes" ||
+  fail "the same setup reaches USB enumeration and enrollment with SEP absent" "$(cat "$tmp/setup-output")"
+pass "fingerprint setup honors the owner hook before D-Bus or enrollment, including with a USB reader attached"

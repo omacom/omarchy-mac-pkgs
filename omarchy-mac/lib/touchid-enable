@@ -35,6 +35,7 @@ fail() {
   if (( recorded )); then
     rm -f "$agreed"
     "$helpers/touchid-options" --remove || echo "Touch ID could not clear its managed options in $options." >&2
+    "$helpers/touchid-status" --withdraw || echo "Touch ID could not stop fingerprint access after removing its agreement." >&2
   fi
   if (( rebuilt )); then
     rm -f "$firmware/updates/$root_key"
@@ -183,7 +184,8 @@ for ((attempt = 0; attempt < 200; attempt++)); do
   sleep 0.1
 done
 systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
-if "$helpers/touchid-kernel-ready" activate && [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
+if "$helpers/touchid-kernel-ready" activate && [[ $(cat "$status_file" 2>/dev/null) == "ready" ]] &&
+  "$helpers/touchid-kernel-ready" reader; then
   # An fprintd that started without the reader found none and kept no
   # allowance for its node, so it starts again with both.
   systemctl try-restart fprintd.service 2>/dev/null

@@ -57,6 +57,10 @@ cat >"$fixture/bin/systemctl" <<'SH'
 #!/bin/bash
 fixture=${OMARCHY_MAC_TOUCHID_TREE%/*}
 echo "systemctl $*" >>"$fixture/calls"
+if [[ $1 == show ]]; then
+  [[ ! -e $fixture/fprintd-query-fails ]] || exit 1
+  cat "$fixture/fprintd-state" 2>/dev/null || echo inactive
+fi
 if [[ $1 == start ]]; then
   if [[ -f $fixture/real-activation ]]; then
     "$OMARCHY_MAC_TOUCHID_HELPERS/touchid-kernel-ready" activate &&
@@ -319,6 +323,21 @@ for board in "apple,j313 apple,t8103" "apple,j316c apple,t6001"; do
   [[ $(eligibility) == unsupported:restart ]] && ! run touchid-kernel-ready activate || fail 'another running module cannot inherit authorization'
   cp "$fixture/module/notes/.note.gnu.build-id" "$fixture/run/touchid-guarded-build-id"
   [[ $(eligibility) == available ]] && run touchid-kernel-ready activate || fail 'activation verifies the running module and its effective policy'
+  mkdir -p "$fixture/etc"
+  for attribute in touchid:ready sensor_attach:attached restore:empty matching:legacy; do
+    echo "${attribute#*:}" >"$diag/${attribute%:*}"
+  done
+  ! run touchid-kernel-ready reader || fail 'writable enumeration awaits consent even with valid live evidence'
+  touch "$fixture/etc/touchid-on"
+  run touchid-kernel-ready reader || fail 'a ready historical reader with consent can enroll'
+  echo restored >"$diag/restore"
+  run touchid-kernel-ready reader || fail 'a restored historical reader with consent can verify'
+  for attribute in restore:unproven matching:blocked touchid:failed sensor_attach:not-ready; do
+    saved=$(cat "$diag/${attribute%:*}")
+    echo "${attribute#*:}" >"$diag/${attribute%:*}"
+    ! run touchid-kernel-ready reader || fail "a current $attribute stops fprintd even after an earlier ready"
+    echo "$saved" >"$diag/${attribute%:*}"
+  done
 done
 machine apple,j293 apple,t8103 apple,arm-platform
 [[ $(eligibility) == "unsupported:m1-family" ]] || fail 'other M1 machines remain out of scope'
@@ -821,6 +840,8 @@ for name in enable-fingerprint disable-fingerprint; do
     -e "s|/usr/lib/omarchy-mac/touchid-enable|$fixture/bin/enable-stub|g" -e "s|/etc/omarchy-mac/touchid-on|$fixture/etc/touchid-on|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-eligibility|$fixture/bin/eligibility-stub|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-pam|$fixture/bin/pam-stub|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-status|OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib OMARCHY_MAC_TOUCHID_MODULE=$fixture/module OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_DRIVER=$fixture/driver OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid $ROOT/lib/touchid-status|g" \
+    -e "s|/usr/lib/omarchy-mac/touchid-kernel-ready|OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib OMARCHY_MAC_TOUCHID_MODULE=$fixture/module OMARCHY_MAC_TOUCHID_NODE=$fixture/sep-bio OMARCHY_MAC_TOUCHID_DRIVER=$fixture/driver OMARCHY_MAC_TOUCHID_AGREED=$fixture/etc/touchid-on OMARCHY_MAC_TOUCHID_STATUS=$fixture/run/touchid $ROOT/lib/touchid-kernel-ready|g" \
     -e "s|/usr/lib/omarchy-mac/touchid-options|OMARCHY_MAC_TOUCHID_TREE=$tree OMARCHY_MAC_TOUCHID_OPTIONS=$fixture/etc/modprobe.conf OMARCHY_MAC_TOUCHID_HELPERS=$ROOT/lib $ROOT/lib/touchid-options|g" \
     -e "s|/etc/modprobe.d/omarchy-mac-touchid.conf|$fixture/etc/modprobe.conf|g" -e "s|/usr/lib/firmware/updates/|$fixture/firmware/updates/|g" \
     -e "s|/proc/device-tree/compatible|$tree/compatible|g" -e "s|flock -w 300|flock -w 0|" "$ROOT/entrypoints/$name" >"$entry/$name"
@@ -918,7 +939,7 @@ ask blocked '' && grep -Fxq 'options apple_sep xart_writes=1 provision_keybag=1'
 # The setup hook cannot move the driver's open files, even when an old status
 # says activation failed or systemd has not started the new activation yet.
 machine apple,j316c apple,t6001
-mkdir -p "$fixture/etc" "$fixture/module"
+mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on"
 recovery_records
 echo available >"$fixture/eligibility"
@@ -943,6 +964,61 @@ run touchid-options --ensure && PATH="$fixture/bin:$PATH" "$entry/disable-finger
 echo ready >"$fixture/activation"
 run touchid-enable >/dev/null && grep -Fxq 'insmod xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1 os_uuid_lo=0xabc' "$fixture/calls" ||
   fail 'opting back in loads exactly the original OS identity'
+touch "$fixture/fprintd-query-fails"
+! PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >"$fixture/out" 2>&1 &&
+  grep -q 'whether fprintd still has access' "$fixture/out" || fail 'opt-out reports an unconfirmed withdrawal'
+rm "$fixture/fprintd-query-fails"
+echo deactivating >"$fixture/fprintd-state"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null &&
+  grep -Fxq 'systemctl stop fprintd.service' "$fixture/calls" && ! run touchid-kernel-ready reader ||
+  fail 'opting out synchronously withdraws access from an already active fingerprint daemon'
+rm "$fixture/fprintd-state"
+# The dispatcher's success permits GetDefaultDevice and fprintd-enroll. Both
+# the owner hook and the fprintd ExecCondition must withhold that permission
+# for a writable/unproven device, with or without agreement or cached status.
+for consent in yes no; do
+  machine apple,j316c apple,t6001
+  mkdir -p "$fixture/etc" "$fixture/module"
+  [[ $consent == no ]] || touch "$fixture/etc/touchid-on"
+  touch "$fixture/sep-bio"
+  for status in available ready unsupported:kernel unsupported:restart; do
+    ! ask "$status" yes && ! grep -Fxq enable "$fixture/calls" &&
+      ! run touchid-kernel-ready reader || fail "an unknown driver blocks reader enumeration ($consent, $status)"
+  done
+  diag=$fixture/driver/test.sep/diag
+  mkdir -p "$diag"
+  echo enabled >"$diag/xart"
+  echo 0 >"$diag/xart_guard"
+  ! ask ready yes && ! run touchid-kernel-ready reader || fail 'a writable unsafe reader stops enrollment and D-Bus activation'
+  : >"$fixture/calls"
+  echo active >"$fixture/fprintd-state"
+  run touchid-status && grep -Fxq 'systemctl --no-block stop fprintd.service' "$fixture/calls" ||
+    fail 'a previously running fprintd is stopped on an unsafe device addition or update'
+  rm "$fixture/fprintd-state"
+  : >"$fixture/calls"
+  run touchid-status && ! grep -Fq 'stop fprintd' "$fixture/calls" || fail 'status can still run before fprintd is installed'
+  echo disabled >"$diag/xart"
+  run touchid-kernel-ready reader || fail 'positive read-only storage lets fprintd serve other readers'
+  rm -rf "$fixture/module" "$fixture/sep-bio"
+  run touchid-kernel-ready reader || fail 'a USB reader remains available when SEP is absent'
+done
+machine apple,j293 apple,t8103
+mkdir -p "$fixture/module" "$fixture/driver/test.sep/diag"
+touch "$fixture/sep-bio"
+! ask unsupported:m1-family '' && ! run touchid-kernel-ready reader || fail 'the unsupported M1 cannot expose a driver that is still binding'
+echo enabled >"$fixture/driver/test.sep/diag/xart"
+! ask unsupported:m1-family '' && ! run touchid-kernel-ready reader || fail 'the unsupported M1 cannot delegate enrollment to a writable driver'
+echo disabled >"$fixture/driver/test.sep/diag/xart"
+ask unsupported:m1-family '' && run touchid-kernel-ready reader || fail 'the read-only M1 can delegate safe enumeration'
+rm "$tree/compatible"
+! run touchid-kernel-ready reader || fail 'an unidentified board with a SEP node cannot authorize reader enumeration'
+for board in "apple,j504 apple,t8122" "apple,j274 apple,t8103"; do
+  read -r model chip <<<"$board"
+  machine "$model" "$chip"
+  mkdir -p "$fixture/module"
+  rm -rf "$tree/soc"
+  ask unsupported:board '' && run touchid-kernel-ready reader || fail 'a Mac with a sensorless SEP autoload can use USB'
+done
 machine apple,j414c apple,t6021 apple,arm-platform
 mkdir -p "$fixture/etc"
 touch "$fixture/etc/touchid-on" "$fixture/etc/modprobe.conf"

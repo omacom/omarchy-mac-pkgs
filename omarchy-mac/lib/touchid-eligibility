@@ -28,16 +28,9 @@ can_extract() {
   [[ -x $extractors/$1 ]] && command -v "$python" >/dev/null
 }
 
-sensor=""
 # The sensor sits on an SPI controller under /soc, or at the root on the M4 Pro
 # and M4 Max.
-for node in "$tree"/soc/*/fingerprint@* "$tree"/*/fingerprint@*; do
-  if [[ -r $node/compatible ]] && tr '\0' '\n' <"$node/compatible" | grep -Fxq apple,mesa-fingerprint &&
-    [[ ! -r $node/status || $(tr -d '\0' <"$node/status") == "okay" ]]; then
-    sensor=$node
-    break
-  fi
-done
+sensor=$(touchid_sensor)
 if [[ ${1:-} == "sensor" ]]; then
   printf '%s\n' "$sensor"
   exit 0
@@ -59,7 +52,7 @@ if guarded_m1; then
     echo unsupported:recovery
     exit 0
   fi
-elif compatible apple,t8103 || compatible apple,t6000 || compatible apple,t6001; then
+elif m1_family; then
   echo unsupported:m1-family
   exit 0
 elif ! other_touchid_board; then

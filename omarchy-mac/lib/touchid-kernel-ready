@@ -5,11 +5,28 @@ modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
 module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
 driver=${OMARCHY_MAC_TOUCHID_DRIVER:-/sys/bus/platform/drivers/apple_sep}
 status=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+mode=${1:-}
+node=${OMARCHY_MAC_TOUCHID_NODE:-/dev/sep-bio}
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+if [[ $mode == "reader" && ! -d $module && ! -e $node ]]; then
+  exit 0
+fi
 omarchy-hw-apple-silicon || exit 1
 source "$helpers/touchid-board.sh" || exit 1
+if [[ $mode == "reader" && ! -e $node && -r $tree/compatible ]]; then
+  # An SEP autoload for another function need not publish a fingerprint
+  # device. On M1 laptops with a sensor, wait for the pending driver to bind.
+  if ! m1_family || ! touchid_sensor >/dev/null; then exit 0; fi
+fi
+checked_board=1
 if ! guarded_m1; then
-  other_touchid_board
-  exit $?
+  if other_touchid_board; then
+    exit 0
+  elif [[ $mode == "reader" ]] && m1_family; then
+    checked_board=0
+  else
+    exit 1
+  fi
 fi
 
 # Test the file we will insert, even if pacman replaces the installed module.
@@ -27,7 +44,7 @@ disk_ready() {
 
 case ${1:-} in
   image) disk_ready "${2:?missing module image}"; exit $? ;;
-  activate) ;;
+  activate|reader) ;;
   "") disk_ready apple_sep || exit 1 ;;
   *) exit 1 ;;
 esac
@@ -39,11 +56,25 @@ if [[ -d $module ]]; then
   diagnostics=("$driver"/*/diag)
   if (( ${#diagnostics[@]} == 1 )); then
     diag=${diagnostics[0]}
-    if [[ -r $diag/xart && $(<"$diag/xart") == "enabled" ]]; then
+    if [[ $mode == "reader" && -r $diag/xart && $(<"$diag/xart") == "disabled" ]]; then
+      exit 0
+    elif [[ -r $diag/xart && $(<"$diag/xart") == "enabled" ]]; then
+      (( checked_board )) || exit 2
+      [[ $mode != "reader" || -e $agreed ]] || exit 2
       [[ -r $diag/xart_guard && $(<"$diag/xart_guard") == 1 &&
         -r $diag/xart_guard_pins && $(<"$diag/xart_guard_pins") == 1 &&
         -s ${status%/*}/touchid-guarded-build-id ]] &&
         cmp -s "${status%/*}/touchid-guarded-build-id" "$module/notes/.note.gnu.build-id" || exit 2
+      if [[ $mode == "reader" ]]; then
+        # Opening the node is reserved to the activation unit until the
+        # current driver reports a working sensor and a safe, usable bag.
+        for attribute in touchid sensor_attach restore matching; do
+          [[ -r $diag/$attribute ]] || exit 2
+        done
+        [[ $(<"$diag/touchid") == "ready" && $(<"$diag/sensor_attach") == "attached" ]] || exit 2
+        case $(<"$diag/restore") in empty|restored) ;; *) exit 2 ;; esac
+        case $(<"$diag/matching") in usable|unverified|legacy) ;; *) exit 2 ;; esac
+      fi
       exit 0
     elif [[ -r $diag/xart && $(<"$diag/xart") != "disabled" ]]; then
       exit 2
@@ -52,4 +83,4 @@ if [[ -d $module ]]; then
     exit 2
   fi
 fi
-[[ ${1:-} != "activate" ]] || exit 2
+[[ $mode != "activate" && $mode != "reader" ]] || exit 2

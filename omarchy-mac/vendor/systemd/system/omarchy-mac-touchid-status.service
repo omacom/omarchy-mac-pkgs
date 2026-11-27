@@ -5,7 +5,7 @@
 # Pulled in by the package's multi-user.target.wants link.
 [Unit]
 Description=Check whether Touch ID can be set up
-After=local-fs.target boot-efi.mount systemd-modules-load.service
+After=omarchy-mac-touchid-load.service local-fs.target boot-efi.mount systemd-modules-load.service
 Before=display-manager.service fprintd.service
 
 [Service]

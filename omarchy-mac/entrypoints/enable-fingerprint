@@ -2,7 +2,16 @@
 # omarchy-lifecycle-dispatch enable-fingerprint: Omarchy's fingerprint setup runs
 # this as root before enrolling. It asks the owner before Touch ID is turned on,
 # since that leaves state in the Secure Enclave that can't be removed.
-omarchy-hw-apple-silicon || exit 0
+can_enumerate() {
+  /usr/lib/omarchy-mac/touchid-kernel-ready reader && return 0
+  echo "Fingerprint setup paused because the running Touch ID driver cannot confirm safe storage." >&2
+  echo "If the driver is still starting, try again after it binds. Otherwise restart this Mac with a compatible kernel." >&2
+  return 1
+}
+if ! omarchy-hw-apple-silicon; then
+  can_enumerate
+  exit $?
+fi
 
 status=$(cat /run/omarchy-mac/touchid 2>/dev/null)
 recorded_status=${status:-no status}
@@ -23,13 +32,15 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   fi
   if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
     echo "Touch ID was turned off while this ran, so setup goes on without it."
-    exit 0
+    can_enumerate
+    exit $?
   fi
   /usr/lib/omarchy-mac/touchid-options --ensure || {
     echo "Touch ID's driver options could not be written." >&2
     exit 1
   }
   exec {lock_fd}>&-
+  can_enumerate || exit 1
   # A Mac agreed before the re-arm existed gets its PAM lines here too.
   /usr/lib/omarchy-mac/touchid-pam || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   # The owner agreed already, so they are never asked again: a Touch ID that
@@ -55,8 +66,7 @@ if [[ -e /etc/omarchy-mac/touchid-on ]]; then
   fi
   exit 0
 fi
-# Only a Touch ID that can be set up stops the setup: anywhere else it goes on,
-# so a USB reader enrols as it would without Touch ID.
+can_enumerate || exit 1
 # A status recorded while a driver was binding or before an update can change.
 case $status in
   unsupported:restart|unsupported:kernel|unsupported:recovery)
