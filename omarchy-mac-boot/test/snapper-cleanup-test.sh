@@ -128,6 +128,9 @@ assert commands['ExecStopPost'] == [
 ], commands
 PY
 pass "the merged unit keeps Snapper cleanup and both cleanup-lock operations"
+grep -Fxq 'TimeoutStopSec=1min' "$units/snapper-cleanup.service.d/omarchy-mac-limine.conf" ||
+  fail "the menu sync after cleanup outlasts Omarchy's 5 s stop timeout"
+pass "the menu sync after cleanup has a minute, not Omarchy's 5 s stop timeout"
 require_command systemd-analyze
 systemd-analyze verify --root="$stage" snapper-cleanup.service >"$tmp/verify.log" 2>&1 || {
   cat "$tmp/verify.log" >&2
