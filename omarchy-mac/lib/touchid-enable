@@ -33,7 +33,9 @@ rebuilt_calibration=0
 root_key=apple/msrk-j700.bin
 fail() {
   if (( recorded )); then
-    rm -f "$agreed" "$options"
+    rm -f "$agreed"
+    "$helpers/touchid-options" --remove || echo "Touch ID could not clear its managed options in $options." >&2
+    "$helpers/touchid-status" --withdraw || echo "Touch ID could not stop fingerprint access after removing its agreement." >&2
   fi
   if (( rebuilt )); then
     rm -f "$firmware/updates/$root_key"
@@ -157,32 +159,20 @@ fi
 { mkdir -p -m 0755 "${agreed%/*}" &&
   printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." >"$agreed" &&
   chmod 0644 "$agreed"; } || fail "the owner's agreement could not be recorded in $agreed"
-# The driver's options say so too. Today's kernels write by default, so this
-# changes nothing yet; a kernel that loads apple_sep read-only by default
-# (omacom/linux-aurora#180) writes only with it. A driver already running
-# keeps the options it was loaded with until the next boot.
 preloaded=0
 if [[ -d $module && ! -e $options && ! -e $loaded ]]; then
   preloaded=1
 fi
-# The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
-# 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
-# Linux to its own xART records. Other Macs keep the kernel's level: the guard
-# blocks matching on M1-family Macs.
-driver_options="xart_writes=1 provision_keybag=1"
-if tr '\0' '\n' <"$tree/compatible" | grep -Fxq apple,j616c; then
-  driver_options+=" xart_guard=1"
+"$helpers/touchid-options" --write || fail "the driver's options could not be written to $options"
+load_result=0
+"$helpers/touchid-load" || load_result=$?
+if (( load_result == 2 )); then
+  echo "The driver was already running. Restart this Mac to load Touch ID with the guarded options, then set up the fingerprint again." >&2
+  exit 1
+elif (( load_result )); then
+  fail "the Secure Enclave driver did not load; see the messages above"
 fi
-# A write that fails partway never replaces the options, since a file without
-# them would load a read-only driver at every boot.
-{ mkdir -p -m 0755 "${options%/*}" &&
-  printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-    "options apple_sep $driver_options" >"$options.new" &&
-  chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
-  { rm -f "$options.new" 2>/dev/null; fail "the driver's options could not be written to $options"; }
-mkdir -p -m 0755 "${loaded%/*}"
-touch "$loaded"
-modprobe apple-sep || fail "the Secure Enclave driver did not load"
+touch "$loaded" || fail "the driver load could not be recorded"
 
 # The node and keybag appear a few seconds after the driver binds. Their add
 # event starts the activation; starting it here too waits for its answer.
@@ -194,7 +184,8 @@ for ((attempt = 0; attempt < 200; attempt++)); do
   sleep 0.1
 done
 systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
-if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
+if "$helpers/touchid-kernel-ready" activate && [[ $(cat "$status_file" 2>/dev/null) == "ready" ]] &&
+  "$helpers/touchid-kernel-ready" reader; then
   # An fprintd that started without the reader found none and kept no
   # allowance for its node, so it starts again with both.
   systemctl try-restart fprintd.service 2>/dev/null

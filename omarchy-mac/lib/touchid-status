@@ -7,6 +7,24 @@ status_file=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
 agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
 helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
 omarchy-hw-apple-silicon || exit 0
+# An already-running fprintd may have acquired the node allowance before
+# this update. Its next D-Bus start must pass the current reader condition.
+if ! "$helpers/touchid-kernel-ready" reader; then
+  state=$(systemctl show -p ActiveState --value fprintd.service) || {
+    echo "Touch ID could not check whether fprintd still has access." >&2
+    exit 1
+  }
+  # A missing optional fprintd unit also reports inactive. For an explicit
+  # withdrawal wait even for a stop that is already in progress.
+  if [[ $state != "inactive" && $state != "failed" ]]; then
+    if [[ ${1:-} == "--withdraw" ]]; then
+      systemctl stop fprintd.service || exit 1
+    else
+      systemctl --no-block stop fprintd.service || exit 1
+    fi
+  fi
+fi
+[[ ${1:-} != "--withdraw" ]] || exit 0
 
 # Turned on: omarchy-mac-touchid-load.service loads the driver, and the
 # activation records the status.

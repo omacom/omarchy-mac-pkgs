@@ -24,6 +24,7 @@ done
 chmod +x "$work/bin/"*
 export CALLS="$work/calls"
 for entry in "$ROOT"/bin/* "$ROOT"/lib/*; do
+  [[ -x $entry ]] || continue # Sourced libraries have no entrypoint.
   name=${entry##*/}
   sed "s|/usr/lib/omarchy-mac/|$ROOT/lib/|g" "$entry" >"$work/entry/$name"
   chmod +x "$work/entry/$name"

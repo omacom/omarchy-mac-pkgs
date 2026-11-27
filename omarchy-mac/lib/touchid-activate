@@ -60,7 +60,12 @@ for ((attempt = 1; attempt <= attempts && SECONDS < 45; attempt++)); do
     finish unproven "the enrolled fingerprints could not be proven (restore unproven)"
   elif [[ $matching == "blocked" ]]; then
     finish blocked "a match could not save its state (matching blocked)"
-  elif [[ $sensor_attach == "attached" && ($previous == "ready" || ($touchid == "ready" && ($restore == "restored" || $restore == "empty") && ($matching == "usable" || $matching == "unverified"))) ]]; then
+  # The driver recognized this historical bag and its existing pins. It
+  # can enroll its first print or try a real verify without a new pin window.
+  elif [[ $matching == "legacy" && $touchid == "ready" && $sensor_attach == "attached" &&
+    ($restore == "restored" || $restore == "empty") ]]; then
+    finish ready
+  elif [[ $matching != "legacy" && $sensor_attach == "attached" && ($previous == "ready" || ($touchid == "ready" && ($restore == "restored" || $restore == "empty") && ($matching == "usable" || $matching == "unverified"))) ]]; then
     finish ready
   elif [[ $sensor_attach == "not-ready" ]]; then
     finish not-ready "the sensor did not come online (sensor_attach not-ready)"

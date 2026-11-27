@@ -2,7 +2,16 @@
 # omarchy-lifecycle-dispatch enable-fingerprint: Omarchy's fingerprint setup runs
 # this as root before enrolling. It asks the owner before Touch ID is turned on,
 # since that leaves state in the Secure Enclave that can't be removed.
-omarchy-hw-apple-silicon || exit 0
+can_enumerate() {
+  /usr/lib/omarchy-mac/touchid-kernel-ready reader && return 0
+  echo "Fingerprint setup paused because the running Touch ID driver cannot confirm safe storage." >&2
+  echo "If the driver is still starting, try again after it binds. Otherwise restart this Mac with a compatible kernel." >&2
+  return 1
+}
+if ! omarchy-hw-apple-silicon; then
+  can_enumerate
+  exit $?
+fi
 
 status=$(cat /run/omarchy-mac/touchid 2>/dev/null)
 recorded_status=${status:-no status}
@@ -12,53 +21,57 @@ if [[ -z $status ]]; then
   status=$(/usr/lib/omarchy-mac/touchid-eligibility 2>/dev/null)
 fi
 if [[ -e /etc/omarchy-mac/touchid-on ]]; then
-  # A Mac turned on before the record came with driver options gets them now,
-  # whatever its status: on a kernel that loads the driver read-only, the
-  # options are what lets it reach ready after a restart.
-  options=/etc/modprobe.d/omarchy-mac-touchid.conf
-  if [[ ! -e $options ]]; then
-    # Under the Touch ID lock, so a removal running now can't be undone here.
-    lock=/run/omarchy-mac/touchid.lock
-    if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
-      echo "Touch ID's driver options could not be written: its lock, $lock, could not be opened." >&2
-      exit 1
-    elif ! flock -w 300 "$lock_fd"; then
-      echo "Touch ID's driver options could not be written: another Touch ID setup or removal is still running." >&2
-      exit 1
-    fi
-    if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
-      echo "Touch ID was turned off while this ran, so setup goes on without it."
-      exit 0
-    elif [[ ! -e $options ]]; then
-      # The 16-inch M4 Max's kernel profile leaves the xART guard off (aurora
-      # 7.3.0.aurora1-40), and Touch ID was tried there only with it on, so keep
-      # Linux to its own xART records. Other Macs keep the kernel's level: the guard
-      # blocks matching on M1-family Macs.
-      driver_options="xart_writes=1 provision_keybag=1"
-      if tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null | grep -Fxq apple,j616c; then
-        driver_options+=" xart_guard=1"
-      fi
-      { mkdir -p -m 0755 "${options%/*}" &&
-        printf '%s\n' "# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this." \
-          "options apple_sep $driver_options" >"$options.new" &&
-        chmod 0644 "$options.new" && mv -fT "$options.new" "$options"; } ||
-        { rm -f "$options.new" 2>/dev/null; echo "Touch ID's driver options could not be written to $options" >&2; exit 1; }
-    fi
-    exec {lock_fd}>&-
+  # An earlier agreement may still have writable M1 autoload options.
+  lock=/run/omarchy-mac/touchid.lock
+  if ! { mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock"; } 2>/dev/null; then
+    echo "Touch ID's driver options could not be written: its lock, $lock, could not be opened." >&2
+    exit 1
+  elif ! flock -w 300 "$lock_fd"; then
+    echo "Touch ID's driver options could not be written: another Touch ID setup or removal is still running." >&2
+    exit 1
   fi
+  if [[ ! -e /etc/omarchy-mac/touchid-on ]]; then
+    echo "Touch ID was turned off while this ran, so setup goes on without it."
+    can_enumerate
+    exit $?
+  fi
+  /usr/lib/omarchy-mac/touchid-options --ensure || {
+    echo "Touch ID's driver options could not be written." >&2
+    exit 1
+  }
+  exec {lock_fd}>&-
+  can_enumerate || exit 1
   # A Mac agreed before the re-arm existed gets its PAM lines here too.
   /usr/lib/omarchy-mac/touchid-pam || echo "Touch ID is on, but a password won't end a lockout until its PAM lines are fixed (see above)." >&2
   # The owner agreed already, so they are never asked again: a Touch ID that
   # isn't ready yet needs a restart, and setup goes on with any other reader.
-  if [[ $status != "ready" ]]; then
+  eligibility=$(/usr/lib/omarchy-mac/touchid-eligibility 2>/dev/null)
+  if [[ $status != "ready" || $eligibility == unsupported:* ]]; then
+    case $eligibility in
+      unsupported:kernel)
+        echo "Touch ID is turned on, but this kernel can't set it up on this Mac."
+        echo "Boot a kernel with the guarded Touch ID driver for this Mac, then set"
+        echo "up the fingerprint again. Setup goes on with any other fingerprint reader."
+        exit 0 ;;
+      unsupported:restart)
+        echo "The running Touch ID driver cannot confirm guarded setup. Restart this Mac to load the checked driver."
+        exit 0 ;;
+      unsupported:recovery)
+        echo "Touch ID kept the previous keybag and guard list. Their state needs inspection before setup can retry."
+        exit 0 ;;
+    esac
     echo "Touch ID is turned on but isn't ready yet ($recorded_status)."
     echo "Restart this Mac, then set up the fingerprint again. If it still isn't"
     echo "ready, see journalctl -u omarchy-mac-touchid-activate."
   fi
   exit 0
 fi
-# Only a Touch ID that can be set up stops the setup: anywhere else it goes on,
-# so a USB reader enrols as it would without Touch ID.
+can_enumerate || exit 1
+# A status recorded while a driver was binding or before an update can change.
+case $status in
+  unsupported:restart|unsupported:kernel|unsupported:recovery)
+    status=$(/usr/lib/omarchy-mac/touchid-eligibility 2>/dev/null) ;;
+esac
 case $status in
   available | ready) ;;
   none | "")
@@ -69,7 +82,8 @@ case $status in
     echo "any other fingerprint reader."
     # A driver that came up wrong this boot stays so until a restart.
     case $status in
-      failed | not-ready | unproven | blocked) echo "Restart this Mac, then set up the fingerprint again to retry Touch ID." ;;
+      unsupported:recovery) echo "The previous keybag and guard list need inspection before setup can retry." ;;
+      failed | not-ready | unproven | blocked | unsupported:restart) echo "Restart this Mac, then set up the fingerprint again to retry Touch ID." ;;
     esac
     exit 0
     ;;

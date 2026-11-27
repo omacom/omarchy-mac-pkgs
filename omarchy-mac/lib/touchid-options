@@ -1,0 +1,116 @@
+#!/bin/bash
+# Guarded M1 writes are authorized for one checked insertion only. An automatic
+# load on an older kernel must never inherit permission to write or provision.
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+options=${OMARCHY_MAC_TOUCHID_OPTIONS:-/etc/modprobe.d/omarchy-mac-touchid.conf}
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+action=${1:-}
+managed_comment="# The owner turned on Touch ID; omarchy-mac's disable-fingerprint removes this."
+saved_comment="# Read-only defaults for retained Apple SEP driver settings."
+passive='options apple_sep xart_writes=0 provision_keybag=0'
+guarded=0
+
+if [[ $action == "--migrate" ]]; then
+  [[ -f $options ]] || exit 0
+  status=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+  lock=${status%/*}/touchid.lock
+  mkdir -p -m 0755 "${lock%/*}" && exec {lock_fd}>>"$lock" && flock -w 300 "$lock_fd" || exit 1
+  [[ -f $options ]] || exit 0
+  # Earlier M1 options identify the board even in an offline target.
+  if grep -Eq '^options apple_sep .*xart_guard_pins=1([[:space:]]|$)' "$options" ||
+    { omarchy-hw-apple-silicon && source "$helpers/touchid-board.sh" && guarded_m1; }; then
+    guarded=1
+    if [[ -e $agreed ]]; then action=--write; else action=--remove; fi
+  else
+    exit 0
+  fi
+else
+  omarchy-hw-apple-silicon || exit 1
+  source "$helpers/touchid-board.sh" || exit 1
+  if guarded_m1; then
+    guarded=1
+  elif [[ $action != "--remove" ]] && ! other_touchid_board; then
+    exit 1
+  fi
+fi
+
+if (( guarded )); then
+  settings=$(printf '%s\n' 'blacklist apple_sep' "$passive")
+elif compatible apple,j616c; then
+  settings='options apple_sep xart_writes=1 provision_keybag=1 xart_guard=1'
+else
+  settings='options apple_sep xart_writes=1 provision_keybag=1'
+fi
+case $action in
+  "") printf '%s\n' "$settings"; exit 0 ;;
+  --ensure) (( guarded )) || [[ ! -e $options ]] || exit 0 ;;
+  --remove) [[ -e $options || -L $options ]] || exit 0 ;;
+  --write) ;;
+  *) exit 1 ;;
+esac
+
+custom_settings() {
+  [[ -e $options || -L $options ]] || return 0
+  [[ -f $options ]] || return 1
+  # Remove our old options, preserving custom UUIDs, stricter settings and
+  # unrelated directives. An ambiguous write setting becomes an explicit deny.
+  awk -v header="$managed_comment" -v saved="$saved_comment" -v passive="$passive" '
+    {
+      while (sub(/\\$/, "")) {
+        if ((getline suffix) != 1) exit 1
+        $0 = $0 suffix
+      }
+    }
+    $0 == header { managed = 1; next }
+    $0 == saved { managed = 3; next }
+    $0 == "blacklist apple_sep" && managed == 1 { managed = 2; next }
+    $0 == passive && managed == 2 { managed = 0; next }
+    managed == 3 && /^options apple_sep (xart_writes=0( provision_keybag=0)?|provision_keybag=0)$/ { managed = 0; next }
+    { managed = 0 }
+    $1 == "options" && ($2 == "apple_sep" || $2 == "apple-sep") {
+      opts = ""
+      for (i = 3; i <= NF; i++) {
+        field = $i
+        split(field, parts, "=")
+        key = parts[1]
+        gsub(/-/, "_", key)
+        if (key == "xart_writes" || key == "provision_keybag") {
+          if (field == parts[1] "=1") continue
+          if (denied[key]++) continue
+          field = key "=0"
+        } else if ((key == "xart_guard" || key == "xart_guard_pins") && field == parts[1] "=1") continue
+        opts = opts " " field
+      }
+      if (opts) print "options apple_sep" opts
+      next
+    }
+    { print }
+  ' "$options"
+}
+custom=$(custom_settings) || exit 1
+if [[ $action == "--remove" ]]; then
+  if [[ -z ${custom//[[:space:]]/} ]]; then
+    rm -f "$options"
+    exit $?
+  elif (( guarded )); then
+    defaults=()
+    for option in xart_writes=0 provision_keybag=0; do
+      grep -Eq "^options apple_sep (.*[[:space:]])?$option([[:space:]]|$)" <<<"$custom" || defaults+=("$option")
+    done
+    content=$custom
+    if (( ${#defaults[@]} )); then
+      content=$(printf '%s\n' "$saved_comment" "options apple_sep ${defaults[*]}" "$custom")
+    fi
+  else
+    content=$custom
+  fi
+else
+  content=$(printf '%s\n' "$managed_comment" "$settings")
+  [[ -z $custom ]] || content+=$'\n'"$custom"
+fi
+
+cmp -s "$options" <(printf '%s\n' "$content") && exit 0
+mkdir -p -m 0755 "${options%/*}" || exit 1
+temporary=$(mktemp "${options%/*}/.omarchy-mac-touchid.XXXXXX") || exit 1
+trap 'rm -f "$temporary"' EXIT
+printf '%s\n' "$content" >"$temporary" && chmod 0644 "$temporary" && mv -fT "$temporary" "$options"

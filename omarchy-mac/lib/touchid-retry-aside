@@ -1,0 +1,48 @@
+#!/bin/bash
+# Check recovery before a guarded load. Only the loader may move a failed
+# attempt's unused guard list, under the Touch ID lock and before driver probe.
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+keybag=${OMARCHY_MAC_TOUCHID_KEYBAG:-/var/lib/aurora-sep-keybag.bin}
+guard_list=${OMARCHY_MAC_TOUCHID_GUARD_LIST:-/var/lib/aurora-sep-xart-owned.bin}
+module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+omarchy-hw-apple-silicon || exit 1
+source "$helpers/touchid-board.sh" || exit 1
+guarded_m1 || exit 0
+[[ ${1:-} == "--check" || ${1:-} == "--recover" ]] || exit 1
+[[ ! -d $module ]] || exit 1
+
+# A keybag intent (v2 state 0) may already name an enclave-side creation.
+# The driver retries only absence or an explicit refusal, never unknown data.
+for file in "$keybag" "$guard_list"; do
+  [[ ! -L $file && (! -e $file || (-f $file && -r $file)) ]] || exit 1
+done
+if [[ ! -e $keybag ]]; then
+  [[ ! -s $guard_list ]]
+  exit $?
+fi
+read -r version state < <(od -An -tu4 --endian=little -j16 -N8 "$keybag") || exit 1
+[[ $(head -c16 "$keybag") == "APPLE-SEP-KBAG01" && $version == 2 ]] || exit 1
+case $state in
+  1|3) exit 0 ;; # Keep committed keybags and their complete lists.
+  2) ;;
+  *) exit 1 ;;
+esac
+# The exact v2 REFUSED header (empty body, UUID and secret, CRC16 0x0ae8).
+[[ $(stat -c %s "$keybag") == 52 && $(sha256sum <"$keybag") == '534d2a855bfd7902d45036510647f6ed006eef5fc5ac04304468e8144173a54e  -' ]] || exit 1
+[[ -s $guard_list ]] || exit 0
+# Only one AXGO spent-window marker, in either on-disk format. Any pin,
+# owned record, completion marker or unrecognized entry preserves the list.
+[[ $(stat -c %s "$guard_list") == 32 ]] || exit 1
+digest=$(sha256sum <"$guard_list") || exit 1
+case ${digest%% *} in
+  f106a4e397a632b9645a063cbc7a5817881c095ae16dfed42b5151cc81d26b8b) ;; # first setup used
+  16e3f5d3b0e54ed0a62c27add201db50db58bceec1be1350e006c5cc0ecd2259) ;; # cold setup spent
+  *) exit 1 ;;
+esac
+[[ $1 == "--recover" ]] || exit 0
+aside=$(mktemp -d "${guard_list%/*}/aurora-sep-touchid-retry-XXXXXXXX") || exit 1
+# Keep the refusal in place. The only state transition is this one rename on
+# the same filesystem, so an interrupted retry cannot split a bag/list pair.
+mv -T "$guard_list" "$aside/${guard_list##*/}" || exit 1
+sync -f "$aside" || exit 1
+echo "The refused Touch ID attempt's unused guard list is kept in $aside."

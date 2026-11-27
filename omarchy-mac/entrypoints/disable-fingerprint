@@ -21,11 +21,16 @@ fi
 rebuilt=(/usr/lib/firmware/updates/apple/msrk-j700.bin /usr/lib/firmware/updates/apple/msrk-j616s.bin
   /usr/lib/firmware/updates/apple/mesacal-j616s.bin /usr/lib/firmware/updates/apple/msrk-j616c.bin
   /usr/lib/firmware/updates/apple/mesacal-j616c.bin)
-records=(/etc/omarchy-mac/touchid-on /etc/modprobe.d/omarchy-mac-touchid.conf)
 present=()
-for file in "${records[@]}" "${rebuilt[@]}" "${rebuilt[@]/%/.new}"; do
+for file in /etc/omarchy-mac/touchid-on "${rebuilt[@]}" "${rebuilt[@]/%/.new}"; do
   [[ -e $file ]] && present+=("$file")
 done
+# Keep administrator settings (including OS identity and read-only denials)
+# across opt-out, even when an earlier setup already removed its consent.
+if ! /usr/lib/omarchy-mac/touchid-options --remove; then
+  echo "Touch ID could not be turned off: its driver options could not be cleared." >&2
+  exit 1
+fi
 if (( ${#present[@]} )); then
   # A record left behind, on a read-only root say, loads the driver again.
   if ! rm -f "${present[@]}"; then
@@ -36,8 +41,11 @@ if (( ${#present[@]} )); then
     echo "Touch ID could not be turned off: remove ${left[*]}" >&2
     exit 1
   fi
-  echo "Touch ID stops loading at the next boot. The key store for Linux stays on this Mac."
+  echo "Touch ID setup stops at the next boot. The key store for Linux stays on this Mac."
 fi
+# An enrolled reader may still be open in fprintd following fingerprint
+# removal. Revoke its access as soon as the owner's agreement is gone.
+/usr/lib/omarchy-mac/touchid-status --withdraw || exit 1
 # Without the record this takes the re-arm out of sudo's and polkit's stacks.
 /usr/lib/omarchy-mac/touchid-pam || exit 1
 exit 0

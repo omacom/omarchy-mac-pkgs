@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/omarchy-mac/touchid-options
+
+[Action]
+Description = Migrating guarded Touch ID module options...
+When = PostTransaction
+Exec = /usr/lib/omarchy-mac/touchid-options --migrate

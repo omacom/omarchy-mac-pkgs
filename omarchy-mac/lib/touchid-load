@@ -1,0 +1,113 @@
+#!/bin/bash
+# Called under the setup/removal lock, from setup or the boot service.
+helpers=${OMARCHY_MAC_TOUCHID_HELPERS:-/usr/lib/omarchy-mac}
+agreed=${OMARCHY_MAC_TOUCHID_AGREED:-/etc/omarchy-mac/touchid-on}
+status=${OMARCHY_MAC_TOUCHID_STATUS:-/run/omarchy-mac/touchid}
+module=${OMARCHY_MAC_TOUCHID_MODULE:-/sys/module/apple_sep}
+modinfo=${OMARCHY_MAC_TOUCHID_MODINFO:-modinfo}
+omarchy-hw-apple-silicon || exit 1
+source "$helpers/touchid-board.sh" || exit 1
+[[ -e $agreed ]] || exit 1
+if ! guarded_m1; then
+  other_touchid_board || exit 1
+  exec modprobe apple-sep
+fi
+"$helpers/touchid-options" --write || exit 1
+if [[ -d $module ]]; then
+  "$helpers/touchid-kernel-ready" activate || exit 2
+  exit 0
+fi
+
+# A package update can replace the module between modinfo and insertion.
+# Keep its compression suffix; libkmod can insert compressed modules directly.
+path=$("$modinfo" -n apple_sep) || exit 1
+[[ $path == /* && -f $path ]] || exit 1
+directory=$(mktemp -d "${status%/*}/touchid-module-XXXXXXXX") || exit 1
+trap 'rm -rf -- "$directory"' EXIT
+image=$directory/${path##*/}
+cp --reflink=auto -- "$path" "$image" || exit 1
+writable=1
+if ! "$helpers/touchid-kernel-ready" image "$image"; then
+  # The M1 microphones also use SEP. On a kernel that normally autoloads
+  # apple,sep (#180), keep that boot-time read-only function after a downgrade.
+  [[ ${1:-} == "--boot" ]] || exit 1
+  "$modinfo" -F alias "$image" | grep -Fxq 'of:N*T*Capple,sep' || exit 1
+  parameters=$("$modinfo" -p "$image") &&
+    grep -q '^xart_writes:' <<<"$parameters" && grep -q '^provision_keybag:' <<<"$parameters" || exit 1
+  writable=0
+fi
+
+# insmod inserts exactly this image once, without merging options a second
+# time. Preserve other numeric apple_sep options such as the identity UUID,
+# and honor conflicting admin settings by declining the writable load.
+configuration=$(modprobe --showconfig) || exit 1
+if (( writable )); then
+  settings=(xart_writes=1 provision_keybag=1 xart_guard=1 xart_guard_pins=1)
+else
+  settings=(xart_writes=0 provision_keybag=0)
+fi
+declare -A additional=()
+passive=0
+while read -r directive name arguments; do
+  case $directive in
+    install|softdep)
+      # kmod applies these directives by pattern, including to named loads.
+      if [[ apple_sep == $name ]]; then
+        echo "Touch ID cannot bypass the configured $directive for $name." >&2
+        exit 1
+      fi
+      continue ;;
+    options) [[ $name == "apple_sep" ]] || continue ;;
+    *) continue ;;
+  esac
+  if [[ $arguments == "xart_writes=0 provision_keybag=0" ]] && (( ! passive )); then
+    passive=1
+    continue
+  fi
+  read -r -a fields <<<"$arguments"
+  for field in "${fields[@]}"; do
+    key=${field%%=*}
+    key=${key//-/_}
+    value=${field#*=}
+    if [[ $value == \"*\" ]]; then value=${value:1:-1}; fi
+    [[ $field == *=* && $key =~ ^[a-zA-Z0-9_]+$ &&
+      $value =~ ^[+-]?([0-9]+|0[xX][[:xdigit:]]+|0[bB][01]+|0[oO][0-7]+)$ ]] || exit 1
+    case $key in
+      xart_writes|provision_keybag|xart_guard|xart_guard_pins)
+        if (( ! writable )) || [[ $value == 1 ]]; then
+          continue
+        fi
+        echo "Touch ID cannot override apple_sep $field." >&2
+        exit 1 ;;
+    esac
+    if [[ -v additional[$key] && ${additional[$key]} != "$key=$value" ]]; then
+      echo "Touch ID cannot choose between conflicting apple_sep $key values." >&2
+      exit 1
+    fi
+    additional[$key]="$key=$value"
+  done
+done <<<"$configuration"
+(( passive )) || exit 1
+settings+=("${additional[@]}")
+
+depends=$("$modinfo" -F depends "$image") || exit 1
+if [[ -n $depends ]]; then
+  [[ $depends =~ ^[[:alnum:]_-]+(,[[:alnum:]_-]+)*$ ]] || exit 1
+  IFS=, read -r -a dependencies <<<"$depends"
+  modprobe -a -- "${dependencies[@]}" || exit 1
+fi
+if (( ! writable )); then
+  insmod "$image" "${settings[@]}"
+  exit $?
+fi
+"$helpers/touchid-retry-aside" --recover || {
+  echo "Touch ID kept the existing keybag and guard list. Their state does not prove a safe retry." >&2
+  exit 1
+}
+rm -f "${status%/*}/touchid-guarded-build-id" || exit 1
+insmod "$image" "${settings[@]}" || exit 1
+# The kernel rejects an already-loaded module. Tie activation to the build we
+# just inserted, even if a later package update changes the module on disk.
+note=$module/notes/.note.gnu.build-id
+[[ -s $note ]] && cp "$note" "$directory/build-id" &&
+  mv -T "$directory/build-id" "${status%/*}/touchid-guarded-build-id"

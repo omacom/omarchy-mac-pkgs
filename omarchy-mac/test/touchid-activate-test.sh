@@ -11,7 +11,7 @@ rule=$work/root/usr/lib/udev/rules.d/94-omarchy-mac-touchid.rules
 unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-activate.service
 script=$work/root/usr/lib/omarchy-mac/touchid-activate
 [[ -f $rule && -f $unit && -x $script ]] || fail 'the Touch ID rule, unit and script are staged'
-grep -Fxq 'ACTION=="add", SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omarchy-mac-touchid-activate.service"' "$rule" ||
+grep -Fxq 'ACTION=="add", SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG+="systemd", ENV{SYSTEMD_WANTS}+="omarchy-mac-touchid-status.service omarchy-mac-touchid-activate.service"' "$rule" ||
   fail 'the rule starts the unit when the Secure Enclave publishes sep-bio, and only then'
 [[ $(grep -v '^#' "$rule") != *RUN* ]] || fail 'the rule runs nothing itself'
 grep -Fxq 'ExecStart=/usr/lib/omarchy-mac/touchid-activate' "$unit" && grep -Fxq 'Type=oneshot' "$unit" &&
@@ -22,6 +22,9 @@ grep -Fxq 'ConditionPathExists=/var/lib/aurora-sep-keybag.bin' "$unit" ||
 grep -Fxq 'ConditionPathExists=/etc/omarchy-mac/touchid-on' "$unit" ||
   fail "the unit opens /dev/sep-bio only once the owner has agreed, whatever loaded the driver"
 grep -Fxq 'Before=fprintd.service' "$unit" || fail 'fprintd starts after the unit, not alongside it'
+grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready activate' "$unit" &&
+  grep -Fxq 'After=omarchy-mac-touchid-load.service' "$unit" ||
+  fail 'udev and pacman activation require the running guarded driver after boot loading'
 ! grep -q '^StandardInput=' "$unit" || fail 'the platform check does not open /dev/sep-bio as well'
 ! grep -q '^\[Install\]' "$unit" || fail 'the unit needs no enabling: the rule pulls it in'
 pass 'the Touch ID rule, unit and script are staged, and the rule alone starts the unit'
@@ -85,6 +88,17 @@ activate || fail 'Touch ID that is ready, attached, restored and usable succeeds
 [[ $(stat -c %a "$status") == 644 && $(stat -c %a "${status%/*}") == 755 ]] ||
   fail 'the session user can read the status, whatever the umask' "$(stat -c %a "${status%/*}" "$status")"
 [[ ! -e $status.new ]] || fail 'the status is replaced in one step'
+attributes ready attached restored legacy
+activate && [[ $(<"$status") == ready ]] || fail 'a restored historical bag can try a real match'
+attributes ready attached empty legacy
+activate && [[ $(<"$status") == ready ]] || fail 'a validated empty historical bag can enroll its first fingerprint'
+attributes ready attached empty blocked
+! run_script && [[ $(<"$status") == blocked ]] || fail 'a refused write blocks even a previously ready empty bag'
+attributes ready attached empty legacy
+activate
+attributes not-ready attached restored legacy
+! OMARCHY_MAC_TOUCHID_ATTEMPTS=1 run_script && [[ $(<"$status") == not-ready ]] ||
+  fail 'an earlier ready cannot stand in for the historical reader being ready this boot'
 attributes ready attached empty unverified
 activate && [[ $(<"$status") == "ready" ]] || fail 'nothing enrolled yet, behind a guard that has refused nothing, is ready'
 rm "$fixture/sep-bio"
@@ -178,7 +192,8 @@ fi
 dropin=$work/root/usr/lib/systemd/system/fprintd.service.d/50-omarchy-mac-touchid.conf
 wait_unit=$work/root/usr/lib/systemd/system/omarchy-mac-touchid-wait.service
 [[ -f $dropin && -f $wait_unit ]] || fail 'the fprintd drop-in and the wait unit are staged'
-grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
+grep -Fxq 'ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready reader' "$dropin" &&
+  grep -Fxq 'Wants=omarchy-mac-touchid-wait.service' "$dropin" &&
   grep -Fxq 'After=omarchy-mac-touchid-load.service omarchy-mac-touchid-wait.service omarchy-mac-touchid-activate.service' "$dropin" ||
   fail 'fprintd starts after the wait and the activation'
 ! grep -qE '^(DeviceAllow|DevicePolicy|ExecStartPre)=' "$dropin" ||

@@ -39,11 +39,17 @@ If a bug ever writes that shared state wrongly, the enclave stops accepting it a
 - With FileVault on, macOS can't unlock its disk and won't start, and the startup picker may not open. Getting the Mac back takes a DFU restore, which erases it.
 - With FileVault off, macOS resets its keychain and Touch ID fingerprints and shows a warning.
 
+On the M1 MacBook Air and the 16-inch 2021 MacBook Pro with M1 Max, setup requires a kernel that guards the shared records during first setup. The M1 Max also requires the driver's enrollment and verification startup fixes. Setup checks the driver at every boot before permitting writes. If the driver was already running when you agreed, restart your Mac and open fingerprint setup again. If setup asks for a compatible kernel, install one with those features and restart.
+
+Fingerprint setup and fingerprint sign-in pause if the running M1 driver cannot confirm safe storage. This also affects an attached USB reader because the fingerprint service checks every reader when it starts. Use your password while the driver starts, or restart with a compatible kernel if setup still reports the problem.
+
+An interrupted first setup can leave a key store whose creation the Secure Enclave never confirmed. Setup preserves it and tells you when it needs inspection. A confirmed refusal can be retried automatically on the next guarded load if no shared record was pinned. Existing fingerprints and their key store are kept.
+
 On a MacBook Neo or a 16-inch MacBook Pro with M4 Pro, setup also reads the sensor's key (and on the M4 Pro its calibration) from the factory records the installer left on the boot partition, into firmware files only root can read. Turning Touch ID off deletes those files, and turning it on again rebuilds them.
 
 After five fingerprints that don't match, Touch ID locks, and it stays locked after a restart, as on macOS. Your password at a `sudo` prompt or an administrator dialog unlocks it again. The lock screen's password doesn't yet, so use one of those once if Touch ID keeps refusing your finger.
 
-Turning Touch ID off later removes your fingerprints and stops the driver loading. The key store stays.
+Turning Touch ID off later removes your fingerprints and the package's authorization to write. The key store stays. A kernel that uses the Secure Enclave for the M1 microphones can still load its driver read-only.
 
 ## Resetting the Mac for a new owner
 

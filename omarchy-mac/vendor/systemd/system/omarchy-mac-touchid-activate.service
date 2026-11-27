@@ -10,11 +10,13 @@ ConditionPathExists=/dev/sep-bio
 # A failed activation stays failed for the rest of the boot, so open the node
 # only once the kernel has made this Mac's keybag.
 ConditionPathExists=/var/lib/aurora-sep-keybag.bin
+After=omarchy-mac-touchid-load.service
 Before=fprintd.service
 
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecCondition=/usr/lib/omarchy-mac/touchid-kernel-ready activate
 ExecStart=/usr/lib/omarchy-mac/touchid-activate
 # The script waits up to 45 s for the attach's later retry; this bounds a
 # blocked open, which would otherwise hold up the pacman hook.
