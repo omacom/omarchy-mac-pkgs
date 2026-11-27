@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$(dirname "$0")/base-test.sh"
 SCRIPT=$ROOT/files/usr/lib/omarchy/initcpio/omarchy-mac-encrypt
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

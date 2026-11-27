@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$(dirname "$0")/base-test.sh"
 INSTALL=$ROOT/files/usr/lib/initcpio/install/omarchy-mac-encrypt
 ADDENDUM=$ROOT/files/usr/lib/omarchy/initcpio/omarchy-mac-plymouth.script
 

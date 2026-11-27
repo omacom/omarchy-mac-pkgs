@@ -283,7 +283,7 @@ done
   fail "the rest of @factory stays as it was"
 [[ $(grep '^btrfs' "$calls") == "btrfs property set -ts $baseline ro false"$'\n'"btrfs property set -ts $baseline ro true" ]] ||
   fail "@factory is unsealed for the scrub and sealed again" "$(cat "$calls")"
-(( EUID == 0 )) || [[ ! -w $baseline/var/lib/omarchy ]] || fail "@factory is left sealed"
+[[ ! -w $baseline/var/lib/omarchy ]] || fail "@factory is left sealed"
 run reset-rollback || fail "rollback" "$(cat "$test_tmp/err")"
 [[ ! -e $baseline/var/lib/omarchy/mac-first-boot/deferred-steps ]] || fail "rollback leaves @factory scrubbed"
 : >"$calls"
