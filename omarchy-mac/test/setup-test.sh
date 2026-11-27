@@ -182,6 +182,9 @@ case "$*" in
   "is-enabled --quiet speakersafetyd.service") exit "${SAFETY_ENABLED:-0}" ;;
   "is-active --quiet speakersafetyd.service") exit "${SAFETY_ACTIVE:-0}" ;;
   "start speakersafetyd.service") exit "${SAFETY_START:-0}" ;;
+  "is-enabled --quiet omarchy-mac-powerprofiles-floor.service") exit "${FLOOR_ENABLED:-0}" ;;
+  "is-active --quiet omarchy-mac-powerprofiles-floor.service") exit "${FLOOR_ACTIVE:-0}" ;;
+  "start --no-block omarchy-mac-powerprofiles-floor.service") exit "${FLOOR_START:-0}" ;;
 esac
 STUB
 printf '#!/bin/bash\n' >"$work/live-bin/NetworkManager"
@@ -200,3 +203,17 @@ SAFETY_ENABLED=1 SAFETY_ACTIVE=3 live
 SAFETY_ACTIVE=3 SAFETY_START=1 live || fail 'a failed start does not fail setup'
 grep -Fq 'speakers stay muted' "$work/live-errors" || fail 'a failed start is reported'
 pass 'live setup recovers speakersafetyd from a start-limit'
+
+# Live setup starts an enabled floor that is not running yet, as on an image's
+# first boot, without waiting for it. A running one is left alone, and so is a
+# disabled or masked one: is-enabled fails for both.
+floor=omarchy-mac-powerprofiles-floor.service
+FLOOR_ACTIVE=3 live
+grep -Fxq "start --no-block $floor" "$CALLS" || fail 'an enabled floor that is not running is started' "$(cat "$CALLS")"
+live
+! grep -Eq "^start .*$floor" "$CALLS" || fail 'a running floor is left alone'
+FLOOR_ENABLED=1 FLOOR_ACTIVE=3 live
+! grep -Eq "^start .*$floor" "$CALLS" || fail 'a disabled or masked floor is not started'
+FLOOR_ACTIVE=3 FLOOR_START=1 live || fail 'a failed floor start does not fail setup'
+grep -Fq 'CPU frequency floor did not start' "$work/live-errors" || fail 'a failed floor start is reported'
+pass 'live setup starts an enabled floor without waiting for it'
