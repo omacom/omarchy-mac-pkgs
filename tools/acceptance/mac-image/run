@@ -42,6 +42,7 @@ signing_key=${OMARCHY_VM_IMAGE_KEY_FILE:-$acceptance/keys/omarchy-arm-repository
 uefi_url=${OMARCHY_VM_UEFI_URL:-https://archive.archlinux.org/packages/e/edk2-aarch64/edk2-aarch64-202608-1-any.pkg.tar.zst}
 uefi_sha256=${OMARCHY_VM_UEFI_SHA256:-07651fafa99d4569ce59a1c1653eb83a4bb02112abeb1656e1354c0fd5b6aa69}
 vm_memory_mb=${OMARCHY_VM_MEMORY_MB:-8192}
+vm_hugepages=${OMARCHY_VM_HUGEPAGES:-0}
 vm_cpus=${OMARCHY_VM_CPUS:-8}
 boot_timeout=${OMARCHY_VM_IMAGE_BOOT_TIMEOUT:-900}
 update_timeout=${OMARCHY_VM_IMAGE_UPDATE_TIMEOUT:-3600}
@@ -104,6 +105,7 @@ done
   echo "OMARCHY_VM_CPUS, OMARCHY_VM_MEMORY_MB, OMARCHY_VM_IMAGE_BOOT_TIMEOUT, OMARCHY_VM_IMAGE_UPDATE_TIMEOUT and OMARCHY_VM_IMAGE_DISK_GIB must be positive integers" >&2
   exit 1
 }
+[[ $vm_hugepages == [01] ]] || { echo "OMARCHY_VM_HUGEPAGES must be 0 or 1" >&2; exit 1; }
 [[ $uefi_url == https://* && $uefi_sha256 =~ ^[0-9a-f]{64}$ ]] || { echo "OMARCHY_VM_UEFI_URL must be https and OMARCHY_VM_UEFI_SHA256 a sha256" >&2; exit 1; }
 [[ $alarm_mirror == https://* && $alarm_mirror == *'$repo'* && $alarm_mirror == *'$arch'* ]] || {
   echo 'OMARCHY_VM_ALARM_MIRROR must be an https URL containing $repo and $arch' >&2
@@ -527,14 +529,36 @@ serial_log=""
 serial_pos=0
 serial_match=""
 
+# The guest's memory. On a host that is itself a VM (a Linux VM on an Apple
+# Silicon Mac), memory the guest first touches reaches it 4 KiB at a time once the
+# host's page cache has used up its huge pages, and one Argon2id key slot at
+# cryptsetup's 1 GiB then takes minutes to hours. OMARCHY_VM_HUGEPAGES=1 backs the
+# guest with the host's reserved huge pages instead, all taken when it starts.
+hugepage_mount=/dev/hugepages
+meminfo=/proc/meminfo
+guest_memory() {
+  local free_mib
+  memory_args=(-m "$vm_memory_mb")
+  [[ $vm_hugepages == 1 ]] || return 0
+  [[ $(stat -f -c %T "$hugepage_mount" 2>/dev/null) == hugetlbfs ]] ||
+    fail "OMARCHY_VM_HUGEPAGES=1, but $hugepage_mount is not a hugetlbfs mount"
+  [[ -w $hugepage_mount ]] || fail "OMARCHY_VM_HUGEPAGES=1, but $(id -un) cannot create files in $hugepage_mount"
+  free_mib=$(awk '/^HugePages_Free:/ {free = $2} /^Hugepagesize:/ {size = $2} END {print int(free * size / 1024)}' "$meminfo")
+  ((free_mib >= vm_memory_mb)) ||
+    fail "OMARCHY_VM_HUGEPAGES=1 needs $vm_memory_mb MiB of free huge pages, and the host has $free_mib MiB (raise vm.nr_hugepages)"
+  memory_args+=(-object "memory-backend-file,id=mem0,size=${vm_memory_mb}M,mem-path=$hugepage_mount,prealloc=on"
+    -machine memory-backend=mem0)
+}
+
 # Boots a disk with the command line given; "offline" as the fourth argument
 # gives the guest no network device.
 boot_guest() {
   local disk=$1 log=$2 cmdline=$3 net=(-netdev user,id=n0 -device virtio-net-pci,netdev=n0,romfile=)
   [[ ${4:-} != offline ]] || net=(-nic none)
+  guest_memory
   rm -f "$log" "$serial_sock"
   echo "$cmdline" >"${log%.log}.cmdline"
-  qemu-system-aarch64 -M "$machine" -cpu host -m "$vm_memory_mb" -smp "$vm_cpus" \
+  qemu-system-aarch64 -M "$machine" -cpu host "${memory_args[@]}" -smp "$vm_cpus" \
     -bios "$work/generic/QEMU_EFI.fd" -dtb "$work/apple.dtb" -kernel "$work/generic/Image-generic" -initrd "$work/generic/initramfs-generic.img" \
     -append "$cmdline $vm_append" \
     -drive "file=$disk,format=raw,if=none,id=d0,cache=writeback" -device virtio-blk-pci,drive=d0,romfile= \

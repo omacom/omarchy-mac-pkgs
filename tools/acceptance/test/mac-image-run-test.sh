@@ -47,7 +47,47 @@ expect_refusal "--lane is read from IMAGE with --image" --image "$test_tmp" --la
 expect_refusal "--scenario needs a name" --image "$test_tmp" --scenario
 expect_refusal "Unknown option: --release" --release mac-image-10-rc
 OMARCHY_VM_RUN_ID="../x" expect_refusal "OMARCHY_VM_RUN_ID must be" --image "$test_tmp"
-pass "bad scenarios, inputs and run IDs are refused before the host is checked"
+OMARCHY_VM_HUGEPAGES=yes expect_refusal "OMARCHY_VM_HUGEPAGES must be 0 or 1" --image "$test_tmp"
+pass "bad scenarios, inputs, run IDs and memory settings are refused before the host is checked"
+
+# The guest's memory: ordinary by default, and with OMARCHY_VM_HUGEPAGES=1 the
+# host's huge pages, but only where hugetlbfs is mounted and has room for it all.
+awk '/^guest_memory\(\) \{/,/^}/' "$harness" >"$test_tmp/guest-memory.sh"
+[[ $(awk '/^boot_guest\(\) \{/,/^}/' "$harness") == *guest_memory*'"${memory_args[@]}"'* ]] ||
+  fail "every boot takes its memory from guest_memory"
+guest_memory_with() {
+  (
+    fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
+    stat() { [[ ${TEST_HUGETLBFS:-1} == 1 ]] && echo hugetlbfs || echo tmpfs; }
+    # shellcheck disable=SC2034 # read by the sourced harness function
+    vm_memory_mb=8192 vm_hugepages=$1 hugepage_mount=${TEST_HUGEPAGE_MOUNT:-$test_tmp/hugepages} meminfo=$test_tmp/meminfo
+    source "$test_tmp/guest-memory.sh"
+    guest_memory
+    printf '%s\n' "${memory_args[@]}"
+  ) >"$test_tmp/out" 2>&1
+}
+mkdir -p "$test_tmp/hugepages" "$test_tmp/hugepages-root"
+chmod 555 "$test_tmp/hugepages-root"
+printf 'HugePages_Free:     4200\nHugepagesize:       2048 kB\n' >"$test_tmp/meminfo"
+guest_memory_with 0 || fail "ordinary guest memory needs no huge pages" "$(cat "$test_tmp/out")"
+[[ $(cat "$test_tmp/out") == $'-m\n8192' ]] || fail "ordinary guest memory is -m alone" "$(cat "$test_tmp/out")"
+guest_memory_with 1 || fail "huge pages with room for the guest are used" "$(cat "$test_tmp/out")"
+[[ $(cat "$test_tmp/out") == $'-m\n8192\n-object\nmemory-backend-file,id=mem0,size=8192M,mem-path='"$test_tmp"$'/hugepages,prealloc=on\n-machine\nmemory-backend=mem0' ]] ||
+  fail "the guest's memory is the host's huge pages, all taken at start" "$(cat "$test_tmp/out")"
+printf 'HugePages_Free:     4000\nHugepagesize:       2048 kB\n' >"$test_tmp/meminfo"
+! guest_memory_with 1 || fail "too few free huge pages fail"
+grep -Fq "needs 8192 MiB of free huge pages, and the host has 8000 MiB" "$test_tmp/out" || fail "too few huge pages are counted" "$(cat "$test_tmp/out")"
+printf 'HugePages_Free:     1\nHugepagesize:       32768 kB\n' >"$test_tmp/meminfo"
+! guest_memory_with 1 || fail "a 16K-page host's one free 32 MiB page is too few"
+printf 'HugePages_Free:     256\nHugepagesize:       32768 kB\n' >"$test_tmp/meminfo"
+guest_memory_with 1 || fail "a 16K-page host's 32 MiB pages count by their size" "$(cat "$test_tmp/out")"
+! TEST_HUGETLBFS=0 guest_memory_with 1 || fail "huge pages without a hugetlbfs mount fail"
+grep -Fq "$test_tmp/hugepages is not a hugetlbfs mount" "$test_tmp/out" || fail "a missing hugetlbfs mount is named" "$(cat "$test_tmp/out")"
+if [[ ! -w $test_tmp/hugepages-root ]]; then
+  ! TEST_HUGEPAGE_MOUNT=$test_tmp/hugepages-root guest_memory_with 1 || fail "a hugetlbfs mount the user cannot write fails"
+  grep -Fq "cannot create files in $test_tmp/hugepages-root" "$test_tmp/out" || fail "an unwritable hugetlbfs mount is named" "$(cat "$test_tmp/out")"
+fi
+pass "the guest's memory is ordinary, or with OMARCHY_VM_HUGEPAGES=1 the host's huge pages when there is room"
 
 for selection in fresh-install all "update,snapshot-restore" second-boot; do
   expect_refusal "this harness boots aarch64 guests" --image "$test_tmp" --scenario "$selection"
