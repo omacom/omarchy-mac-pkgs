@@ -157,6 +157,21 @@ for name, payload in (("j616c-key.bin", im4p), ("j616c-cal.bin", fsc2_im4p)):
     with open(os.path.join(out, name), "wb") as fd:
         fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
                            + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
+# A 15-inch M5 MacBook Air's: the same records, with a seal naming its SoC.
+j815_seal = der(0x30, der(0x16, b"IM4M") + der(0x02, b"\x00") + der(0x04, b"n" * 900))
+archive("j815.tar.gz", [("MSRk-00003356-BB", msrk), ("FSC2-00003356-BB", fsc2), ("seal-00008142-0026", j815_seal),
+                        (named, trust), ("trustobject-current", trust)])
+with open(os.path.join(out, "j815-no-key-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + fsc2 + j815_seal + trust + filler(1 << 20))
+archive("j815-other-chip.tar.gz", [("MSRk-00003356-BB", msrk), ("FSC2-00003356-BB", fsc2), ("seal-00006040-0026", j815_seal),
+                                   (named, trust), ("trustobject-current", trust)])
+with open(os.path.join(out, "j815-isc.img"), "wb") as fd:
+    fd.write(filler(1 << 20) + msrk + filler(4096) + fsc2 + j815_seal + trust + filler(1 << 20))
+for name, payload in (("j815-key.bin", im4p), ("j815-cal.bin", fsc2_im4p)):
+    image = der(0x30, der(0x16, b"IMG4") + payload + der(0xA0, j815_seal))
+    with open(os.path.join(out, name), "wb") as fd:
+        fd.write(der(0x30, der(0x16, b"comb") + der(0x30, der(0x16, b"fdrd") + der(0x04, image))
+                           + der(0x30, der(0x16, b"secb") + der(0x04, trust))))
 PY
 python3 -I "$work/factory.py" "$work/factory"
 # Any copy of the sensor key under the fixture other than the one named.
@@ -818,6 +833,67 @@ PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
     ! -e $fixture/etc/touchid-on ]] ||
   fail "turning it off deletes an M4 Max's sensor key and calibration"
 pass 'the 16-inch M4 Max rebuilds its calibration and sensor key from its own factory records'
+
+# The 15-inch M5 MacBook Air: its sensor sits on an SPI controller under /soc,
+# and its node names a sealed calibration and a sensor root key, both rebuilt
+# from its factory records once the owner agrees, as on the M4 Pro.
+j815() {
+  machine apple,j815 apple,t8142 apple,arm-platform
+  rm -rf "$tree/soc" "$tree/spi@429108000"
+  mkdir -p "$tree/soc/spi@3a5108000/fingerprint@0" "$fixture/esp/asahi"
+  printf 'apple,mesa-fingerprint\0' >"$tree/soc/spi@3a5108000/fingerprint@0/compatible"
+  printf 'okay\0' >"$tree/soc/spi@3a5108000/fingerprint@0/status"
+  printf 'apple/mesacal-j815.bin\0apple/msrk-j815.bin\0' >"$tree/soc/spi@3a5108000/fingerprint@0/firmware-name"
+  rm -f "$fixture/firmware/updates/apple/"*j815*
+  cp "$work/factory/j815.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+}
+j815
+[[ $(eligibility) == "available" ]] || fail 'an M5 Air with its factory records on the ESP is available' "$(eligibility)"
+[[ $(run touchid-eligibility sensor) == "$tree/soc/spi@3a5108000/fingerprint@0" ]] || fail 'its sensor is found on spi2 under /soc'
+rm "$fixture/esp/asahi/all_firmware.tar.gz"
+[[ $(eligibility) == "unsupported:no-calibration" ]] || fail "an M5 Air without its factory records can't rebuild its calibration"
+mkdir -p "$fixture/firmware/updates/apple"
+cp "$work/factory/j815-cal.bin" "$fixture/firmware/updates/apple/mesacal-j815.bin"
+[[ $(eligibility) == "unsupported:no-root-key" ]] || fail "an M5 Air with a calibration but no records can't rebuild its sensor key"
+cp "$work/factory/j815-key.bin" "$fixture/firmware/updates/apple/msrk-j815.bin"
+[[ $(eligibility) == "available" ]] || fail 'an M5 Air whose calibration and key are installed needs nothing else'
+j815
+printf '%s\0' apple,j704 apple,t8142 apple,arm-platform >"$tree/compatible"
+[[ $(eligibility) == "unsupported:board" ]] || fail 'a T8142 board the driver has not been tried on is unsupported' "$(eligibility)"
+j815
+printf '%s\0' apple,j813 apple,t8142 apple,arm-platform >"$tree/compatible"
+[[ $(eligibility) == "unsupported:board" ]] || fail 'the 13-inch M5 Air, with a sensor node, stays unsupported until tried' "$(eligibility)"
+j815
+echo ready >"$fixture/activation"
+container=$work/factory/j815-isc.img
+out=$(run touchid-enable 2>&1) || fail 'an M5 Air turns on' "$out"
+for file in cal:mesacal-j815.bin key:msrk-j815.bin; do
+  installed=$fixture/firmware/updates/apple/${file#*:}
+  cmp -s "$installed" "$work/factory/j815-${file%%:*}.bin" && [[ $(stat -c %a "$installed") == 600 && ! -e $installed.new ]] ||
+    fail "the M5 Air's ${file#*:} is rebuilt from its factory records, root-only" "$out"
+done
+! grep -Fxq calibration "$fixture/calls" || fail "the M5 Air's calibration is resealed, never carved"
+j815
+cp "$work/factory/j815-other-chip.tar.gz" "$fixture/esp/asahi/all_firmware.tar.gz"
+container=$work/factory/j815-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"is not an M5 MacBook Air's"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j815*') ]] ||
+  fail "records sealed for another SoC give an M5 Air nothing, and it says why" "$out"
+# A calibration rebuilt by a run whose key then can't be read goes with it.
+j815
+container=$work/factory/j815-no-key-isc.img
+! out=$(run touchid-enable 2>&1) && [[ $out == *"sensor key could not be read"* && ! -e $fixture/etc/touchid-on ]] &&
+  [[ -z $(find "$fixture/firmware" -name '*j815*') ]] ||
+  fail "an M5 Air whose key can't be read keeps no calibration rebuilt for it" "$out$(find "$fixture/firmware" -name '*j815*')"
+unset container
+mkdir -p "$fixture/firmware/updates/apple" "$fixture/etc"
+cp "$work/factory/j815-key.bin" "$fixture/firmware/updates/apple/msrk-j815.bin"
+cp "$work/factory/j815-cal.bin" "$fixture/firmware/updates/apple/mesacal-j815.bin"
+touch "$fixture/etc/touchid-on"
+PATH="$fixture/bin:$PATH" "$entry/disable-fingerprint" >/dev/null 2>&1 &&
+  [[ -z $(find "$fixture/firmware" -name '*j815*') && ! -e $fixture/etc/touchid-on ]] ||
+  fail "turning it off deletes an M5 Air's sensor key and the calibration rebuilt with it"
+pass 'the 15-inch M5 MacBook Air rebuilds its calibration and sensor key from its own factory records'
 
 if command -v systemd-analyze >/dev/null; then
   stub_systemd_boot_targets "$work/root"
