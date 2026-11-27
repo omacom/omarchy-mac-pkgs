@@ -63,15 +63,16 @@ dtb_overlays_supported() {
 
 # True when DTB has an available node whose compatible list holds COMPATIBLE.
 # Available is Linux's of_device_is_available(): the node has no status, or
-# its status is "okay" or "ok". A disabled node does not count.
+# its status is "okay" or "ok". Keep reading after a match so dtc can
+# finish writing even when the caller enables pipefail.
 dtb_overlays_has_compatible() {
   dtc -q -I dtb -O dts -o - "$1" 2>/dev/null | awk -v compatible="\"$2\"" '
+    found { next }
     {
       if ($0 ~ /^[[:space:]]*\}[;]?[[:space:]]*$/) {
         if (matched[depth] && (status[depth] == "" || status[depth] == "okay" ||
           status[depth] == "ok")) {
           found = 1
-          exit
         }
         delete matched[depth]
         delete status[depth]
