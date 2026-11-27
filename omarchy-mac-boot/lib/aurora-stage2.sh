@@ -207,14 +207,65 @@ aurora_check_stage2() {
   fi
 }
 
+# aurora-stage2-commit.service's jobs, then its state, into the caller's
+# variables. Read before aura-try: with no start job left, nothing commits a
+# trial that aura-try still shows spent.
+aurora_read_commit_unit() {
+  local unit=aurora-stage2-commit.service jobs properties key value job_unit job_type
+  load_state="" active_state="" sub_state="" unit_file_state="" commit_job=""
+  command -v systemctl >/dev/null 2>&1 &&
+    jobs=$(systemctl list-jobs --no-legend "$unit" 2>/dev/null) &&
+    properties=$(systemctl show -p LoadState,ActiveState,SubState,UnitFileState "$unit" 2>/dev/null) || return 0
+  while read -r _ job_unit job_type _; do
+    [[ $job_unit != "$unit" || $commit_job == "start" ]] || commit_job=$job_type
+  done <<<"$jobs"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      LoadState) load_state=$value ;;
+      ActiveState) active_state=$value ;;
+      SubState) sub_state=$value ;;
+      UnitFileState) unit_file_state=$value ;;
+    esac
+  done <<<"$properties"
+}
+
+# Fails unless aurora-stage2-commit.service is still to commit this boot's
+# running trial: activating now, or inactive with a start job queued.
+aurora_check_commit() {
+  local stage2=$1 relative=$2 unit=aurora-stage2-commit.service state_text outcome next_step
+  if [[ $load_state == "loaded" && ( $active_state == "activating" || ( $active_state == "inactive" && $commit_job == "start" ) ) ]]; then
+    return 0
+  fi
+  outcome="so the next boot will fall back to the previous $stage2"
+  next_step="check 'systemctl status $unit' and 'journalctl -b -u $unit'"
+  if [[ -z $load_state || -z $active_state ]]; then
+    state_text="has an unreadable state" outcome="so this check cannot tell whether it will become $stage2"
+  elif [[ $load_state != "loaded" ]]; then
+    state_text="is not loaded ($load_state)" next_step="check 'systemctl status $unit'"
+  elif [[ $active_state == "failed" ]]; then
+    state_text="failed" next_step="see 'journalctl -b -u $unit'"
+  elif [[ -n $commit_job && $commit_job != "start" ]]; then
+    state_text="has only a $commit_job job ($active_state/${sub_state:-unknown}), not a start job"
+  elif [[ $active_state == "inactive" && ( $unit_file_state == "disabled" || $unit_file_state == "masked" || $unit_file_state == "masked-runtime" ) ]]; then
+    state_text="is $unit_file_state" next_step="check 'systemctl status $unit'"
+  elif [[ $active_state == "active" || $active_state == "inactive" ]]; then
+    state_text="finished without committing ($active_state/${sub_state:-unknown})" next_step="see 'journalctl -b -u $unit'"
+  else
+    state_text="is $active_state/${sub_state:-unknown} with no start job"
+  fi
+  fail "this boot is the Stage 2 trial of $relative, but $unit $state_text, $outcome; $next_step"
+}
+
 # The live Stage 2 and any trial of it on the mounted ESP, against the image
 # just built. Returns when the next boot reads that image, or a trial of it
 # that falls back to the live one; fails otherwise.
 aurora_check_trial() {
   local stage2=$1 live=$mountpoint/$1 relative=$1.next marker=$mountpoint/aura-try
   local built=$workdir/aurora-stage2.bin live_matches=0 state="" named="" answer trial
+  local load_state active_state sub_state unit_file_state commit_job
   aurora_foreign_marker=""
-  sudo cmp -s "$built" "$live" && live_matches=1
+  trial=$(aurora_chosen aurora,trial)
+  [[ $trial != "$relative" ]] || aurora_read_commit_unit
   if sudo test -e "$marker"; then
     # shellcheck disable=SC2024 # the copy is the check's own
     sudo cat "$marker" >"$workdir/aura-try" || fail "cannot read aura-try on the system ESP ($esp)"
@@ -223,7 +274,7 @@ aurora_check_trial() {
     state=$(sed -n 's/^state=//p' <<<"$answer")
     named=$(sed -n 's/^path=//p' <<<"$answer")
   fi
-  trial=$(aurora_chosen aurora,trial)
+  sudo cmp -s "$built" "$live" && live_matches=1
 
   if [[ $state == "armed" ]]; then
     [[ $named == "$relative" ]] ||
@@ -235,6 +286,7 @@ aurora_check_trial() {
   if [[ $state == "spent" && $named == "$relative" ]]; then
     if [[ $trial == "$relative" ]]; then
       aurora_trial_matches "$live.next" "$relative" running
+      aurora_check_commit "$stage2" "$relative"
       echo "Apple Silicon boot check: this boot is the Stage 2 trial of $relative, what Aurora's update-m1n1 builds now; aurora-stage2-commit.service makes it $stage2 once the boot is up"
       return 0
     fi
