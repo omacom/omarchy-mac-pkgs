@@ -11,6 +11,10 @@
 # boot update, which keeps the ESP that booted it and leaves a marker on the boot
 # partition: its boot files can stay newer than every installed package, so no
 # package transaction would ever rebuild them. The rebuild runs until it finishes.
+# The same holds for an update that ran out of room on the ESP, which leaves a
+# half-written vendorfw.new or a menu naming a UKI that is gone: once the room is
+# there, the firmware update and the rebuild are finished here. esp-rebuild-pending
+# has the next update rebuild again until every boot file was rebuilt.
 #
 # /etc/omarchy-mac-boot/owner-boot-chain leaves verification to the owner.
 # The packaged check still reports a failure for Macs with a leftover marker.
@@ -19,9 +23,14 @@ set -uo pipefail
 
 owner_boot_chain=${OMARCHY_BOOT_CHECK_ROOT:-}/etc/omarchy-mac-boot/owner-boot-chain
 rollback_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/boot/.omarchy-mac-rolled-back
+firmware_pending=${OMARCHY_BOOT_CHECK_ROOT:-}/var/lib/omarchy/mac-boot/firmware-pending
+esp_rebuild_marker=${OMARCHY_BOOT_CHECK_ROOT:-}/var/lib/omarchy/mac-boot/esp-rebuild-pending
+
+# Written before the step that clears what made the repair run.
+record_esp_rebuild() { sudo mkdir -p "${esp_rebuild_marker%/*}" && sudo touch "$esp_rebuild_marker"; }
 
 if [[ -f $owner_boot_chain ]]; then
-  sudo rm -f "$rollback_marker"
+  sudo rm -f "$rollback_marker" "$esp_rebuild_marker"
   echo "Skipping boot verification: /etc/omarchy-mac-boot/owner-boot-chain is present; the owner manages this boot chain."
   if ! check_errors=$(OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null); then
     reason=$(awk '
@@ -39,7 +48,7 @@ echo -e "\e[32m\nVerify the Apple Silicon boot files\e[0m"
 # can't see boot-ctxr.bin, so that rebuild runs while the marker is there.
 # OMARCHY_MAC_BOOT_CTXR is a test seam; it expands in this shell and runs under sudo.
 boot_ctxr=${OMARCHY_MAC_BOOT_CTXR:-/usr/share/libalpm/scripts/omarchy-mac-boot-ctxr}
-repair_failed="" ctxr_failed="" ctxr_unchecked=""
+repair_failed="" ctxr_failed="" ctxr_unchecked="" esp_rebuild=""
 if sudo test -f "$rollback_marker"; then
   ctxr_status=0
   if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain >/dev/null 2>&1; then
@@ -64,12 +73,73 @@ if sudo test -f "$rollback_marker"; then
       ;;
   esac
 fi
+if [[ -z $repair_failed ]]; then
+  system_esp="" stuck_esp="" stale_firmware=""
+  for candidate in /boot/efi /boot; do
+    for sign in vendorfw vendorfw.new asahi/all_firmware.tar.gz EFI/Linux; do
+      if sudo test -e "${OMARCHY_BOOT_CHECK_ROOT:-}$candidate/$sign"; then
+        system_esp=$candidate
+        break 2
+      fi
+    done
+  done
+  if [[ -n $system_esp ]]; then
+    if sudo test -e "${OMARCHY_BOOT_CHECK_ROOT:-}$system_esp/vendorfw.new" || sudo test -e "$firmware_pending"; then
+      stuck_esp=$system_esp stale_firmware=1
+    elif sudo test -e "$esp_rebuild_marker"; then
+      stuck_esp=$system_esp
+    fi
+  fi
+  # Without the ESP nothing is rebuilt, so a recorded rebuild stays recorded.
+  if [[ -z $system_esp ]] && sudo test -e "$esp_rebuild_marker"; then
+    ctxr_unchecked=1
+  fi
+  if [[ -n $system_esp && -z $stuck_esp ]] && ! check_errors=$(OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain 2>&1 >/dev/null) &&
+    grep -Eq '^Apple Silicon boot check: /boot(/efi)?/EFI/Linux/[^ ]+\.efi \(the Limine UKI\) is missing' <<<"$check_errors"; then
+    stuck_esp=$system_esp
+  fi
+  if [[ -n $stuck_esp ]]; then
+    echo "An earlier update ran out of room on the EFI system partition; finishing it"
+    space_kinds=(--boot-image)
+    rebuild="sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr"
+    if [[ -n $stale_firmware ]]; then
+      space_kinds+=(--firmware)
+      rebuild="sudo omarchy-mac-esp-space ${space_kinds[*]} && sudo asahi-fwupdate && $rebuild"
+    fi
+    # It removes a half-written vendorfw.new, recording the unfinished firmware update, before it measures.
+    if ! sudo omarchy-mac-esp-space --esp "${OMARCHY_BOOT_CHECK_ROOT:-}$stuck_esp" --firmware-pending "$firmware_pending" "${space_kinds[@]}"; then
+      repair_failed=$rebuild esp_rebuild=$rebuild
+    elif [[ -n $stale_firmware ]] && ! sudo asahi-fwupdate; then
+      repair_failed=$rebuild esp_rebuild=$rebuild
+      echo "asahi-fwupdate did not finish" >&2
+    elif [[ -n $stale_firmware ]] && sudo test -e "${OMARCHY_BOOT_CHECK_ROOT:-}$stuck_esp/asahi/all_firmware.tar.gz" &&
+      ! sudo test -s "${OMARCHY_BOOT_CHECK_ROOT:-}$stuck_esp/vendorfw/firmware.cpio"; then
+      repair_failed=$rebuild esp_rebuild=$rebuild
+      echo "asahi-fwupdate left no firmware in $stuck_esp/vendorfw" >&2
+    elif [[ -n $stale_firmware ]] && ! { record_esp_rebuild && sudo rm -f "$firmware_pending"; }; then
+      repair_failed=$rebuild esp_rebuild=$rebuild
+      echo "Could not record the finished firmware update" >&2
+    elif ! { sudo mkinitcpio -P && sudo update-m1n1 && record_esp_rebuild && sudo omarchy-mac-boot-update; }; then
+      repair_failed=$rebuild esp_rebuild=$rebuild
+      echo "The rebuild of the boot files did not finish" >&2
+    else
+      sudo "$boot_ctxr" --verify
+      ctxr_status=$?
+      if (( ctxr_status == 3 )); then
+        ctxr_unchecked=1
+      elif (( ctxr_status != 0 )); then
+        repair_failed="sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr" esp_rebuild=$repair_failed
+        echo "Rebuilding boot-ctxr.bin did not finish" >&2
+      fi
+    fi
+  fi
+fi
 if ! OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=1 omarchy-apple-silicon-boot-check --boot-chain; then
-  cat >&2 <<'MESSAGE'
+  cat >&2 <<MESSAGE
 
 This Mac might not boot what the update installed, so do not reboot yet.
 Fix what the boot check reported above. To rebuild the initramfs, m1n1 and the boot menu:
-  sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr
+  ${esp_rebuild:-sudo mkinitcpio -P && sudo update-m1n1 && sudo omarchy-mac-boot-update && sudo /usr/share/libalpm/scripts/omarchy-mac-boot-ctxr}
 Then run omarchy update again: it checks the boot files before it offers the reboot.
 MESSAGE
   exit 1
@@ -91,5 +161,5 @@ MESSAGE
 elif [[ -n $ctxr_unchecked ]]; then
   echo "The system ESP is not mounted at /boot/efi or /boot, so the boot-ctxr.bin of an M4 or later was not checked; mount it and run omarchy update again" >&2
 else
-  sudo rm -f "$rollback_marker"
+  sudo rm -f "$rollback_marker" "$esp_rebuild_marker"
 fi
