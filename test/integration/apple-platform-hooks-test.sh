@@ -39,6 +39,8 @@ expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1728, 1117, 2, 0) === 32, '16" 
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 982, 2, 0) === 32, '14" MacBook Pro at scale 2: 32 px')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 993, 2, 0) === 48, '14" PROLED MacBook Pro at scale 2: 48 px')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 993, 1, { width: 3024, height: 1986 }) === 48, '14" PROLED MacBook Pro found by its mode when Qt reports ratio 1: 48 px')
+expect(model.notchFloor(cutouts, 'top', 'eDP-2', 1512, 993, 2, 0) === 48, 'the M5 Max built-in panel enumerates as eDP-2: 48 px')
+expect(model.notchFloor(cutouts, 'top', 'eDP-2', 1512, 993, 1, { width: 3024, height: 1986 }) === 48, 'the M5 Max eDP-2 found by its mode at ratio 1: 48 px')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1512, 945, 2, 0) === 0, 'a 3024x1890 screen keeps no floor')
 expect(model.centerBesideRight(cutouts, 'top', 'eDP-1', 1512, 993, 2), '14" PROLED MacBook Pro: the center section moves beside the right')
 expect(model.notchFloor(cutouts, 'top', 'eDP-1', 1280, 832, 2, 0) === 28, 'MacBook Air 13.6" at scale 2: 28 px')
