@@ -99,10 +99,15 @@ fi
 printf 'fallback' >"$root/boot/initramfs-linux-aurora-fallback.img"
 SH
 # Bare sync flushes the rebuild; sync with a file flushes encrypt.state or the
-# key.
+# key. sync -f flushes the restored boot files, and reports a write-back error
+# on the file system fail-sync-fs names.
 cat >"$stub_bin/sync" <<SH
 #!/bin/bash
 if (( \$# == 0 )); then [[ ! -e $test_tmp/fail-sync-rebuild ]] || exit 1
+elif [[ \$1 == "-f" && -e $test_tmp/fail-sync-fs ]]; then
+  for path in "\${@:2}"; do
+    [[ \$path != "\$(<$test_tmp/fail-sync-fs)" ]] || { echo "sync: error syncing '\$path': Input/output error" >&2; exit 1; }
+  done
 elif [[ \$* == *encrypt.state* ]]; then [[ ! -e $test_tmp/fail-sync-state ]] || exit 1
 elif [[ \$* == *luks-key* ]]; then [[ ! -e $test_tmp/fail-sync-key ]] || exit 1
 fi
@@ -349,6 +354,22 @@ run reset-rollback || fail "rollback succeeds" "$(cat "$test_tmp/err")"
 [[ ! -e $reset_dir ]] || fail "a complete rollback drops the saved copies"
 run reset-rollback || fail "a rollback with nothing prepared is a success"
 pass "reset-rollback puts the boot files and encrypt.state back exactly"
+
+# A restore that Boot or the ESP cannot flush keeps the saved copies, and a
+# retry once the flush succeeds finishes it.
+for file_system in "$root/boot" "$root/boot/efi"; do
+  limine_fixture
+  before=$(boot_tree)
+  run reset-prepare "$next" "$root/dev/luks" || fail "prepare" "$(cat "$test_tmp/err")"
+  echo "$file_system" >"$test_tmp/fail-sync-fs"
+  if run reset-rollback; then fail "a rollback whose restored files cannot be flushed fails"; fi
+  error_says "stay in /run/omarchy-mac-boot/reset"
+  [[ -f $reset_dir/boot/manifest ]] || fail "an unflushed restore keeps the saved copies"
+  rm "$test_tmp/fail-sync-fs"
+  run reset-rollback || fail "the retried rollback completes" "$(cat "$test_tmp/err")"
+  [[ $(boot_tree) == "$before" && ! -e $reset_dir ]] || fail "the retried rollback restores the boot files and drops the copies"
+done
+pass "a rollback keeps the saved boot files until the restored ones are flushed"
 
 # A failed rebuild or flush leaves the previous files for rollback to restore.
 for failure in fail-mkinitcpio fail-boot-update fail-sync-rebuild; do
