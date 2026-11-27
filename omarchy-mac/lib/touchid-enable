@@ -193,6 +193,7 @@ for ((attempt = 0; attempt < 200; attempt++)); do
   fi
   sleep 0.1
 done
+rm -f "${status_file%/*}/touchid-activated"
 systemctl start omarchy-mac-touchid-activate.service 2>/dev/null
 if [[ $(cat "$status_file" 2>/dev/null) == "ready" ]]; then
   # An fprintd that started without the reader found none and kept no
