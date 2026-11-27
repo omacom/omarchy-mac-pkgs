@@ -35,12 +35,16 @@ for board in laptops:
     assert description('audio_effect.j%s-mic' % board) is None, board
 for desktop in ('mini', 'studio'):
     assert description('audio_effect.%s-convolver' % desktop) == 'Built-in Speakers', desktop
-assert description('alsa_output.platform-sound.HiFi__Headphones__sink') == 'Headphones'
-assert description('alsa_input.platform-sound.HiFi__Headset__source') == 'Headset Microphone'
+# The jack on the speaker card, and on a card of its own (the M4 Macs).
+for card in ('sound', 'sound-jack'):
+    assert description('alsa_output.platform-%s.HiFi__Headphones__sink' % card) == 'Headphones', card
+    assert description('alsa_input.platform-%s.HiFi__Headset__source' % card) == 'Headset Microphone', card
 # Nothing else is renamed, however close its name.
 for name in ('omarchy_asahi_mic', 'effect_output.eq6', 'audio_effect.j416-convolver-eq', 'my-audio_effect.j416-convolver',
              'effect_output.j416-mic.monitor', 'alsa_output.platform-sound.RawSpeakers', 'alsa_input.platform-sound.RawMics',
-             'alsa_output.pci-0000_00_1f.3.analog-stereo', 'alsa_input.pci-0000_00_1f.3.analog-stereo'):
+             'alsa_output.pci-0000_00_1f.3.analog-stereo', 'alsa_input.pci-0000_00_1f.3.analog-stereo',
+             'alsa_output.platform-sound-jack.stereo-fallback', 'alsa_input.platform-sound-jack.mono-fallback',
+             'alsa_output.platform-sound-jack.HiFi__Speaker__sink', 'alsa_output.platform-sound-jack2.HiFi__Headphones__sink'):
     assert description(name) is None, name
 PY
-pass 'Apple audio devices are named by family, without board codes, and nothing else is renamed'
+pass 'Apple audio devices are named by family, without board codes, on either jack layout, and nothing else is renamed'
