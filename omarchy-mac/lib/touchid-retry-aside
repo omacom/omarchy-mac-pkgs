@@ -28,10 +28,11 @@ case $state in
   *) exit 1 ;;
 esac
 # The exact v2 REFUSED header (empty body, UUID and secret, CRC16 0x0ae8).
-[[ $(sha256sum <"$keybag") == '534d2a855bfd7902d45036510647f6ed006eef5fc5ac04304468e8144173a54e  -' ]] || exit 1
+[[ $(stat -c %s "$keybag") == 52 && $(sha256sum <"$keybag") == '534d2a855bfd7902d45036510647f6ed006eef5fc5ac04304468e8144173a54e  -' ]] || exit 1
 [[ -s $guard_list ]] || exit 0
 # Only one AXGO spent-window marker, in either on-disk format. Any pin,
 # owned record, completion marker or unrecognized entry preserves the list.
+[[ $(stat -c %s "$guard_list") == 32 ]] || exit 1
 digest=$(sha256sum <"$guard_list") || exit 1
 case ${digest%% *} in
   f106a4e397a632b9645a063cbc7a5817881c095ae16dfed42b5151cc81d26b8b) ;; # first setup used
