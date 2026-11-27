@@ -50,7 +50,7 @@ A page with no `section` continues under the heading above it, so only the first
 
 Place a diagram with `{{diagram:name}}` on its own line, where `name` matches a file in `diagrams/`. Link to another page with `[text]({{page:slug}})`, never a hand-written relative path: the index sits one directory above the rest, so a path that works on one page is wrong on the other. The builder fails on an unknown diagram or slug, and it checks every link in the finished site, so a rename cannot leave a dead link behind.
 
-Describe what an installed Mac does, and link to Omarchy's manual for anything that is the same on every machine. Change a page in the same pull request as the behaviour it describes. Until the first release, the front page and the Status page say that the pages describe the target; remove those notes when it ships.
+Describe what an installed Mac does, and link to Omarchy's manual for anything that is the same on every machine. Change a page in the same pull request as the behaviour it describes.
 
 ## Design
 
