@@ -166,7 +166,7 @@ aurora_check_stage2() {
   if grep -Fxq -- "$m1n1_file" "$workdir/bootloader-files"; then
     :
   elif [[ -n $m1n1_configured ]]; then
-    echo "Apple Silicon boot check: Stage 2 is built from M1N1=$M1N1, which /etc/default/update-m1n1 names and $bootloader does not install; it is checked as configured"
+    echo "Apple Silicon boot check: warning: Stage 2 is built from M1N1=$M1N1, which /etc/default/update-m1n1 names and $bootloader does not install; it is checked as configured" >&2
   else
     fail "M1N1 $M1N1 is not owned by $bootloader"
   fi

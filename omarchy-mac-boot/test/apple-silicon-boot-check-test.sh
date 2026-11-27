@@ -1088,8 +1088,8 @@ grep -Fq "running linux-aurora $kver; installed boot files match" "$test_tmp/out
   fail "checking Aurora's Stage 2 changes nothing on the ESP, in /boot or in /var" "$(diff <(echo "$before") <(esp_snapshot))"
 run_check
 expect_pass "Aurora's Stage 2 in the full check"
-grep -Fq 'Stage 2 is built from M1N1=' "$test_tmp/out" &&
-  fail "a packaged aura m1n1 is not reported as configured" "$(cat "$test_tmp/out")"
+! grep -Fq 'Stage 2 is built from M1N1=' "$test_tmp/out" "$test_tmp/err" ||
+  fail "a packaged aura m1n1 is not reported as configured" "$(cat "$test_tmp/out" "$test_tmp/err")"
 aurora_system
 write_aurora_stage2 /usr/lib/asahi-boot/m1n1.bin "$esp/m1n1/boot-ctxr.bin" t6000-j314s.dtb t6041-j616c.dtb t6041-j616s.dtb t8103-j274.dtb
 run_check --boot-chain
@@ -1124,7 +1124,7 @@ expect_fail "Aurora's m1n1/boot.bin with only one board's device tree" "m1n1/boo
 pass "without the monitor-free marker Aurora's Stage 2 is m1n1/boot.bin with every Apple device tree"
 
 # The image pins M1N1 in /etc/default/update-m1n1 to a Stage 2 no package
-# installs; the check follows the pin and says so.
+# installs; the check follows the pin and warns on stderr.
 aurora_system
 printf 'M1N1=/usr/local/lib/aura/m1n1-94d8e6e4.bin\n' >"$root/etc/default/update-m1n1"
 run_check --boot-chain
@@ -1132,8 +1132,10 @@ expect_fail "a Stage 2 from the packaged m1n1 where M1N1 is pinned" "m1n1/boot-c
 write_aurora_stage2 /usr/local/lib/aura/m1n1-94d8e6e4.bin "$esp/m1n1/boot-ctxr.bin" t6041-j616c.dtb
 run_check --boot-chain
 expect_pass "a Stage 2 from the m1n1 /etc/default/update-m1n1 pins"
-grep -Fq "Stage 2 is built from M1N1=/usr/local/lib/aura/m1n1-94d8e6e4.bin, which /etc/default/update-m1n1 names and aura does not install" "$test_tmp/out" ||
-  fail "a pinned M1N1 no package installs is reported" "$(cat "$test_tmp/out")"
+grep -Fq "Apple Silicon boot check: warning: Stage 2 is built from M1N1=/usr/local/lib/aura/m1n1-94d8e6e4.bin, which /etc/default/update-m1n1 names and aura does not install; it is checked as configured" "$test_tmp/err" ||
+  fail "a pinned M1N1 no package installs warns on stderr" "$(cat "$test_tmp/err")"
+! grep -Fq 'Stage 2 is built from M1N1=' "$test_tmp/out" ||
+  fail "a pinned M1N1 warning stays off stdout" "$(cat "$test_tmp/out")"
 printf 'M1N1=/usr/local/lib/aura/missing.bin\n' >"$root/etc/default/update-m1n1"
 run_check --boot-chain
 expect_fail "a pinned M1N1 that is missing" "M1N1 /usr/local/lib/aura/missing.bin does not exist"
@@ -1141,7 +1143,7 @@ aurora_system
 printf '/usr/lib/asahi-boot/\n' >"$test_tmp/files/aura"
 run_check --boot-chain
 expect_fail "a default M1N1 aura does not own" "M1N1 /usr/lib/asahi-boot/m1n1.bin is not owned by aura"
-pass "a pinned M1N1 is followed and reported, and a default M1N1 must be aura's"
+pass "a pinned M1N1 is followed with a warning, and a default M1N1 must be aura's"
 
 # Trials: one update-m1n1 armed, or that this boot is running, of exactly the
 # image it builds now passes; a stale, fallen-back or orphaned one does not.
