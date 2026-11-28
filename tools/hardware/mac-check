@@ -85,11 +85,15 @@ fi
 
 repos=$(pacman-conf --repo-list 2>/dev/null)
 missing=()
-for repo in core extra alarm asahi-alarm; do
+for repo in core extra alarm; do
   grep -qx -- "$repo" <<<"$repos" || missing+=("[$repo]")
 done
 if (( ${#missing[@]} )); then
   report FAIL repos "missing from pacman.conf: $(joined "${missing[@]}")"
+elif grep -qx -- asahi-alarm <<<"$repos" && [[ -e $root/var/lib/omarchy/mac-drop-asahi-alarm/done ]]; then
+  report WARN repos "[asahi-alarm] is back in pacman.conf after its cleanup; omarchy-mac-drop-asahi-alarm removes it again at the next boot or pacman transaction"
+elif grep -qx -- asahi-alarm <<<"$repos"; then
+  report WARN repos "[asahi-alarm] cleanup pending: journalctl -u omarchy-mac-drop-asahi-alarm says why"
 else
   report PASS repos "$(tr '\n' ' ' <<<"$repos" | sed 's/ $//')"
 fi

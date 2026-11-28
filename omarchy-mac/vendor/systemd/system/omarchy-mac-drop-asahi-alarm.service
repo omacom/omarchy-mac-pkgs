@@ -1,0 +1,13 @@
+# Moves the Mac off [asahi-alarm] once nothing needs it. Runs at boot (the
+# package's multi-user.target.wants link) and after every pacman transaction
+# (91-omarchy-mac-drop-asahi-alarm.hook). Once the helper records a verified
+# cleanup, a run exits at once unless [asahi-alarm] is back in pacman.conf.
+[Unit]
+Description=Remove the asahi-alarm repository and its signing key
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/omarchy-hw-apple-silicon
+ExecStart=/usr/bin/omarchy-mac-drop-asahi-alarm
+TimeoutStartSec=15min

@@ -176,7 +176,7 @@ make_keyring() {
   splash_progress 5 "Setting up secure updates..."
   rm -f "$keyring_record"
   rm -rf "$keyring_dir"
-  local -a keyrings=(archlinuxarm asahi-alarm)
+  local -a keyrings=(archlinuxarm)
   [[ ! -f $keyring_import_dir/omarchy.gpg ]] || keyrings+=(omarchy)
   pacman-key --gpgdir "$keyring_dir" --init >>"$log_file" 2>&1 &&
     pacman-key --gpgdir "$keyring_dir" --populate-from "$keyring_import_dir" --populate "${keyrings[@]}" \
