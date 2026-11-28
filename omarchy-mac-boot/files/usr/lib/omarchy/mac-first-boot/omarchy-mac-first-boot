@@ -232,7 +232,11 @@ enable_display_manager() {
   if [[ -f $root/usr/lib/systemd/system/greetd.service ]]; then
     "${login[@]}" --reset >>"$log_file" 2>&1 ||
       fail "could not write the login screen's configuration"
-    systemctl enable greetd.service >>"$log_file" 2>&1 ||
+    sync "$root/etc/greetd/config.toml" "$root/etc/greetd" ||
+      fail "could not persist the login screen's configuration"
+    # --force takes the display-manager.service alias over from an enabled SDDM,
+    # as the runtime's own switch to greetd does.
+    systemctl enable --force greetd.service >>"$log_file" 2>&1 ||
       fail "could not enable the display manager"
   else
     systemctl enable sddm.service >>"$log_file" 2>&1 ||

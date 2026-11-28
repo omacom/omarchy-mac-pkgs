@@ -234,10 +234,12 @@ expect_handoff() {
   [[ ! -e $root/var/lib/omarchy/provisioning/luks-key ]] || fail "$1: first boot must not touch luks-key"
   ! grep -Fq reboot "$case_dir/systemctl.log" || fail "$1: rebooted"
   if [[ -f $root/usr/lib/systemd/system/greetd.service ]]; then
-    grep -Fxq 'systemctl enable greetd.service' "$case_dir/systemctl.log" ||
-      fail "$1: greetd is not enabled"
+    grep -Fxq 'systemctl enable --force greetd.service' "$case_dir/systemctl.log" ||
+      fail "$1: greetd is not enabled over an enabled SDDM's alias"
     [[ $(<"$case_dir/login.log") == "omarchy-system-login --root $root --reset" ]] ||
       fail "$1: the login screen's configuration is not written before greetd starts"
+    grep -Fxq "sync $root/etc/greetd/config.toml" "$case_dir/sync.log" ||
+      fail "$1: the login screen's configuration is not on disk before pending goes"
     ! grep -Fq sddm "$case_dir/systemctl.log" || fail "$1: SDDM is enabled beside greetd"
   else
     grep -Fxq 'systemctl enable sddm.service' "$case_dir/systemctl.log" ||
