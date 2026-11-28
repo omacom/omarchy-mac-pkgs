@@ -6,7 +6,7 @@
 [Unit]
 Description=Turn external displays on for the desktop
 After=plymouth-quit.service plymouth-quit-wait.service omarchy-provision-owner.service omarchy-drive-recover.service
-Before=display-manager.service sddm.service
+Before=display-manager.service sddm.service greetd.service
 
 [Service]
 Type=oneshot

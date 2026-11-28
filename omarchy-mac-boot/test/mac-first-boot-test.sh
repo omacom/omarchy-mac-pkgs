@@ -35,6 +35,12 @@ if [[ $1 == start && -e $CASE/start-fails ]]; then
 fi
 STUB
 
+cat >"$stubs/omarchy-system-login" <<'STUB'
+#!/bin/bash
+echo "omarchy-system-login $*" >>"$CASE/login.log"
+[[ ! -e $CASE/login-fails ]]
+STUB
+
 cat >"$stubs/gum" <<'STUB'
 #!/bin/bash
 echo "gum $*" >>"$CASE/gum.log"
@@ -193,6 +199,7 @@ new_case() {
   : >"$case_dir/sync.log"
   : >"$case_dir/deferred.log"
   : >"$case_dir/pacman-key.log"
+  : >"$case_dir/login.log"
   deferred_stub "$root/usr/bin/omarchy-provision-hardware"
 }
 
@@ -226,8 +233,17 @@ expect_handoff() {
   [[ -f $root/var/lib/omarchy/provisioning/pending ]] || fail "$1: T1's provisioning marker was dropped"
   [[ ! -e $root/var/lib/omarchy/provisioning/luks-key ]] || fail "$1: first boot must not touch luks-key"
   ! grep -Fq reboot "$case_dir/systemctl.log" || fail "$1: rebooted"
-  grep -Fxq 'systemctl enable sddm.service' "$case_dir/systemctl.log" ||
-    fail "$1: the display manager is not enabled"
+  if [[ -f $root/usr/lib/systemd/system/greetd.service ]]; then
+    grep -Fxq 'systemctl enable greetd.service' "$case_dir/systemctl.log" ||
+      fail "$1: greetd is not enabled"
+    [[ $(<"$case_dir/login.log") == "omarchy-system-login --root $root --reset" ]] ||
+      fail "$1: the login screen's configuration is not written before greetd starts"
+    ! grep -Fq sddm "$case_dir/systemctl.log" || fail "$1: SDDM is enabled beside greetd"
+  else
+    grep -Fxq 'systemctl enable sddm.service' "$case_dir/systemctl.log" ||
+      fail "$1: the display manager is not enabled"
+    [[ ! -s $case_dir/login.log ]] || fail "$1: greetd's configuration is written for SDDM"
+  fi
   ! grep -Fq speakersafetyd "$case_dir/systemctl.log" || fail "$1: speaker protection is omarchy-mac's to enable"
   [[ $(grep -E 'daemon-reload|^systemctl start' "$case_dir/systemctl.log") == \
     $'systemctl daemon-reload\nsystemctl start --no-block omarchy-provision-owner.service\nsystemctl start --no-block display-manager.service' ]] ||
@@ -370,6 +386,30 @@ new_case pending-gone
 write_esp 'format=1' 'encrypt=1'
 expect_handoff "a successful hand-off"
 echo 'ok - pending is removed only when first boot succeeds'
+
+# ── the runtime's display manager: greetd since omacom/omarchy#20404 ───────
+new_case greetd
+write_esp 'format=1' 'encrypt=1'
+mkdir -p "$root/usr/lib/systemd/system"
+: >"$root/usr/lib/systemd/system/greetd.service"
+expect_handoff "a runtime with greetd"
+
+new_case greetd-config-fails
+write_esp 'format=1' 'encrypt=1'
+mkdir -p "$root/usr/lib/systemd/system"
+: >"$root/usr/lib/systemd/system/greetd.service"
+: >"$case_dir/login-fails"
+expect_stop "an unwritable login configuration" "could not write the login screen's configuration"
+! grep -Fq 'systemctl enable' "$case_dir/systemctl.log" || fail "nothing is enabled when greetd's configuration fails"
+! grep -q '^systemctl start' "$case_dir/systemctl.log" || fail "nothing is started when greetd's configuration fails"
+
+# greetd is held back while first boot is pending, as SDDM is.
+for manager in sddm greetd; do
+  dropin=$ROOT/files/usr/lib/systemd/system/$manager.service.d/20-mac-first-boot.conf
+  [[ $(grep -v '^#' "$dropin") == $'[Unit]\nAfter=omarchy-mac-first-boot.service\nConditionPathExists=!/var/lib/omarchy/mac-first-boot/pending\nConditionPathExists=!/run/omarchy-first-boot/no-desktop' ]] ||
+    fail "$manager.service waits for first boot and is gated on pending"
+done
+echo 'ok - first boot enables greetd where the runtime ships it, SDDM otherwise, and both wait for it'
 
 # ── deferred-steps runner required ─────────────────────────────────────────
 new_case no-deferred
