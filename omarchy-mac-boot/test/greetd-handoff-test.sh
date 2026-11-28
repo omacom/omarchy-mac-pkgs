@@ -3,9 +3,10 @@
 # --root: greetd and SDDM both install as display-manager.service, and greetd
 # must take the alias over from an SDDM an older image left enabled.
 set -euo pipefail
-source "$(dirname "$0")/base-test.sh"
-first_boot=$BOOT/files/usr/lib/omarchy/mac-first-boot/omarchy-mac-first-boot
-real_systemctl=$(command -v systemctl) || fail 'systemctl is available'
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
+first_boot=$ROOT/files/usr/lib/omarchy/mac-first-boot/omarchy-mac-first-boot
+require_command systemctl
+real_systemctl=$(command -v systemctl)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
@@ -23,10 +24,10 @@ echo '[default_session]' >"$2/etc/greetd/config.toml"
 STUB
 chmod +x "$work/bin/"*
 
-# An image root with the boot package, owner provisioning and both display managers.
+# An image root with this package, owner provisioning and both display managers.
 image() {
   local root=$1 unit
-  "$BOOT/install" "$root"
+  "$ROOT/install" "$root"
   mkdir -p "$root/usr/lib/systemd/system" "$root/usr/share/omarchy/install/provisioning" "$root/var/log"
   for unit in greetd sddm; do
     printf '[Service]\nExecStart=/usr/bin/true\n[Install]\nAlias=display-manager.service\n' \
