@@ -7,6 +7,8 @@ trap 'rm -rf "$work"' EXIT
 dropin="$work/root/usr/lib/systemd/system/sddm.service.d/10-omarchy-mac-wait-for-display.conf"
 wait="$work/root/usr/lib/omarchy-mac/wait-for-display"
 grep -qx 'ExecStartPre=-/usr/lib/omarchy-mac/wait-for-display' "$dropin" || fail 'greeter waits through a non-fatal hook'
+# greetd shows the login screen since omacom/omarchy#20404 and waits the same way.
+cmp -s "$dropin" "${dropin/sddm.service.d/greetd.service.d}" || fail 'greetd waits for the display as SDDM does'
 [[ -x $wait ]] || fail 'greeter wait helper is staged'
 pass 'greeter drop-in and helper are staged'
 
