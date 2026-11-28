@@ -1,4 +1,5 @@
-# Queue the move off [asahi-alarm] after every transaction until it is done.
+# Queue the move off [asahi-alarm] after every transaction until it is done,
+# and again whenever [asahi-alarm] is back in pacman.conf.
 # The unit waits for this transaction to release the database, so pacman never
 # runs inside pacman.
 [Trigger]
@@ -12,4 +13,4 @@ Description = Queueing the asahi-alarm cleanup...
 When = PostTransaction
 # Skipped in a chroot or an unbooted root, like 90-omarchy-mac-touchid.hook.
 # --no-block returns at once and never fails the transaction.
-Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || [ -e /var/lib/omarchy/mac-drop-asahi-alarm/done ] || systemctl --quiet --no-block start omarchy-mac-drop-asahi-alarm.service; true'
+Exec = /usr/bin/sh -c 'systemd-detect-virt --quiet --chroot || ! systemd-notify --booted || { [ -e /var/lib/omarchy/mac-drop-asahi-alarm/done ] && ! pacman-conf --repo-list 2>/dev/null | grep -qx asahi-alarm; } || systemctl --quiet --no-block start omarchy-mac-drop-asahi-alarm.service; true'

@@ -211,10 +211,10 @@ grep -Fxq "WARN  repos            [asahi-alarm] cleanup pending: journalctl -u o
   fail "the pending cleanup is a warning" "$(cat "$test_tmp/out")"
 mkdir -p "$fixture/var/lib/omarchy/mac-drop-asahi-alarm"
 : >"$fixture/var/lib/omarchy/mac-drop-asahi-alarm/done"
-TEST_REPOS="omarchy asahi-alarm core extra alarm" run_check && fail "[asahi-alarm] after its cleanup fails"
-grep -Fq "[asahi-alarm] is back in pacman.conf" "$test_tmp/out" || fail "the returned repository is named" "$(cat "$test_tmp/out")"
+TEST_REPOS="omarchy asahi-alarm core extra alarm" run_check || fail "[asahi-alarm] back after its cleanup is not a failure" "$(cat "$test_tmp/out")"
+grep -Fq "WARN  repos            [asahi-alarm] is back in pacman.conf after its cleanup" "$test_tmp/out" || fail "the returned repository is a warning" "$(cat "$test_tmp/out")"
 rm -r "$fixture/var/lib/omarchy/mac-drop-asahi-alarm"
-pass "[asahi-alarm] warns while its cleanup is pending and fails once it came back after it"
+pass "[asahi-alarm] warns while its cleanup is pending and once it came back after it"
 
 rm "$fixture/boot/efi/EFI/Linux/omarchy_linux-aurora.efi" "$fixture/boot/efi/limine.conf"
 run_check && fail "a Limine Mac without its boot files fails"

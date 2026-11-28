@@ -4,7 +4,7 @@
 # builds every package Macs took from it, and this package is only published
 # with them. Machine-wide and idempotent: omarchy-mac-drop-asahi-alarm.service
 # runs it as root at boot and after every pacman transaction until it records
-# a verified cleanup. Anything that still needs the keyring leaves everything
+# a verified cleanup, and again if [asahi-alarm] comes back. Anything that still needs the keyring leaves everything
 # in place for the next run, since omarchy-update-keyring reinstalls a listed
 # keyring from a repository that must still exist.
 set -euo pipefail
@@ -28,7 +28,14 @@ pending() {
 }
 
 omarchy-hw-apple-silicon || exit 0
-[[ ! -e $state/done ]] || exit 0
+# An older Omarchy's pacman templates still carry [asahi-alarm], so a channel
+# switch or omarchy-refresh-pacman can write it back after the move. done only
+# stands for a pacman.conf without it.
+if [[ -e $state/done ]]; then
+  pacman-conf --config "$pacman_conf" --repo-list | grep -qx "$repo" || exit 0
+  echo "[$repo] is back in $pacman_conf; moving off it again"
+  rm -f "$state/done"
+fi
 install -d -m 0755 "$state"
 exec {lock_fd}>"$state/lock"
 flock -n "$lock_fd" || pending "another run is in progress"

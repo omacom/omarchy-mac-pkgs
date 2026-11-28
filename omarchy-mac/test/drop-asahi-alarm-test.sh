@@ -175,6 +175,27 @@ run_helper "$case_dir" >/dev/null 2>&1 || fail 'the helper runs on a moved machi
 ! grep -q '^pacman -R\|^pacman-key --delete' "$case_dir/log" || fail 'a moved machine only looks' "$(cat "$case_dir/log")"
 pass 'the helper is idempotent, with or without its marker'
 
+# ── the repository comes back ────────────────────────────────────────────────
+
+# An older Omarchy's template written over the moved pacman.conf, as a channel
+# switch or omarchy-refresh-pacman does.
+write_conf "$case_dir/etc/pacman.conf" "$case_dir"
+: >"$case_dir/log"
+run_helper "$case_dir" >"$case_dir/out" 2>&1 || fail 'the helper runs on a marked machine whose [asahi-alarm] came back' "$(cat "$case_dir/out")"
+grep -q '^\[asahi-alarm\] is back in ' "$case_dir/out" || fail 'it says the repository came back' "$(cat "$case_dir/out")"
+[[ $(repos "$case_dir/etc/pacman.conf") == "omarchy core extra alarm custom " && -e $case_dir/state/done ]] ||
+  fail 'the returned repository is dropped again and the machine marked again' "$(repos "$case_dir/etc/pacman.conf")"
+! grep -Eq '^pacman -(R|S|Su|Sy|Syu|U) ' "$case_dir/log" || fail 'only pacman.conf changes' "$(cat "$case_dir/log")"
+
+write_conf "$case_dir/etc/pacman.conf" "$case_dir"
+echo 'asahi-alarm-keyring 20241216-1' >>"$case_dir/installed"
+echo 'omarchy-mac-boot' >"$case_dir/required-by"
+returned=$(cat "$case_dir/etc/pacman.conf")
+run_helper "$case_dir" >"$case_dir/out" 2>&1 || fail 'a returned repository that is still needed is not a failure' "$(cat "$case_dir/out")"
+grep -q 'omarchy-mac-boot still requires asahi-alarm-keyring' "$case_dir/out" && [[ $(cat "$case_dir/etc/pacman.conf") == "$returned" && ! -e $case_dir/state/done ]] ||
+  fail 'the guards still hold, and the machine is pending again' "$(cat "$case_dir/out")"
+pass 'a repository that comes back after the move is dropped again, behind the same guards'
+
 # ── no-ops ───────────────────────────────────────────────────────────────────
 
 for platform in x86 aarch64 aarch64-qualcomm; do
@@ -271,12 +292,14 @@ pass "a symlinked pacman.conf keeps its link; the target is rewritten with its m
 
 unit="$ROOT/vendor/systemd/system/omarchy-mac-drop-asahi-alarm.service"
 hook="$ROOT/share/libalpm/hooks/91-omarchy-mac-drop-asahi-alarm.hook"
-grep -qx 'ConditionPathExists=!/var/lib/omarchy/mac-drop-asahi-alarm/done' "$unit" &&
+! grep -q '^ConditionPathExists' "$unit" &&
   grep -q 'state=${OMARCHY_MAC_ASAHI_ALARM_STATE:-/var/lib/omarchy/mac-drop-asahi-alarm}' "$helper" ||
-  fail "the unit stops at the helper's marker"
+  fail "the unit leaves the marker to the helper, which rechecks pacman.conf"
 [[ $(readlink "$ROOT/vendor/systemd/system/multi-user.target.wants/omarchy-mac-drop-asahi-alarm.service") == ../omarchy-mac-drop-asahi-alarm.service ]] ||
   fail 'every boot retries'
 grep -qx 'Target = \*' "$hook" && grep -q 'systemctl --quiet --no-block start omarchy-mac-drop-asahi-alarm.service' "$hook" ||
   fail 'every transaction queues it without waiting'
+grep -qF '[ -e /var/lib/omarchy/mac-drop-asahi-alarm/done ] && ! pacman-conf --repo-list 2>/dev/null | grep -qx asahi-alarm;' "$hook" ||
+  fail 'a marked machine is queued again only while [asahi-alarm] is back'
 ! grep -q 'pacman ' <(grep '^Exec' "$hook") || fail 'the hook never runs pacman itself'
-pass 'boot and every pacman transaction queue the helper until it is done, without running pacman inside pacman'
+pass 'boot and every pacman transaction queue the helper until it is done or while [asahi-alarm] is back, without running pacman inside pacman'
