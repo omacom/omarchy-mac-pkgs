@@ -10,7 +10,7 @@ An installed Mac is an upstream Omarchy installation plus two Mac packages and t
 
 | Package | Contents |
 | --- | --- |
-| `omarchy-settings` | `/etc/skel`, `/etc` drop-ins, boot loader and snapper configuration, Plymouth and SDDM themes, branding. One aarch64 build that picks the Apple profile at runtime. |
+| `omarchy-settings` | `/etc/skel`, `/etc` drop-ins, boot loader and snapper configuration, the Plymouth theme and the login screen (SDDM's theme, or greetd's since omacom/omarchy#20404), branding. One aarch64 build that picks the Apple profile at runtime. |
 | `omarchy` | The `omarchy-*` commands, install scripts, migrations, themes and the Quickshell desktop |
 | `omarchy-mac` | Microphone mapping, Wi-Fi resume recovery, the iwd Wi-Fi backend for NetworkManager, the notch setting, the Electron software GL wrappers (when the runtime has their helpers), browser decode flags |
 | `omarchy-mac-boot` | Initramfs fragments, vendor firmware hooks, first-boot and encryption units, Limine and U-Boot deployment, boot verification |

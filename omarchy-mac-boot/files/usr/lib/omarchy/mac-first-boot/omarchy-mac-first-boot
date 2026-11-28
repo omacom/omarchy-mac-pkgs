@@ -223,6 +223,27 @@ run_deferred_steps() {
   esac
 }
 
+# The runtime's login screen: greetd since omacom/omarchy#20404, SDDM before it.
+# greetd starts from the runtime's config, written as its installer does; owner
+# provisioning then names the owner and the autologin in it.
+enable_display_manager() {
+  local login=(omarchy-system-login)
+  [[ -z $root ]] || login+=(--root "$root")
+  if [[ -f $root/usr/lib/systemd/system/greetd.service ]]; then
+    "${login[@]}" --reset >>"$log_file" 2>&1 ||
+      fail "could not write the login screen's configuration"
+    sync "$root/etc/greetd/config.toml" "$root/etc/greetd" ||
+      fail "could not persist the login screen's configuration"
+    # --force takes the display-manager.service alias over from an enabled SDDM,
+    # as the runtime's own switch to greetd does.
+    systemctl enable --force greetd.service >>"$log_file" 2>&1 ||
+      fail "could not enable the display manager"
+  else
+    systemctl enable sddm.service >>"$log_file" 2>&1 ||
+      fail "could not enable the display manager"
+  fi
+}
+
 # What a deferred-user image carries for owner provisioning, plus the services
 # it enables. Node.js and the runtime itself are already in the image. T1 arms
 # provisioning/pending; this service never re-arms it. Provision-owner finds
@@ -238,8 +259,7 @@ stage_provisioning() {
   cp -p "$unit" "$root/etc/systemd/system/omarchy-provision-owner.service"
   ln -sfn /etc/systemd/system/omarchy-provision-owner.service \
     "$root/etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service"
-  systemctl enable sddm.service >>"$log_file" 2>&1 ||
-    fail "could not enable the display manager"
+  enable_display_manager
   # The unit copy, its data and every enable link must be on disk before pending goes.
   sync "$root/etc/systemd/system/omarchy-provision-owner.service" "$root/etc/systemd/system" \
     "$root/etc/systemd/system/multi-user.target.wants" "$provisioning_dir" || fail "could not persist the enabled units"
